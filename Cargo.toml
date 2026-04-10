@@ -1,0 +1,89 @@
+[package]
+name        = "polymarket-dashboard"
+version     = "0.1.0"
+edition     = "2021"
+rust-version = "1.88"   # MSRV impuesto por polymarket-client-sdk
+default-run = "polymarket-dashboard"
+
+# ─── Dependencias ────────────────────────────────────────────────────────────
+
+[dependencies]
+
+# GUI — eframe/egui. "glow" usa OpenGL (funciona en macOS Monterey / Intel)
+eframe = { version = "0.29", default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+] }
+egui_plot = "0.29"
+
+# Runtime asíncrono
+tokio = { version = "1", features = ["full"] }
+
+# ── SDK oficial de Polymarket ────────────────────────────────────────────────
+# https://github.com/Polymarket/rs-clob-client
+# Features:
+#   clob  → Client CLOB (order book, órdenes)
+#   gamma → Client Gamma API (descubrimiento de mercados)
+polymarket-client-sdk = { version = "0.4", features = ["clob", "gamma", "rtds"] }
+
+# ── Alloy para el signer Ethereum (mismo stack que el SDK) ──────────────────
+# Pinamos a "=1.6.3" (la misma que declara el SDK) para evitar que cargo
+# resuelva a alloy 1.8+ que requiere rustc 1.91.
+# Si actualizas a rustc 1.91+ puedes cambiar esto a version = "1".
+alloy = { version = "=1.6.3", default-features = false, features = [
+    "signer-local",
+    "signers",
+] }
+
+# ── WebSocket para el streaming en tiempo real del order book ───────────────
+# Misma versión que usa el SDK internamente; rustls-native-roots
+# carga los certificados del sistema macOS sin necesitar native-tls
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+
+# Serialización
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Fechas/tiempo (también usado por el SDK internamente)
+chrono = { version = "0.4", features = ["serde"] }
+
+# Utilidades async
+futures-util = "0.3"
+
+# Manejo de errores
+anyhow = "1"
+
+# Logging estructurado
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP client para Binance REST (mismo reqwest que usa el SDK — sin compilación extra)
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+# Carga segura de variables de entorno desde .env
+dotenvy = "0.15"
+
+# Exponer SecretString del crate secrecy (usado por Credentials del SDK)
+secrecy = { version = "0.10", features = ["serde"] }
+
+# ─── Binarios ────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "polymarket-dashboard"
+path = "src/main.rs"
+
+[[bin]]
+name = "setup"
+path = "src/setup.rs"
+
+# ─── Perfiles de compilación ─────────────────────────────────────────────────
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"    # LTO cruzado pero rápido
+codegen-units = 1
+strip         = true      # Elimina símbolos de debug del binario final
+panic         = "abort"   # Reduce tamaño del binario
+
+[profile.dev]
+opt-level = 1             # Compilación incremental más rápida para egui

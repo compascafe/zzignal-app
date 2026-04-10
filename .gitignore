@@ -1,0 +1,23 @@
+# ─── SEGURIDAD — CRÍTICO ──────────────────────────────────────────────────────
+# El archivo .env contiene claves privadas y credenciales de API.
+# NUNCA debe entrar en el repositorio.
+.env
+*.env
+.env.*
+!.env.example        # La plantilla SÍ se puede versionar
+
+# ─── Rust / Cargo ────────────────────────────────────────────────────────────
+/target/
+Cargo.lock           # Descomenta la línea de abajo para apps binarias (recomendado):
+# !Cargo.lock
+
+# ─── macOS ───────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ─── IDE ──────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
