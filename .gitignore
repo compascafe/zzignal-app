@@ -21,3 +21,6 @@ Cargo.lock           # Descomenta la línea de abajo para apps binarias (recomen
 .vscode/
 *.swp
 *.swo
+backend_rust/target/
+*.class
+frontend_java/target/

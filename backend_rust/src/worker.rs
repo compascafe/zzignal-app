@@ -3,6 +3,7 @@
 /// Mercado BTC 15-min tiene DOS tokens: UP y DOWN.
 /// Se suscribe al WebSocket de ambos simultáneamente.
 /// El precio de BTC en tiempo real llega por Chainlink via RTDS.
+use std::net::SocketAddr;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -24,8 +25,9 @@ use polymarket_client_sdk::gamma;
 use polymarket_client_sdk::gamma::types::request::{EventBySlugRequest, MarketsRequest, PublicProfileRequest};
 use polymarket_client_sdk::types::{Decimal, U256};
 use reqwest::Client as HttpClient;
-use tokio::sync::mpsc as tokio_mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{broadcast, mpsc as tokio_mpsc};
+use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use crate::credentials::ClobCredentials;
@@ -205,9 +207,18 @@ pub async fn run(
 ) {
     let _ = tx.send(AppMsg::Status(ConnStatus::Initializing));
 
+    let (broadcast_tx, _) = broadcast::channel::<String>(100);
+
+    let ws_broadcast = broadcast_tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_websocket_server("0.0.0.0:8080", ws_broadcast).await {
+            error!("WebSocket server error: {}", e);
+        }
+    });
+
     let mut attempts: u32 = 0;
     loop {
-        match run_cycle(&tx, &creds, &mut cmd_rx, Arc::clone(&interval_arc)).await {
+        match run_cycle(&tx, &creds, &mut cmd_rx, Arc::clone(&interval_arc), broadcast_tx.clone()).await {
             Ok(_) => {
                 attempts = 0;
                 info!("Ciclo completado, reiniciando...");
@@ -230,6 +241,7 @@ async fn run_cycle(
     creds:        &ClobCredentials,
     cmd_rx:       &mut tokio_mpsc::UnboundedReceiver<CmdMsg>,
     interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
+    broadcast_tx: broadcast::Sender<String>,
 ) -> Result<()> {
     let _ = tx.send(AppMsg::Status(ConnStatus::Authenticating));
     let signer = creds.build_signer()?;
@@ -358,12 +370,13 @@ async fn run_cycle(
     {
         let tx3 = tx.clone();
         let iv  = Arc::clone(&interval_arc);
-        tokio::spawn(async move { run_candle_stream(tx3, iv).await });
+        let bt3 = broadcast_tx.clone();
+        tokio::spawn(async move { run_candle_stream(tx3, iv, bt3).await });
     }
 
     // 7. WebSocket + comandos
     let _ = tx.send(AppMsg::Status(ConnStatus::ConnectingWs));
-    run_live(token_up, token_down, tx.clone(), clob_client, signer, cmd_rx).await
+    run_live(token_up, token_down, tx.clone(), clob_client, signer, cmd_rx, broadcast_tx).await
 }
 
 // ─── Loop WS + comandos ───────────────────────────────────────────────────────
@@ -375,6 +388,7 @@ async fn run_live(
     client:     Client<Authenticated<Normal>>,
     signer:     PrivateKeySigner,
     cmd_rx:     &mut tokio_mpsc::UnboundedReceiver<CmdMsg>,
+    broadcast_tx: broadcast::Sender<String>,
 ) -> Result<()> {
     let (ws_stream, _) = connect_async(CLOB_WS)
         .await
@@ -394,6 +408,8 @@ async fn run_live(
     let up_str   = token_up.to_string();
     let down_str = token_down.map(|t| t.to_string());
 
+    let broadcast_tx_ws = broadcast_tx.clone();
+
     // Timer balance + órdenes cada 5s
     let mut bal_timer = tokio::time::interval(Duration::from_secs(5));
     bal_timer.tick().await;
@@ -405,7 +421,7 @@ async fn run_live(
                 match msg {
                     Some(Ok(m)) if m.is_text() => {
                         if let Ok(text) = m.into_text() {
-                            handle_ws_text(&text, &tx, &up_str, down_str.as_deref());
+                            handle_ws_text(&text, &tx, &up_str, down_str.as_deref(), &broadcast_tx_ws);
                         }
                     }
                     Some(Ok(m)) if m.is_ping() => {
@@ -427,34 +443,39 @@ async fn run_live(
                     Some(CmdMsg::PlaceLimitOrder { side, outcome, price, size }) => {
                         let tid = pick_token(outcome, token_up, token_down);
                         let c2 = client.clone(); let tx2 = tx.clone(); let s2 = signer.clone();
+                        let bt2 = broadcast_tx.clone();
                         tokio::spawn(async move {
-                            handle_limit_order(&c2, &s2, &tx2, tid, side, price, size).await;
+                            handle_limit_order(&c2, &s2, &tx2, &bt2, tid, side, price, size).await;
                         });
                     }
                     Some(CmdMsg::PlaceMarketOrder { side, outcome, amount_usdc }) => {
                         let tid = pick_token(outcome, token_up, token_down);
                         let c2 = client.clone(); let tx2 = tx.clone(); let s2 = signer.clone();
+                        let bt2 = broadcast_tx.clone();
                         tokio::spawn(async move {
-                            handle_market_order(&c2, &s2, &tx2, tid, side, amount_usdc).await;
+                            handle_market_order(&c2, &s2, &tx2, &bt2, tid, side, amount_usdc).await;
                         });
                     }
                     Some(CmdMsg::ScalpBuy { outcome, price, size, target_price }) => {
                         let tid = pick_token(outcome, token_up, token_down);
                         let c2 = client.clone(); let tx2 = tx.clone(); let s2 = signer.clone();
+                        let bt2 = broadcast_tx.clone();
                         tokio::spawn(async move {
-                            handle_scalp_buy(&c2, &s2, &tx2, tid, price, size, target_price).await;
+                            handle_scalp_buy(&c2, &s2, &tx2, &bt2, tid, price, size, target_price).await;
                         });
                     }
                     Some(CmdMsg::CancelOrder { order_id }) => {
                         let c2 = client.clone(); let tx2 = tx.clone();
+                        let bt2 = broadcast_tx.clone();
                         tokio::spawn(async move {
-                            handle_cancel_order(&c2, &tx2, &order_id).await;
+                            handle_cancel_order(&c2, &tx2, &bt2, &order_id).await;
                         });
                     }
                     Some(CmdMsg::CancelMarket) => {
                         let c2 = client.clone(); let tx2 = tx.clone();
+                        let bt2 = broadcast_tx.clone();
                         tokio::spawn(async move {
-                            handle_cancel_market(&c2, &tx2, token_up, token_down).await;
+                            handle_cancel_market(&c2, &tx2, &bt2, token_up, token_down).await;
                         });
                     }
                     None => break,
@@ -529,6 +550,7 @@ async fn run_btc_price_stream(tx: mpsc::Sender<AppMsg>) {
 async fn run_candle_stream(
     tx:           mpsc::Sender<AppMsg>,
     interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
+    broadcast_tx: broadcast::Sender<String>,
 ) {
     let mut current_iv = interval_arc.lock().map(|g| *g).unwrap_or(CandleInterval::OneSecond);
 
@@ -541,7 +563,10 @@ async fn run_candle_stream(
 
         // 1. Histórico via REST
         if let Some(candles) = fetch_binance_klines(current_iv.binance_str(), current_iv.limit()).await {
-            let _ = tx.send(AppMsg::Candles(candles));
+            let _ = tx.send(AppMsg::Candles(candles.clone()));
+            if let Some(json) = AppMsg::Candles(candles).to_json() {
+                let _ = broadcast_tx.send(json);
+            }
         }
 
         // 2. Tiempo real via WebSocket kline
@@ -562,7 +587,10 @@ async fn run_candle_stream(
                         Ok(Some(Ok(msg))) if msg.is_text() => {
                             if let Ok(text) = msg.into_text() {
                                 if let Some(c) = parse_kline_ws(&text) {
-                                    let _ = tx.send(AppMsg::CandleUpdate(c));
+                                    let _ = tx.send(AppMsg::CandleUpdate(c.clone()));
+                                    if let Some(json) = AppMsg::CandleUpdate(c).to_json() {
+                                        let _ = broadcast_tx.send(json);
+                                    }
                                 }
                             }
                         }
@@ -623,22 +651,32 @@ fn pick_token(outcome: Outcome, up: U256, down: Option<U256>) -> U256 {
 }
 
 async fn handle_limit_order(
-    client:   &Client<Authenticated<Normal>>,
-    signer:   &PrivateKeySigner,
-    tx:       &mpsc::Sender<AppMsg>,
-    token_id: U256,
-    side:     OrderSide,
-    price:    f64,
-    size:     f64,
+    client:       &Client<Authenticated<Normal>>,
+    signer:       &PrivateKeySigner,
+    tx:           &mpsc::Sender<AppMsg>,
+    broadcast_tx: &broadcast::Sender<String>,
+    token_id:     U256,
+    side:         OrderSide,
+    price:        f64,
+    size:         f64,
 ) {
-    // Polymarket tick size = 0.01 → máximo 2 decimales
     let price_dec: Decimal = match format!("{:.2}", price).parse() {
         Ok(d) => d,
-        Err(_) => { let _ = tx.send(AppMsg::OrderResult("Precio inválido".into())); return; }
+        Err(_) => { 
+            let msg = "Precio inválido".to_string();
+            let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+            return; 
+        }
     };
     let size_dec: Decimal = match format!("{:.2}", size).parse() {
         Ok(d) => d,
-        Err(_) => { let _ = tx.send(AppMsg::OrderResult("Tamaño inválido".into())); return; }
+        Err(_) => { 
+            let msg = "Tamaño inválido".to_string();
+            let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+            return; 
+        }
     };
     let clob_side = if matches!(side, OrderSide::Buy) { ClobSide::Buy } else { ClobSide::Sell };
 
@@ -660,20 +698,27 @@ async fn handle_limit_order(
         Ok(r)              => format!("✗ Rechazada: {}", r.error_msg.unwrap_or_default()),
         Err(e)             => format!("✗ Error: {}", e),
     };
-    let _ = tx.send(AppMsg::OrderResult(msg));
+    let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+    if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
 }
 
 async fn handle_market_order(
-    client:      &Client<Authenticated<Normal>>,
-    signer:      &PrivateKeySigner,
-    tx:          &mpsc::Sender<AppMsg>,
-    token_id:    U256,
-    side:        OrderSide,
-    amount_usdc: f64,
+    client:       &Client<Authenticated<Normal>>,
+    signer:       &PrivateKeySigner,
+    tx:           &mpsc::Sender<AppMsg>,
+    broadcast_tx: &broadcast::Sender<String>,
+    token_id:     U256,
+    side:         OrderSide,
+    amount_usdc:  f64,
 ) {
     let amount_dec: Decimal = match format!("{:.2}", amount_usdc).parse() {
         Ok(d) => d,
-        Err(_) => { let _ = tx.send(AppMsg::OrderResult("Monto inválido".into())); return; }
+        Err(_) => { 
+            let msg = "Monto inválido".to_string();
+            let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+            return; 
+        }
     };
     let clob_side = if matches!(side, OrderSide::Buy) { ClobSide::Buy } else { ClobSide::Sell };
 
@@ -694,20 +739,20 @@ async fn handle_market_order(
         Ok(r)              => format!("✗ Rechazada: {}", r.error_msg.unwrap_or_default()),
         Err(e)             => format!("✗ Error: {}", e),
     };
-    let _ = tx.send(AppMsg::OrderResult(msg));
+    let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+    if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
 }
 
 async fn handle_cancel_market(
-    client:     &Client<Authenticated<Normal>>,
-    tx:         &mpsc::Sender<AppMsg>,
-    token_up:   U256,
-    token_down: Option<U256>,
+    client:       &Client<Authenticated<Normal>>,
+    tx:           &mpsc::Sender<AppMsg>,
+    broadcast_tx: &broadcast::Sender<String>,
+    token_up:     U256,
+    token_down:   Option<U256>,
 ) {
-    // Cancelar UP
     let req_up = CancelMarketOrderRequest::builder().asset_id(token_up).build();
     let up_result = client.cancel_market_orders(&req_up).await;
 
-    // Cancelar DOWN si existe
     let down_result = if let Some(td) = token_down {
         let req_dn = CancelMarketOrderRequest::builder().asset_id(td).build();
         Some(client.cancel_market_orders(&req_dn).await)
@@ -721,13 +766,15 @@ async fn handle_cancel_market(
         (Err(e), _)          => format!("✗ Cancel error: {}", e),
         (_, Some(Err(e)))    => format!("✗ Cancel DOWN error: {}", e),
     };
-    let _ = tx.send(AppMsg::OrderResult(msg));
+    let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+    if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
 }
 
 async fn handle_cancel_order(
-    client:   &Client<Authenticated<Normal>>,
-    tx:       &mpsc::Sender<AppMsg>,
-    order_id: &str,
+    client:       &Client<Authenticated<Normal>>,
+    tx:           &mpsc::Sender<AppMsg>,
+    broadcast_tx: &broadcast::Sender<String>,
+    order_id:     &str,
 ) {
     match client.cancel_order(order_id).await {
         Ok(r) => {
@@ -738,10 +785,13 @@ async fn handle_cancel_order(
                 let reason = r.not_canceled.values().next().cloned().unwrap_or_default();
                 format!("✗ No cancelada: {reason}")
             };
-            let _ = tx.send(AppMsg::OrderResult(msg));
+            let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
         }
         Err(e) => {
-            let _ = tx.send(AppMsg::OrderResult(format!("✗ Cancel error: {e}")));
+            let msg = format!("✗ Cancel error: {e}");
+            let _ = tx.send(AppMsg::OrderResult(msg.clone()));
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
         }
     }
 }
@@ -839,23 +889,31 @@ async fn fetch_and_send_orders(
 
 /// Scalp automático: coloca BUY limit, espera fill, luego coloca SELL limit al precio objetivo.
 /// Corre en un tokio::spawn independiente para no bloquear el loop principal.
+#[allow(unused_assignments)]
 async fn handle_scalp_buy(
     client:       &Client<Authenticated<Normal>>,
     signer:       &PrivateKeySigner,
     tx:           &mpsc::Sender<AppMsg>,
+    broadcast_tx: &broadcast::Sender<String>,
     token_id:     U256,
     price:        f64,
     size:         f64,
     target_price: f64,
 ) {
-    // ── Paso 1: colocar BUY limit ─────────────────────────────────────────────
+    let send_msg = |msg: &str, bt: &broadcast::Sender<String>| {
+        let _ = tx.send(AppMsg::OrderResult(msg.to_string()));
+        if let Some(json) = AppMsg::OrderResult(msg.to_string()).to_json() {
+            let _ = bt.send(json);
+        }
+    };
+
     let price_dec: Decimal = match format!("{:.2}", price).parse() {
         Ok(d) => d,
-        Err(_) => { let _ = tx.send(AppMsg::OrderResult("⚡ Precio invalido".into())); return; }
+        Err(_) => { send_msg("⚡ Precio invalido", broadcast_tx); return; }
     };
     let size_dec: Decimal = match format!("{:.2}", size).parse() {
         Ok(d) => d,
-        Err(_) => { let _ = tx.send(AppMsg::OrderResult("⚡ Tamaño invalido".into())); return; }
+        Err(_) => { send_msg("⚡ Tamaño invalido", broadcast_tx); return; }
     };
 
     let buy_result: Result<_> = async {
@@ -872,33 +930,29 @@ async fn handle_scalp_buy(
 
     let order_id = match buy_result {
         Ok(r) if r.success => {
-            let _ = tx.send(AppMsg::OrderResult(format!(
+            let msg = format!(
                 "⚡ SCALP BUY @ {:.4} enviado — esperando fill para vender @ {:.4}...",
                 price, target_price
-            )));
+            );
+            send_msg(&msg, broadcast_tx);
             r.order_id
         }
         Ok(r) => {
-            let _ = tx.send(AppMsg::OrderResult(format!(
-                "✗ SCALP rechazado: {}", r.error_msg.unwrap_or_default()
-            )));
+            send_msg(&format!("✗ SCALP rechazado: {}", r.error_msg.unwrap_or_default()), broadcast_tx);
             return;
         }
         Err(e) => {
-            let _ = tx.send(AppMsg::OrderResult(format!("✗ SCALP error: {e}")));
+            send_msg(&format!("✗ SCALP error: {e}"), broadcast_tx);
             return;
         }
     };
 
-    // ── Paso 2: poll cada 500ms hasta fill (max 5 min) ───────────────────────
     let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
-    let mut filled_size = 0.0_f64;
+    let filled_size;
 
     loop {
         if tokio::time::Instant::now() >= deadline {
-            let _ = tx.send(AppMsg::OrderResult(
-                "⚠ SCALP timeout — fill no recibido en 5min".into()
-            ));
+            send_msg("⚠ SCALP timeout — fill no recibido en 5min", broadcast_tx);
             return;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -910,7 +964,6 @@ async fn handle_scalp_buy(
                 let found = list.data.iter().find(|o| o.id == order_id);
                 match found {
                     None => {
-                        // Ya no está en órdenes abiertas → llenada o cancelada
                         filled_size = size;
                         break;
                     }
@@ -924,17 +977,17 @@ async fn handle_scalp_buy(
                     }
                 }
             }
-            _ => {} // continúa esperando en timeout / error de red
+            _ => {}
         }
     }
 
-    // ── Paso 3: colocar SELL limit al precio objetivo ─────────────────────────
     let sell_size = if filled_size > 0.0 { filled_size } else { size };
-    let _ = tx.send(AppMsg::OrderResult(format!(
+    let msg = format!(
         "✓ BUY filled! Colocando SELL @ {:.4} x {:.2} shares...",
         target_price, sell_size
-    )));
-    handle_limit_order(client, signer, tx, token_id, OrderSide::Sell, target_price, sell_size).await;
+    );
+    send_msg(&msg, broadcast_tx);
+    handle_limit_order(client, signer, tx, broadcast_tx, token_id, OrderSide::Sell, target_price, sell_size).await;
 }
 
 /// Obtiene el precio BTC/USD de Pyth Network al inicio del intervalo de 15min.
@@ -1113,11 +1166,11 @@ async fn fetch_from_markets(gamma: &gamma::Client) -> Result<MarketInfo> {
 
 // ─── WebSocket: parsing ───────────────────────────────────────────────────────
 
-fn handle_ws_text(text: &str, tx: &mpsc::Sender<AppMsg>, up_str: &str, down_str: Option<&str>) {
+fn handle_ws_text(text: &str, tx: &mpsc::Sender<AppMsg>, up_str: &str, down_str: Option<&str>, broadcast_tx: &broadcast::Sender<String>) {
     if let Ok(msgs) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
-        for msg in msgs { dispatch_ws_msg(&msg, tx, up_str, down_str); }
+        for msg in msgs { dispatch_ws_msg(&msg, tx, up_str, down_str, broadcast_tx); }
     } else if let Ok(msg) = serde_json::from_str::<serde_json::Value>(text) {
-        dispatch_ws_msg(&msg, tx, up_str, down_str);
+        dispatch_ws_msg(&msg, tx, up_str, down_str, broadcast_tx);
     }
 }
 
@@ -1126,6 +1179,7 @@ fn dispatch_ws_msg(
     tx:       &mpsc::Sender<AppMsg>,
     up_str:   &str,
     down_str: Option<&str>,
+    broadcast_tx: &broadcast::Sender<String>,
 ) {
     let asset_id = msg.get("asset_id").and_then(|v| v.as_str()).unwrap_or("");
     let is_up    = asset_id == up_str;
@@ -1134,16 +1188,36 @@ fn dispatch_ws_msg(
     match msg.get("event_type").and_then(|v| v.as_str()) {
         Some("book") => {
             if let Some(snap) = parse_ws_book(msg) {
-                if is_up        { let _ = tx.send(AppMsg::BookUp(snap));   }
-                else if is_down { let _ = tx.send(AppMsg::BookDown(snap)); }
+                if is_up        { let _ = tx.send(AppMsg::BookUp(snap.clone())); }
+                else if is_down { let _ = tx.send(AppMsg::BookDown(snap.clone())); }
+
+                if is_up {
+                    if let Some(json) = AppMsg::BookUp(snap).to_json() {
+                        let _ = broadcast_tx.send(json);
+                    }
+                } else if is_down {
+                    if let Some(json) = AppMsg::BookDown(snap).to_json() {
+                        let _ = broadcast_tx.send(json);
+                    }
+                }
             }
         }
         Some("last_trade_price") => {
             if let Some(p) = msg.get("price").and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<f64>().ok()).filter(|&p| p > 0.0)
             {
-                if is_up        { let _ = tx.send(AppMsg::LastTradeUp(p));   }
+                if is_up        { let _ = tx.send(AppMsg::LastTradeUp(p)); }
                 else if is_down { let _ = tx.send(AppMsg::LastTradeDown(p)); }
+
+                if is_up {
+                    if let Some(json) = AppMsg::LastTradeUp(p).to_json() {
+                        let _ = broadcast_tx.send(json);
+                    }
+                } else if is_down {
+                    if let Some(json) = AppMsg::LastTradeDown(p).to_json() {
+                        let _ = broadcast_tx.send(json);
+                    }
+                }
             }
         }
         _ => {}
@@ -1167,6 +1241,166 @@ fn parse_ws_book(msg: &serde_json::Value) -> Option<BookSnapshot> {
     let asks = levels("asks");
     if bids.is_empty() && asks.is_empty() { return None; }
     Some(BookSnapshot { bids, asks })
+}
+
+// ─── WebSocket Server (para clientes Java) ─────────────────────────────────────
+
+async fn run_websocket_server(
+    addr: &str,
+    broadcast_tx: broadcast::Sender<String>,
+) -> Result<()> {
+    let listener = TcpListener::bind(addr).await
+        .map_err(|e| anyhow!("Failed to bind WebSocket server on {}: {}", addr, e))?;
+    info!("WebSocket server listening on ws://{}", addr);
+
+    loop {
+        match listener.accept().await {
+            Ok((stream, addr)) => {
+                let broadcast_tx = broadcast_tx.clone();
+                tokio::spawn(handle_ws_client(stream, addr, broadcast_tx));
+            }
+            Err(e) => {
+                error!("WebSocket accept error: {}", e);
+            }
+        }
+    }
+}
+
+async fn handle_ws_client(
+    stream: TcpStream,
+    addr: SocketAddr,
+    broadcast_tx: broadcast::Sender<String>,
+) {
+    let ws_stream = match accept_async(stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            error!("WebSocket handshake failed for {}: {}", addr, e);
+            return;
+        }
+    };
+
+    info!("Java client connected: {}", addr);
+
+    let (mut write, mut read) = ws_stream.split();
+    let mut broadcast_rx = broadcast_tx.subscribe();
+
+    let reader_handle = tokio::spawn(async move {
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(m) if m.is_text() => {
+                    if let Ok(text) = m.into_text() {
+                        info!("Received from Java client {}: {}", addr, text);
+                    }
+                }
+                Ok(m) if m.is_close() => break,
+                _ => {}
+            }
+        }
+    });
+
+    let writer_handle = tokio::spawn(async move {
+        while let Ok(msg) = broadcast_rx.recv().await {
+            if write.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let _ = reader_handle.await;
+    let _ = writer_handle.await;
+
+    info!("Java client disconnected: {}", addr);
+}
+
+// ─── Broadcast AppMsg to JSON ─────────────────────────────────────────────────
+
+impl AppMsg {
+    pub fn to_json(&self) -> Option<String> {
+        match self {
+            AppMsg::Status(status) => {
+                let msg = match status {
+                    ConnStatus::Initializing => "Initializing",
+                    ConnStatus::Authenticating => "Authenticating",
+                    ConnStatus::FetchingMarkets => "FetchingMarkets",
+                    ConnStatus::MarketFound(info) => &info.title,
+                    ConnStatus::ConnectingWs => "ConnectingWs",
+                    ConnStatus::Live => "LIVE",
+                    ConnStatus::Reconnecting(n) => return Some(format!(r#"{{"type":"status","status":"Reconnecting","message":"Attempt {}"}}"#, n)),
+                    ConnStatus::Error(e) => return Some(format!(r#"{{"type":"status","status":"Error","message":"{}"}}"#, e)),
+                };
+                Some(format!(r#"{{"type":"status","status":"{}"}}"#, msg))
+            }
+            AppMsg::BookUp(book) => {
+                Some(format!(
+                    r#"{{"type":"book","side":"up","book":{}}}"#,
+                    book_to_json(book)
+                ))
+            }
+            AppMsg::BookDown(book) => {
+                Some(format!(
+                    r#"{{"type":"book","side":"down","book":{}}}"#,
+                    book_to_json(book)
+                ))
+            }
+            AppMsg::LastTradeUp(price) => {
+                Some(format!(r#"{{"type":"trade","side":"up","price":{}}}"#, price))
+            }
+            AppMsg::LastTradeDown(price) => {
+                Some(format!(r#"{{"type":"trade","side":"down","price":{}}}"#, price))
+            }
+            AppMsg::Balance(bal) => {
+                Some(format!(r#"{{"type":"balance","balance":{}}}"#, bal))
+            }
+            AppMsg::BtcOpen(price) => {
+                Some(format!(r#"{{"type":"btc_price","open":{}}}"#, price))
+            }
+            AppMsg::BtcPrice(price) => {
+                Some(format!(r#"{{"type":"btc_price","price":{}}}"#, price))
+            }
+            AppMsg::OrderResult(msg) => {
+                Some(format!(r#"{{"type":"order_result","success":true,"message":"{}"}}"#, msg.replace('"', "\\\"")))
+            }
+            AppMsg::OpenOrders(orders) => {
+                let orders_json: Vec<String> = orders.iter().map(|o| {
+                    format!(r#"{{"id":"{}","outcome":"{}","side":"{}","price":{},"size_orig":{},"size_matched":{}}}"#,
+                        o.id, o.outcome, match o.side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" },
+                        o.price, o.size_orig, o.size_matched)
+                }).collect();
+                Some(format!(r#"{{"type":"open_orders","orders":[{}]}}"#, orders_json.join(",")))
+            }
+            AppMsg::RecentFills(fills) => {
+                let fills_json: Vec<String> = fills.iter().map(|f| {
+                    format!(r#"{{"outcome":"{}","side":"{}","price":{},"size":{},"time":"{}","session":"{}"}}"#,
+                        f.outcome, match f.side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" },
+                        f.price, f.size, f.time, f.session)
+                }).collect();
+                Some(format!(r#"{{"type":"recent_fills","fills":[{}]}}"#, fills_json.join(",")))
+            }
+            AppMsg::Candles(candles) => {
+                let candles_json: Vec<String> = candles.iter().map(|c| {
+                    format!(r#"{{"open_time":{},"open":{},"high":{},"low":{},"close":{},"volume":{}}}"#,
+                        c.open_time, c.open, c.high, c.low, c.close, c.volume)
+                }).collect();
+                Some(format!(r#"{{"type":"candles","candles":[{}]}}"#, candles_json.join(",")))
+            }
+            AppMsg::CandleUpdate(candle) => {
+                Some(format!(
+                    r#"{{"type":"candle_update","candle":{{"open_time":{},"open":{},"high":{},"low":{},"close":{},"volume":{}}}}}"#,
+                    candle.open_time, candle.open, candle.high, candle.low, candle.close, candle.volume
+                ))
+            }
+        }
+    }
+}
+
+fn book_to_json(book: &BookSnapshot) -> String {
+    let bids: Vec<String> = book.bids.iter().map(|l| {
+        format!(r#"{{"price":{},"size":{}}}"#, l.price, l.size)
+    }).collect();
+    let asks: Vec<String> = book.asks.iter().map(|l| {
+        format!(r#"{{"price":{},"size":{}}}"#, l.price, l.size)
+    }).collect();
+    format!(r#"{{"bids":[{}],"asks":[{}]}}"#, bids.join(","), asks.join(","))
 }
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
