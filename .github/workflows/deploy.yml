@@ -1,0 +1,77 @@
+name: Deploy App
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies & Build
+        run: |
+          cd frontend_react
+          npm install
+          npm run build
+
+      - name: Deploy Frontend to Server
+        uses: easingthemes/ssh-deploy@main
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          ARGS: "-rlgoDzvc -i --delete"
+          REMOTE_HOST: ${{ secrets.SERVER_IP }}
+          REMOTE_USER: "ubuntu"
+          SOURCE: "frontend_react/dist/"
+          TARGET: "/var/www/zzignal-app"
+
+  deploy-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Rust Backend
+        run: |
+          cd backend_rust
+          cargo build --release
+
+      - name: Package
+        run: |
+          mkdir -p deploy
+          cp backend_rust/target/release/polymarket-backend deploy/
+          tar -czf deploy.tar.gz -C deploy .
+
+      - name: Deploy to Server
+        uses: easingthemes/ssh-deploy@main
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          ARGS: "-rlgoDzvc -i"
+          REMOTE_HOST: ${{ secrets.SERVER_IP }}
+          REMOTE_USER: "ubuntu"
+          SOURCE: "deploy.tar.gz"
+          TARGET: "/home/ubuntu/zzignal-app/"
+
+      - name: Write .env file
+        run: echo "${{ secrets.ENV_FILE }}" | base64 -d > deploy/.env
+
+      - name: Deploy .env to Server
+        uses: easingthemes/ssh-deploy@main
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          ARGS: "-rlgoDzvc -i"
+          REMOTE_HOST: ${{ secrets.SERVER_IP }}
+          REMOTE_USER: "ubuntu"
+          SOURCE: "deploy/.env"
+          TARGET: "/home/ubuntu/zzignal-app/.env"
+
+      - name: Restart Service
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ubuntu
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            sudo systemctl restart zzignal-app
