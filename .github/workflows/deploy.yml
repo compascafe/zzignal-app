@@ -10,8 +10,36 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git diff --name-only HEAD~1 HEAD > changed_files.txt
+          if grep -q "frontend_react/" changed_files.txt; then
+            echo "FRONTEND_CHANGED=true" >> $GITHUB_OUTPUT
+          else
+            echo "FRONTEND_CHANGED=false" >> $GITHUB_OUTPUT
+          fi
+          if grep -q "backend_rust/" changed_files.txt; then
+            echo "BACKEND_CHANGED=true" >> $GITHUB_OUTPUT
+          else
+            echo "BACKEND_CHANGED=false" >> $GITHUB_OUTPUT
+          fi
+          cat $GITHUB_OUTPUT
+
+      - name: Cache npm dependencies
+        if: steps.changes.outputs.FRONTEND_CHANGED == 'true'
+        uses: actions/cache@v4
+        with:
+          path: frontend_react/node_modules
+          key: ${{ runner.os }}-npm-${{ hashFiles('frontend_react/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
 
       - name: Install dependencies & Build
+        if: steps.changes.outputs.FRONTEND_CHANGED == 'true'
         run: |
           cd frontend_react
           npm install
@@ -30,6 +58,7 @@ jobs:
             sudo chown -R ubuntu:ubuntu /var/www/zzignal-app
 
       - name: Deploy Frontend to Server
+        if: steps.changes.outputs.FRONTEND_CHANGED == 'true'
         uses: easingthemes/ssh-deploy@main
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
@@ -44,27 +73,62 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for backend changes
+        id: changes
+        run: |
+          git diff --name-only HEAD~1 HEAD > changed_files.txt
+          if grep -q "backend_rust/" changed_files.txt; then
+            echo "BACKEND_CHANGED=true" >> $GITHUB_OUTPUT
+          else
+            echo "BACKEND_CHANGED=false" >> $GITHUB_OUTPUT
+          fi
+          cat $GITHUB_OUTPUT
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache Cargo registry
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+        uses: actions/cache@v4
+        with:
+          path: backend_rust/target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Rust
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.91
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Install PostgreSQL client
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
       - name: Build Rust Backend
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         run: |
           cd backend_rust
-          cargo build --release
+          cargo build --release -j $(nproc)
 
       - name: Package
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         run: |
           mkdir -p deploy
           cp backend_rust/target/release/polymarket-backend deploy/
           tar -czf deploy.tar.gz -C deploy .
 
       - name: Deploy to Server
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: easingthemes/ssh-deploy@main
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
@@ -75,6 +139,7 @@ jobs:
           TARGET: "/home/ubuntu/zzignal-app/"
 
       - name: Extract & Write .env
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_IP }}
@@ -88,6 +153,7 @@ jobs:
             chmod +x polymarket-backend
 
       - name: Restart Service
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_IP }}
