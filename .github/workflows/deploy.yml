@@ -17,7 +17,7 @@ jobs:
           npm install
           npm run build
 
-      - name: Setup & Deploy Frontend to Server
+      - name: Setup Frontend Directory
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_IP }}
@@ -26,6 +26,8 @@ jobs:
           script: |
             sudo mkdir -p /var/www/zzignal-app
             sudo chown ubuntu:ubuntu /var/www/zzignal-app
+
+      - name: Deploy Frontend to Server
         uses: easingthemes/ssh-deploy@main
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
