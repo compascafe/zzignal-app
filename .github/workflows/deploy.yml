@@ -85,10 +85,9 @@ jobs:
           else
             echo "BACKEND_CHANGED=false" >> $GITHUB_OUTPUT
           fi
-          cat $GITHUB_OUTPUT
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+
+      - name: Cache Cargo registry
+        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
 
       - name: Cache Cargo registry
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
