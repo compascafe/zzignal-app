@@ -88,9 +88,6 @@ jobs:
 
       - name: Cache Cargo registry
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
-
-      - name: Cache Cargo registry
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
