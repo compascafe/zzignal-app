@@ -43,10 +43,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          version: 1.88
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+
       - name: Build Rust Backend
         run: |
           cd backend_rust
-          cargo fetch
           cargo build --release
 
       - name: Package
