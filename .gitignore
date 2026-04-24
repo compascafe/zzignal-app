@@ -1,7 +1,12 @@
+.claude/
 target/
 .env
+CLAUDE.md
 *.log
 .DS_Store
 *.swp
 *.swo
 *~
+frontend_java/
+frontend_react/node_modules/
+*.class
