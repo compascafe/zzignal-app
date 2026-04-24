@@ -196,6 +196,33 @@ impl CandleInterval {
     }
 }
 
+// ─── Proveedor de precio BTC ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub enum BtcPriceProvider {
+    Binance,
+    Coinbase,
+    Kraken,
+}
+
+impl BtcPriceProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Binance  => "binance",
+            Self::Coinbase => "coinbase",
+            Self::Kraken   => "kraken",
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "binance"  => Some(Self::Binance),
+            "coinbase" => Some(Self::Coinbase),
+            "kraken"   => Some(Self::Kraken),
+            _          => None,
+        }
+    }
+}
+
 // ─── Punto de entrada ─────────────────────────────────────────────────────────
 
 pub async fn run(
@@ -204,12 +231,13 @@ pub async fn run(
     mut cmd_rx:   tokio_mpsc::UnboundedReceiver<CmdMsg>,
     interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
     broadcast_tx: broadcast::Sender<String>,
+    mut provider_rx: tokio::sync::watch::Receiver<BtcPriceProvider>,
 ) {
     let _ = tx.send(AppMsg::Status(ConnStatus::Initializing));
 
     let mut attempts: u32 = 0;
     loop {
-        match run_cycle(&tx, &creds, &mut cmd_rx, Arc::clone(&interval_arc), broadcast_tx.clone()).await {
+        match run_cycle(&tx, &creds, &mut cmd_rx, Arc::clone(&interval_arc), broadcast_tx.clone(), &mut provider_rx).await {
             Ok(_) => {
                 attempts = 0;
                 info!("Ciclo completado, reiniciando...");
@@ -233,6 +261,7 @@ async fn run_cycle(
     cmd_rx:       &mut tokio_mpsc::UnboundedReceiver<CmdMsg>,
     interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
     broadcast_tx: broadcast::Sender<String>,
+    provider_rx:  &tokio::sync::watch::Receiver<BtcPriceProvider>,
 ) -> Result<()> {
     let _ = tx.send(AppMsg::Status(ConnStatus::Authenticating));
     let signer = creds.build_signer()?;
@@ -351,10 +380,11 @@ async fn run_cycle(
     // 5. Órdenes abiertas y fills iniciales
     fetch_and_send_orders(&clob_client, tx, token_up, token_down).await;
 
-    // 6. Precio BTC en tiempo real (Binance aggTrade WS) en segundo plano
+    // 6. Precio BTC en tiempo real (multi-proveedor WS) en segundo plano
     {
         let tx2 = tx.clone();
-        tokio::spawn(async move { run_btc_price_stream(tx2).await });
+        let provider_rx2 = provider_rx.clone();
+        tokio::spawn(async move { run_btc_price_stream(tx2, provider_rx2).await });
     }
 
     // 6b. Velas BTC/USDT — fetch inicial + refresco adaptativo según intervalo
@@ -486,49 +516,146 @@ async fn run_live(
     Ok(())
 }
 
-// ─── BTC/USD precio en tiempo real — Binance aggTrade WebSocket ───────────────
+// ─── BTC/USD precio en tiempo real — Multi-proveedor WebSocket ───────────────
 //
-// Usa wss://stream.binance.com:9443/ws/btcusdt@aggTrade (público, sin auth).
-// Actualiza ~cada segundo, mucho más frecuente que Chainlink para intervalos 15-min.
-// Se reconecta automáticamente en caso de error.
+// Soporta: Binance, Coinbase Advanced Trade, Kraken.
+// Se cambia en caliente vía watch channel (tokio::sync::watch).
 
 const BINANCE_WS: &str = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade";
+const COINBASE_WS: &str = "wss://advanced-trade-ws.coinbase.com";
+const KRAKEN_WS: &str = "wss://ws.kraken.com";
 
-async fn run_btc_price_stream(tx: mpsc::Sender<AppMsg>) {
+async fn run_btc_price_stream(
+    tx: mpsc::Sender<AppMsg>,
+    mut provider_rx: tokio::sync::watch::Receiver<BtcPriceProvider>,
+) {
     let mut backoff = Duration::from_secs(2);
+
     loop {
-        match connect_async(BINANCE_WS).await {
-            Ok((ws_stream, _)) => {
-                info!("Binance BTC/USD stream conectado");
+        let provider = *provider_rx.borrow_and_update();
+        info!("BTC provider: {:?}", provider);
+
+        let ws_url = match provider {
+            BtcPriceProvider::Binance  => BINANCE_WS,
+            BtcPriceProvider::Coinbase => COINBASE_WS,
+            BtcPriceProvider::Kraken   => KRAKEN_WS,
+        };
+
+        match connect_async(ws_url).await {
+            Ok((mut ws_stream, _)) => {
                 backoff = Duration::from_secs(2);
+
+                // Enviar suscripción según proveedor
+                match provider {
+                    BtcPriceProvider::Coinbase => {
+                        let sub = serde_json::json!({
+                            "type": "subscribe",
+                            "product_ids": ["BTC-USD"],
+                            "channel": "ticker"
+                        });
+                        if ws_stream.send(sub.to_string().into()).await.is_err() {
+                            warn!("Coinbase subscribe falló");
+                            continue;
+                        }
+                    }
+                    BtcPriceProvider::Kraken => {
+                        let sub = serde_json::json!({
+                            "event": "subscribe",
+                            "pair": ["BTC/USD"],
+                            "subscription": { "name": "ticker" }
+                        });
+                        if ws_stream.send(sub.to_string().into()).await.is_err() {
+                            warn!("Kraken subscribe falló");
+                            continue;
+                        }
+                    }
+                    BtcPriceProvider::Binance => {} // Binance no requiere suscripción explícita
+                }
+
                 let (_, mut read) = ws_stream.split();
-                while let Some(msg) = read.next().await {
-                    match msg {
-                        Ok(m) if m.is_text() => {
-                            if let Ok(text) = m.into_text() {
-                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                                    // aggTrade: campo "p" = precio del trade
-                                    if let Some(p) = json.get("p")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                        .filter(|&p| p > 0.0)
-                                    {
-                                        let _ = tx.send(AppMsg::BtcPrice(p));
+                let mut stream_open = true;
+
+                while stream_open {
+                    tokio::select! {
+                        msg = read.next() => {
+                            match msg {
+                                Some(Ok(m)) if m.is_text() => {
+                                    if let Ok(text) = m.into_text() {
+                                        match provider {
+                                            BtcPriceProvider::Binance => {
+                                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                                                    if let Some(p) = json.get("p")
+                                                        .and_then(|v| v.as_str())
+                                                        .and_then(|s| s.parse::<f64>().ok())
+                                                        .filter(|&p| p > 0.0)
+                                                    {
+                                                        let _ = tx.send(AppMsg::BtcPrice(p));
+                                                    }
+                                                }
+                                            }
+                                            BtcPriceProvider::Coinbase => {
+                                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                                                    if let Some(price) = json.get("events")
+                                                        .and_then(|e| e.as_array())
+                                                        .and_then(|arr| arr.first())
+                                                        .and_then(|ev| ev.get("tickers"))
+                                                        .and_then(|t| t.as_array())
+                                                        .and_then(|arr| arr.first())
+                                                        .and_then(|ticker| ticker.get("price"))
+                                                        .and_then(|p| p.as_str())
+                                                        .and_then(|s| s.parse::<f64>().ok())
+                                                        .filter(|&p| p > 0.0)
+                                                    {
+                                                        let _ = tx.send(AppMsg::BtcPrice(price));
+                                                    }
+                                                }
+                                            }
+                                            BtcPriceProvider::Kraken => {
+                                                // Kraken ticker: [channelID, { "c": ["price", "volume"], ... }]
+                                                if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str::<serde_json::Value>(&text) {
+                                                    if arr.len() >= 2 {
+                                                        if let Some(ticker) = arr.get(1).and_then(|v| v.as_object()) {
+                                                            if let Some(price) = ticker.get("c")
+                                                                .and_then(|c| c.as_array())
+                                                                .and_then(|c| c.first())
+                                                                .and_then(|p| p.as_str())
+                                                                .and_then(|s| s.parse::<f64>().ok())
+                                                                .filter(|&p| p > 0.0)
+                                                            {
+                                                                let _ = tx.send(AppMsg::BtcPrice(price));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
+                                Some(Ok(m)) if m.is_close() => { stream_open = false; }
+                                Some(Err(e)) => { warn!("BTC WS error: {}", e); stream_open = false; }
+                                None => { stream_open = false; }
+                                _ => {}
                             }
                         }
-                        Ok(m) if m.is_close() => break,
-                        Ok(_) => {}
-                        Err(e) => { warn!("Binance WS error: {}", e); break; }
+                        _ = provider_rx.changed() => {
+                            info!("BTC provider cambiado, reconectando...");
+                            stream_open = false;
+                        }
                     }
                 }
-                warn!("Binance BTC/USD stream desconectado, reconectando...");
+                warn!("BTC stream desconectado, reconectando...");
             }
             Err(e) => {
-                warn!("Binance WS connect falló: {} — reintento en {}s", e, backoff.as_secs());
+                warn!("BTC WS connect falló ({}): {} — reintento en {}s", provider.as_str(), e, backoff.as_secs());
             }
         }
+
+        // Si el provider cambió mientras estábamos desconectados, resetear backoff
+        if provider_rx.has_changed().unwrap_or(false) {
+            backoff = Duration::from_secs(2);
+            continue;
+        }
+
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
     }

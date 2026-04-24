@@ -15,7 +15,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::db;
 use crate::state::AppState;
-use crate::worker::{CandleInterval, CmdMsg, OrderSide, Outcome};
+use crate::worker::{BtcPriceProvider, CandleInterval, CmdMsg, OrderSide, Outcome};
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -26,6 +26,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/market",          get(get_market))
         .route("/api/balance",         get(get_balance))
         .route("/api/btc",             get(get_btc))
+        .route("/api/btc/provider",    get(get_btc_provider))
+        .route("/api/btc/provider",    post(set_btc_provider))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -82,6 +84,39 @@ async fn get_btc(State(s): State<Arc<AppState>>) -> Json<Value> {
         "price": *s.btc_price.read().await,
         "open":  *s.btc_open.read().await,
     }))
+}
+
+async fn get_btc_provider(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let provider = *s.btc_provider.read().await;
+    Json(json!({ "provider": provider.as_str() }))
+}
+
+#[derive(Deserialize)]
+struct ProviderBody {
+    provider: String,
+}
+
+async fn set_btc_provider(
+    State(s):   State<Arc<AppState>>,
+    Json(body): Json<ProviderBody>,
+) -> Json<Value> {
+    let provider = match BtcPriceProvider::from_str(&body.provider) {
+        Some(p) => p,
+        None => return Json(json!({"ok": false, "error": format!("proveedor inválido: {}", body.provider)})),
+    };
+
+    // Actualizar estado
+    *s.btc_provider.write().await = provider;
+
+    // Notificar al worker vía watch channel
+    let _ = s.btc_provider_tx.send(provider);
+
+    // Broadcast a clientes WS
+    let _ = s.broadcast_tx.send(
+        json!({"type":"btc_provider","provider":provider.as_str()}).to_string()
+    );
+
+    Json(json!({"ok": true, "provider": provider.as_str()}))
 }
 
 // ─── Order Book ───────────────────────────────────────────────────────────────
@@ -330,7 +365,7 @@ async fn handle_ws_socket(mut socket: WebSocket, state: Arc<AppState>) {
             // Recibir comandos del cliente
             msg = socket.recv() => {
                 match msg {
-                    Some(Ok(Message::Text(text))) => handle_ws_cmd(&text, &state),
+                    Some(Ok(Message::Text(text))) => { handle_ws_cmd(&text, &state).await; }
                     Some(Ok(Message::Ping(d)))    => { let _ = socket.send(Message::Pong(d)).await; }
                     Some(Ok(Message::Close(_))) | None => break,
                     _ => {}
@@ -352,7 +387,7 @@ async fn build_snapshot(state: &AppState) -> String {
     }).to_string()
 }
 
-fn handle_ws_cmd(text: &str, state: &AppState) {
+async fn handle_ws_cmd(text: &str, state: &AppState) {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return };
     let cmd_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
@@ -406,6 +441,17 @@ fn handle_ws_cmd(text: &str, state: &AppState) {
                 };
                 if let (Some(iv), Ok(mut guard)) = (iv, state.interval_arc.lock()) {
                     *guard = iv;
+                }
+            }
+        }
+        "set_btc_provider" => {
+            if let Some(p_str) = v["provider"].as_str() {
+                if let Some(provider) = BtcPriceProvider::from_str(p_str) {
+                    *state.btc_provider.write().await = provider;
+                    let _ = state.btc_provider_tx.send(provider);
+                    let _ = state.broadcast_tx.send(
+                        json!({"type":"btc_provider","provider":provider.as_str()}).to_string()
+                    );
                 }
             }
         }

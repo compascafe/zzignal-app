@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, RwLock, mpsc as tokio_mpsc};
 use sqlx::PgPool;
 
-use crate::worker::{BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
+use crate::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -22,6 +22,10 @@ pub struct AppState {
     // Control del intervalo de velas (compartido con worker)
     pub interval_arc:    Arc<Mutex<CandleInterval>>,
 
+    // Proveedor de precio BTC (compartido con worker via watch channel)
+    pub btc_provider:    RwLock<BtcPriceProvider>,
+    pub btc_provider_tx: Arc<tokio::sync::watch::Sender<BtcPriceProvider>>,
+
     // Comandos → worker
     pub cmd_tx:          tokio_mpsc::UnboundedSender<CmdMsg>,
 
@@ -34,10 +38,11 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(
-        cmd_tx:       tokio_mpsc::UnboundedSender<CmdMsg>,
-        broadcast_tx: broadcast::Sender<String>,
-        interval_arc: Arc<Mutex<CandleInterval>>,
-        db:           Option<PgPool>,
+        cmd_tx:          tokio_mpsc::UnboundedSender<CmdMsg>,
+        broadcast_tx:    broadcast::Sender<String>,
+        interval_arc:    Arc<Mutex<CandleInterval>>,
+        db:              Option<PgPool>,
+        btc_provider_tx: Arc<tokio::sync::watch::Sender<BtcPriceProvider>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             status:          RwLock::new("Initializing".into()),
@@ -53,6 +58,8 @@ impl AppState {
             recent_fills:    RwLock::new(vec![]),
             candles:         RwLock::new(vec![]),
             interval_arc,
+            btc_provider:    RwLock::new(BtcPriceProvider::Binance),
+            btc_provider_tx,
             cmd_tx,
             broadcast_tx,
             db,

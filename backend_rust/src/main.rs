@@ -23,7 +23,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use tokio::sync::{broadcast, mpsc as tokio_mpsc};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
-use worker::{AppMsg, CandleInterval, CmdMsg, ConnStatus};
+use worker::{AppMsg, BtcPriceProvider, CandleInterval, CmdMsg, ConnStatus};
 
 use crate::credentials::ClobCredentials;
 use crate::state::AppState;
@@ -76,6 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (cmd_tx, cmd_rx)  = tokio_mpsc::unbounded_channel::<CmdMsg>();
     let (bcast_tx, _)     = broadcast::channel::<String>(512);
     let interval_arc      = Arc::new(Mutex::new(CandleInterval::OneMinute));
+    let (btc_provider_tx, btc_provider_rx) = tokio::sync::watch::channel(BtcPriceProvider::Binance);
+    let btc_provider_tx   = Arc::new(btc_provider_tx);
 
     // AppState compartido
     let state = AppState::new(
@@ -83,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bcast_tx.clone(),
         Arc::clone(&interval_arc),
         db,
+        Arc::clone(&btc_provider_tx),
     );
 
     // Worker (hilo OS con su propio runtime tokio)
@@ -98,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .enable_all()
                     .build()
                     .expect("tokio runtime worker")
-                    .block_on(worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2));
+                    .block_on(worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
             })
             .expect("spawn worker");
     }
