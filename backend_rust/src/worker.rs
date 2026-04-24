@@ -194,6 +194,16 @@ impl CandleInterval {
             Self::OneHour        => 100,
         }
     }
+    /// Milisegundos de duración
+    pub fn millis(self) -> i64 {
+        match self {
+            Self::OneSecond      => 1_000,
+            Self::OneMinute      => 60_000,
+            Self::FiveMinutes    => 300_000,
+            Self::FifteenMinutes => 900_000,
+            Self::OneHour        => 3_600_000,
+        }
+    }
 }
 
 // ─── Proveedor de precio BTC ──────────────────────────────────────────────────
@@ -384,7 +394,8 @@ async fn run_cycle(
     {
         let tx2 = tx.clone();
         let provider_rx2 = provider_rx.clone();
-        tokio::spawn(async move { run_btc_price_stream(tx2, provider_rx2).await });
+        let iv2 = Arc::clone(&interval_arc);
+        tokio::spawn(async move { run_btc_price_stream(tx2, provider_rx2, iv2).await });
     }
 
     // 6b. Velas BTC/USDT — fetch inicial + refresco adaptativo según intervalo
@@ -516,10 +527,91 @@ async fn run_live(
     Ok(())
 }
 
-// ─── BTC/USD precio en tiempo real — Multi-proveedor WebSocket ───────────────
+// ─── Generador de velas sintéticas desde ticks de precio ─────────────────────
 //
-// Soporta: Binance, Coinbase Advanced Trade, Kraken.
-// Se cambia en caliente vía watch channel (tokio::sync::watch).
+// Construye OHLCV en tiempo real a partir de los ticks BTC que llegan del WS.
+// No depende de Binance REST/klines — funciona con cualquier proveedor.
+// Volumen real solo de Binance aggTrade (campo "q"); resto = 0.0.
+
+struct TickCandleGenerator {
+    interval_ms: i64,
+    current:     Option<Candle>,
+    history:     Vec<Candle>,
+    max_history: usize,
+}
+
+impl TickCandleGenerator {
+    fn new(interval_ms: i64, max_history: usize) -> Self {
+        Self { interval_ms, current: None, history: Vec::with_capacity(max_history), max_history }
+    }
+
+    fn set_interval(&mut self, interval_ms: i64) {
+        self.interval_ms = interval_ms;
+        self.current = None;
+        // Conservar history para que el usuario no pierda todo al cambiar intervalo
+    }
+
+    /// Recibe un tick de precio. Devuelve la vela actualizada (para CandleUpdate).
+    fn on_tick(&mut self, price: f64, volume: f64, now_ms: i64) -> Option<Candle> {
+        let open_time = (now_ms / self.interval_ms) * self.interval_ms;
+
+        match &mut self.current {
+            None => {
+                let c = Candle {
+                    open_time,
+                    open:   price,
+                    high:   price,
+                    low:    price,
+                    close:  price,
+                    volume,
+                };
+                self.current = Some(c.clone());
+                Some(c)
+            }
+            Some(c) if c.open_time == open_time => {
+                c.high = c.high.max(price);
+                c.low  = c.low.min(price);
+                c.close = price;
+                c.volume += volume;
+                Some(c.clone())
+            }
+            Some(c) => {
+                // Cerrar vela anterior
+                let finished = c.clone();
+                self.push_history(finished);
+
+                // Nueva vela
+                let new = Candle {
+                    open_time,
+                    open:   price,
+                    high:   price,
+                    low:    price,
+                    close:  price,
+                    volume,
+                };
+                self.current = Some(new.clone());
+                Some(new)
+            }
+        }
+    }
+
+    fn push_history(&mut self, c: Candle) {
+        self.history.push(c);
+        if self.history.len() > self.max_history {
+            self.history.remove(0);
+        }
+    }
+
+    fn snapshot(&self) -> Vec<Candle> {
+        let mut s = self.history.clone();
+        if let Some(c) = &self.current {
+            s.push(c.clone());
+        }
+        s
+    }
+}
+
+// ─── BTC/USD precio en tiempo real — Multi-proveedor WebSocket ───────────────
 
 const BINANCE_WS: &str = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade";
 const COINBASE_WS: &str = "wss://advanced-trade-ws.coinbase.com";
@@ -528,12 +620,29 @@ const KRAKEN_WS: &str = "wss://ws.kraken.com";
 async fn run_btc_price_stream(
     tx: mpsc::Sender<AppMsg>,
     mut provider_rx: tokio::sync::watch::Receiver<BtcPriceProvider>,
+    interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
 ) {
     let mut backoff = Duration::from_secs(2);
+    let mut generator = TickCandleGenerator::new(CandleInterval::OneMinute.millis(), 200);
+    let mut last_interval = CandleInterval::OneMinute;
 
     loop {
         let provider = *provider_rx.borrow_and_update();
         info!("BTC provider: {:?}", provider);
+
+        // Detectar cambio de intervalo
+        if let Ok(iv) = interval_arc.lock() {
+            if *iv != last_interval {
+                last_interval = *iv;
+                generator.set_interval(last_interval.millis());
+                let snap = generator.snapshot();
+                let _ = tx.send(AppMsg::Candles {
+                    interval: last_interval.binance_str().to_string(),
+                    candles: snap,
+                });
+                info!("Intervalo cambiado a {:?} — velas sintéticas reset", last_interval);
+            }
+        }
 
         let ws_url = match provider {
             BtcPriceProvider::Binance  => BINANCE_WS,
@@ -581,21 +690,30 @@ async fn run_btc_price_stream(
                             match msg {
                                 Some(Ok(m)) if m.is_text() => {
                                     if let Ok(text) = m.into_text() {
+                                        let now_ms = Utc::now().timestamp_millis();
+                                        let mut price: Option<f64> = None;
+                                        let mut volume: f64 = 0.0;
+
                                         match provider {
                                             BtcPriceProvider::Binance => {
                                                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                                                    if let Some(p) = json.get("p")
+                                                    price = json.get("p")
                                                         .and_then(|v| v.as_str())
                                                         .and_then(|s| s.parse::<f64>().ok())
-                                                        .filter(|&p| p > 0.0)
+                                                        .filter(|&p| p > 0.0);
+                                                    // Volumen real del aggTrade (campo "q")
+                                                    if let Some(v) = json.get("q")
+                                                        .and_then(|v| v.as_str())
+                                                        .and_then(|s| s.parse::<f64>().ok())
+                                                        .filter(|&v| v >= 0.0)
                                                     {
-                                                        let _ = tx.send(AppMsg::BtcPrice(p));
+                                                        volume = v;
                                                     }
                                                 }
                                             }
                                             BtcPriceProvider::Coinbase => {
                                                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                                                    if let Some(price) = json.get("events")
+                                                    price = json.get("events")
                                                         .and_then(|e| e.as_array())
                                                         .and_then(|arr| arr.first())
                                                         .and_then(|ev| ev.get("tickers"))
@@ -604,29 +722,33 @@ async fn run_btc_price_stream(
                                                         .and_then(|ticker| ticker.get("price"))
                                                         .and_then(|p| p.as_str())
                                                         .and_then(|s| s.parse::<f64>().ok())
-                                                        .filter(|&p| p > 0.0)
-                                                    {
-                                                        let _ = tx.send(AppMsg::BtcPrice(price));
-                                                    }
+                                                        .filter(|&p| p > 0.0);
+                                                    // Coinbase ticker no tiene volumen por trade
+                                                    volume = 0.0;
                                                 }
                                             }
                                             BtcPriceProvider::Kraken => {
-                                                // Kraken ticker: [channelID, { "c": ["price", "volume"], ... }]
                                                 if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str::<serde_json::Value>(&text) {
                                                     if arr.len() >= 2 {
                                                         if let Some(ticker) = arr.get(1).and_then(|v| v.as_object()) {
-                                                            if let Some(price) = ticker.get("c")
+                                                            price = ticker.get("c")
                                                                 .and_then(|c| c.as_array())
                                                                 .and_then(|c| c.first())
                                                                 .and_then(|p| p.as_str())
                                                                 .and_then(|s| s.parse::<f64>().ok())
-                                                                .filter(|&p| p > 0.0)
-                                                            {
-                                                                let _ = tx.send(AppMsg::BtcPrice(price));
-                                                            }
+                                                                .filter(|&p| p > 0.0);
+                                                            // Kraken no damos volumen por simplicidad (sería c[1])
+                                                            volume = 0.0;
                                                         }
                                                     }
                                                 }
+                                            }
+                                        }
+
+                                        if let Some(p) = price {
+                                            let _ = tx.send(AppMsg::BtcPrice(p));
+                                            if let Some(c) = generator.on_tick(p, volume, now_ms) {
+                                                let _ = tx.send(AppMsg::CandleUpdate(c));
                                             }
                                         }
                                     }
