@@ -103,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Scheduler del módulo DB: snapshots cada 10s + ejecuciones programadas cada 5s
+    // Nota: requiere PostgreSQL (DATABASE_URL) para persistir datos
     {
         let state3 = Arc::clone(&state);
         tokio::spawn(async move {
