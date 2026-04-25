@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, RwLock, mpsc as tokio_mpsc};
 use sqlx::PgPool;
 
-use crate::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
+use crate::modules::core::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)

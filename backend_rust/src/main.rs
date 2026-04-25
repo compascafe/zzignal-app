@@ -12,21 +12,17 @@
 
 #![allow(dead_code)]
 
-mod api;
-mod credentials;
-mod db;
-mod state;
-mod worker;
+mod modules;
 
 use std::sync::{mpsc, Arc, Mutex};
 
 use tokio::sync::{broadcast, mpsc as tokio_mpsc};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
-use worker::{AppMsg, BtcPriceProvider, CandleInterval, CmdMsg, ConnStatus};
-
-use crate::credentials::ClobCredentials;
-use crate::state::AppState;
+use crate::modules::core::worker::{AppMsg, BtcPriceProvider, CandleInterval, CmdMsg, ConnStatus};
+use crate::modules::core::credentials::ClobCredentials;
+use crate::modules::core::state::AppState;
+use crate::modules::core::persistence as db;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,9 +97,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .enable_all()
                     .build()
                     .expect("tokio runtime worker")
-                    .block_on(worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
+                    .block_on(crate::modules::core::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
             })
             .expect("spawn worker");
+    }
+
+    // Scheduler del módulo DB: snapshots cada 10s + ejecuciones programadas cada 5s
+    {
+        let state3 = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::modules::db::scheduler::run_scheduler(state3).await;
+        });
     }
 
     // Consumer de AppMsg: actualiza estado + persiste en DB + hace broadcast WS
@@ -130,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Servidor axum
     let addr = "0.0.0.0:8080";
-    let app  = api::router(Arc::clone(&state));
+    let app  = crate::modules::core::api::router(Arc::clone(&state));
 
     info!("============================================");
     info!(" Polymarket BTC 15-min Backend");

@@ -3,12 +3,12 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 
-use crate::worker::{Candle, OrderSide, RecentFill};
+use crate::modules::core::worker::{Candle, OrderSide, RecentFill};
 
 // ─── Migraciones ─────────────────────────────────────────────────────────────
 
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::migrate!("./migrations").run(pool).await?;
+    sqlx::migrate!("./src/modules/db/migrations").run(pool).await?;
     Ok(())
 }
 

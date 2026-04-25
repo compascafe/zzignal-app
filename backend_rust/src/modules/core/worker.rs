@@ -29,7 +29,7 @@ use tokio::sync::{broadcast, mpsc as tokio_mpsc};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
-use crate::credentials::ClobCredentials;
+use crate::modules::core::credentials::ClobCredentials;
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
 

@@ -13,14 +13,15 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 
-use crate::db;
-use crate::state::AppState;
-use crate::worker::{BtcPriceProvider, CandleInterval, CmdMsg, OrderSide, Outcome};
+use crate::modules::core::persistence as db;
+use crate::modules::core::state::AppState;
+use crate::modules::core::worker::{BtcPriceProvider, CandleInterval, CmdMsg, OrderSide, Outcome};
+use crate::modules::db::api as db_api;
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let core = Router::new()
         // Status / mercado
         .route("/api/status",          get(get_status))
         .route("/api/market",          get(get_market))
@@ -50,8 +51,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/analysis/fills",  get(analysis_fills))
         // WebSocket
         .route("/ws",                  get(ws_handler))
+        .with_state(Arc::clone(&state));
+
+    let db_r = db_api::router(state);
+
+    core.merge(db_r)
         .layer(CorsLayer::permissive())
-        .with_state(state)
 }
 
 // ─── Status & Mercado ─────────────────────────────────────────────────────────
@@ -131,7 +136,7 @@ async fn get_book_down(State(s): State<Arc<AppState>>) -> Json<Value> {
     Json(book_snapshot_to_json(&guard))
 }
 
-fn book_snapshot_to_json(book: &Option<crate::worker::BookSnapshot>) -> Value {
+fn book_snapshot_to_json(book: &Option<crate::modules::core::worker::BookSnapshot>) -> Value {
     match book {
         Some(b) => json!({
             "bids": b.bids.iter().map(|l| json!({"price": l.price, "size": l.size})).collect::<Vec<_>>(),

@@ -92,13 +92,20 @@ jobs:
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
 
       - name: Cache target directory
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: actions/cache@v4
         with:
-          path: backend_rust/target
+          path: |
+            backend_rust/target/release/.fingerprint
+            backend_rust/target/release/deps
+            backend_rust/target/release/build
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-
 
       - name: Install Rust
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
@@ -112,6 +119,8 @@ jobs:
 
       - name: Build Rust Backend
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+        env:
+          CARGO_INCREMENTAL: 1
         run: |
           cd backend_rust
           cargo build --release -j $(nproc)
