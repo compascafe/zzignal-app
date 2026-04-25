@@ -10,7 +10,7 @@ use crate::modules::db::models::ScheduledExecution;
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct OrderBookSnapshotRow {
-    pub id:          i64,
+    pub id:          i32,
     pub ts:          DateTime<Utc>,
     pub side:        String,
     pub best_bid:    Option<f64>,
@@ -103,7 +103,7 @@ pub async fn query_latest_snapshot(pool: Option<&PgPool>, side: &str) -> Result<
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ScheduledExecutionRow {
-    pub id:            i64,
+    pub id:            i32,
     pub created_at:    DateTime<Utc>,
     pub scheduled_at:  DateTime<Utc>,
     pub executed_at:   Option<DateTime<Utc>>,
@@ -119,9 +119,9 @@ pub struct ScheduledExecutionRow {
     pub error_message: Option<String>,
 }
 
-pub async fn insert_execution(pool: Option<&PgPool>, e: &ScheduledExecution) -> Result<i64> {
+pub async fn insert_execution(pool: Option<&PgPool>, e: &ScheduledExecution) -> Result<i32> {
     let Some(pool) = pool else { return Ok(0) };
-    let row: (i64,) = sqlx::query_as(
+    let row: (i32,) = sqlx::query_as(
         r#"
         INSERT INTO scheduled_executions
             (scheduled_at, status, side, outcome, order_type, price, size, amount_usdc, target_price, notes)
@@ -182,7 +182,7 @@ pub async fn query_pending_executions(pool: Option<&PgPool>) -> Result<Vec<Sched
     Ok(rows)
 }
 
-pub async fn mark_executed(pool: Option<&PgPool>, id: i64, error: Option<&str>) -> Result<()> {
+pub async fn mark_executed(pool: Option<&PgPool>, id: i32, error: Option<&str>) -> Result<()> {
     let Some(pool) = pool else { return Ok(()) };
     let status = if error.is_some() { "failed" } else { "executed" };
     sqlx::query(
@@ -196,7 +196,7 @@ pub async fn mark_executed(pool: Option<&PgPool>, id: i64, error: Option<&str>) 
     Ok(())
 }
 
-pub async fn cancel_execution(pool: Option<&PgPool>, id: i64) -> Result<()> {
+pub async fn cancel_execution(pool: Option<&PgPool>, id: i32) -> Result<()> {
     let Some(pool) = pool else { return Ok(()) };
     sqlx::query("UPDATE scheduled_executions SET status='cancelled' WHERE id=$1 AND status='pending'")
         .bind(id)
@@ -205,7 +205,7 @@ pub async fn cancel_execution(pool: Option<&PgPool>, id: i64) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete_execution(pool: Option<&PgPool>, id: i64) -> Result<()> {
+pub async fn delete_execution(pool: Option<&PgPool>, id: i32) -> Result<()> {
     let Some(pool) = pool else { return Ok(()) };
     sqlx::query("DELETE FROM scheduled_executions WHERE id=$1")
         .bind(id)

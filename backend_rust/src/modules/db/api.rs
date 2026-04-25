@@ -92,7 +92,7 @@ async fn create_execution(
 
 async fn delete_execution(
     State(s): State<Arc<AppState>>,
-    Path(id): Path<i64>,
+    Path(id): Path<i32>,
 ) -> Json<Value> {
     // Primero intentar cancelar; si ya no está pending, eliminar
     if let Err(e) = repository::cancel_execution(s.db.as_ref(), id).await {
