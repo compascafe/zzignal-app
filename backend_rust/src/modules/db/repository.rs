@@ -216,19 +216,20 @@ pub async fn delete_execution(pool: Option<&PgPool>, id: i32) -> Result<()> {
 
 // ─── Recording Sessions ───────────────────────────────────────────────────────
 
-pub async fn create_session(pool: Option<&PgPool>, name: &str, duration_min: i32, depth_levels: i32, btc_price: Option<f64>) -> Result<i32> {
+pub async fn create_session(pool: Option<&PgPool>, name: &str, scheduled_start: DateTime<Utc>, scheduled_end: DateTime<Utc>, duration_min: i32, depth_levels: i32) -> Result<i32> {
     let Some(pool) = pool else { return Ok(0) };
     let row: (i32,) = sqlx::query_as(
         r#"
-        INSERT INTO recording_sessions (name, duration_min, depth_levels, btc_price_start, status)
-        VALUES ($1, $2, $3, $4, 'recording')
+        INSERT INTO recording_sessions (name, scheduled_start, scheduled_end, duration_min, depth_levels, status)
+        VALUES ($1, $2, $3, $4, $5, 'scheduled')
         RETURNING id
         "#,
     )
     .bind(name)
+    .bind(scheduled_start)
+    .bind(scheduled_end)
     .bind(duration_min)
     .bind(depth_levels)
-    .bind(btc_price)
     .fetch_one(pool)
     .await?;
     Ok(row.0)
@@ -237,7 +238,7 @@ pub async fn create_session(pool: Option<&PgPool>, name: &str, duration_min: i32
 pub async fn get_active_session(pool: Option<&PgPool>) -> Result<Option<RecordingSession>> {
     let Some(pool) = pool else { return Ok(None) };
     let row = sqlx::query_as::<_, RecordingSession>(
-        "SELECT * FROM recording_sessions WHERE status = 'recording' ORDER BY started_at DESC LIMIT 1"
+        "SELECT * FROM recording_sessions WHERE status = 'recording' ORDER BY scheduled_start DESC LIMIT 1"
     )
     .fetch_optional(pool)
     .await?;
@@ -247,9 +248,62 @@ pub async fn get_active_session(pool: Option<&PgPool>) -> Result<Option<Recordin
 pub async fn list_sessions(pool: Option<&PgPool>, limit: i64) -> Result<Vec<RecordingSession>> {
     let Some(pool) = pool else { return Ok(vec![]) };
     let rows = sqlx::query_as::<_, RecordingSession>(
-        "SELECT * FROM recording_sessions ORDER BY started_at DESC LIMIT $1"
+        "SELECT * FROM recording_sessions ORDER BY scheduled_start DESC LIMIT $1"
     )
     .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Busca sesiones 'scheduled' cuyo scheduled_start esté dentro de los próximos 5 segundos
+/// (para empezar a grabar 5s antes del inicio oficial)
+pub async fn get_sessions_to_start(pool: Option<&PgPool>) -> Result<Vec<RecordingSession>> {
+    let Some(pool) = pool else { return Ok(vec![]) };
+    let rows = sqlx::query_as::<_, RecordingSession>(
+        r#"
+        SELECT * FROM recording_sessions
+        WHERE status = 'scheduled'
+          AND scheduled_start <= NOW() + INTERVAL '5 seconds'
+        ORDER BY scheduled_start ASC
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Marca una sesión como 'recording' y guarda el strike_price (BTC en ese instante)
+pub async fn start_session_recording(pool: Option<&PgPool>, id: i32, btc_price: Option<f64>) -> Result<()> {
+    let Some(pool) = pool else { return Ok(()) };
+    sqlx::query(
+        r#"
+        UPDATE recording_sessions
+        SET status = 'recording',
+            started_at = NOW(),
+            strike_price = $2,
+            btc_price_start = $2
+        WHERE id = $1 AND status = 'scheduled'
+        "#
+    )
+    .bind(id)
+    .bind(btc_price)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Busca sesiones 'recording' cuyo scheduled_end ya pasó
+pub async fn get_sessions_to_stop(pool: Option<&PgPool>) -> Result<Vec<RecordingSession>> {
+    let Some(pool) = pool else { return Ok(vec![]) };
+    let rows = sqlx::query_as::<_, RecordingSession>(
+        r#"
+        SELECT * FROM recording_sessions
+        WHERE status = 'recording'
+          AND scheduled_end <= NOW()
+        ORDER BY scheduled_end ASC
+        "#
+    )
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -258,7 +312,7 @@ pub async fn list_sessions(pool: Option<&PgPool>, limit: i64) -> Result<Vec<Reco
 pub async fn stop_session(pool: Option<&PgPool>, id: i32, final_price: Option<f64>, btc_price_end: Option<f64>) -> Result<()> {
     let Some(pool) = pool else { return Ok(()) };
 
-    // Determinar outcome comparando strike_price vs final_price
+    // Determinar outcome comparando strike_price vs final_price (BTC)
     sqlx::query(
         r#"
         UPDATE recording_sessions

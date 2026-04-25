@@ -10,9 +10,11 @@ use crate::modules::db::repository;
 /// Corre en background:
 ///  1. Cada 10s guarda snapshot del order book en PostgreSQL
 ///  2. Cada 5s revisa scheduled_executions pendientes y las ejecuta
+///  3. Cada 1s revisa sesiones de grabación programadas (inicia 5s antes, termina en scheduled_end)
 pub async fn run_scheduler(state: Arc<AppState>) {
     let mut book_timer   = tokio::time::interval(Duration::from_secs(10));
     let mut exec_timer   = tokio::time::interval(Duration::from_secs(5));
+    let mut session_timer= tokio::time::interval(Duration::from_secs(1));
 
     loop {
         tokio::select! {
@@ -21,6 +23,9 @@ pub async fn run_scheduler(state: Arc<AppState>) {
             }
             _ = exec_timer.tick() => {
                 process_pending_executions(Arc::clone(&state)).await;
+            }
+            _ = session_timer.tick() => {
+                process_sessions(Arc::clone(&state)).await;
             }
         }
     }
@@ -117,6 +122,43 @@ async fn process_pending_executions(state: Arc<AppState>) {
                     error!("Mark failed #{}: {}", id, e);
                 }
             }
+        }
+    }
+}
+
+async fn process_sessions(state: Arc<AppState>) {
+    let pool = state.db.as_ref();
+    if pool.is_none() { return; }
+
+    // 1. Iniciar sesiones programadas (5 segundos antes del scheduled_start)
+    let to_start = match repository::get_sessions_to_start(pool).await {
+        Ok(list) => list,
+        Err(e)   => { warn!("Session scheduler start query: {}", e); return; }
+    };
+    for session in to_start {
+        let btc_price = *state.btc_price.read().await;
+        info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
+        if let Err(e) = repository::start_session_recording(pool, session.id, btc_price).await {
+            warn!("No se pudo iniciar sesión #{}: {}", session.id, e);
+        } else {
+            *state.recording_session.write().await = Some(session.id);
+            info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
+        }
+    }
+
+    // 2. Detener sesiones que ya pasaron su scheduled_end
+    let to_stop = match repository::get_sessions_to_stop(pool).await {
+        Ok(list) => list,
+        Err(e)   => { warn!("Session scheduler stop query: {}", e); return; }
+    };
+    for session in to_stop {
+        let btc_price = *state.btc_price.read().await;
+        info!("Deteniendo sesión #{} (programada hasta {})", session.id, session.scheduled_end.format("%H:%M:%S"));
+        if let Err(e) = repository::stop_session(pool, session.id, btc_price, btc_price).await {
+            warn!("No se pudo detener sesión #{}: {}", session.id, e);
+        } else {
+            *state.recording_session.write().await = None;
+            info!("Sesión #{} completada. Final price (BTC): {:?}", session.id, btc_price);
         }
     }
 }

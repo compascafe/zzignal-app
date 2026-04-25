@@ -198,21 +198,46 @@ async fn start_session(
     State(s): State<Arc<AppState>>,
     Json(body): Json<NewSession>,
 ) -> Json<Value> {
-    // Verificar que no haya una sesión activa
-    if let Ok(Some(_)) = repository::get_active_session(s.db.as_ref()).await {
-        return Json(json!({"ok": false, "error": "Ya existe una sesión de grabación activa" }));
-    }
+    use chrono::{Duration, Timelike};
 
-    let btc_price = *s.btc_price.read().await;
-    let duration = body.duration_min.max(1).min(60 * 24); // max 24h
-    let depth = body.depth_levels.max(5).min(50);
-
-    match repository::create_session(s.db.as_ref(), &body.name, duration, depth, btc_price).await {
-        Ok(id) => {
-            // Set active session in AppState
-            *s.recording_session.write().await = Some(id);
-            Json(json!({"ok": true, "id": id, "status": "recording" }))
+    let now = Utc::now();
+    let (scheduled_start, scheduled_end) = match (body.scheduled_start, body.scheduled_end) {
+        (Some(start), Some(end)) => (start, end),
+        (Some(start), None) => {
+            let end = start + Duration::minutes(body.duration_min.max(1) as i64);
+            (start, end)
         }
+        _ => {
+            // Auto-calcular próximo intervalo de 15 minutos
+            let minute = now.minute();
+            let next_min = ((minute / 15) + 1) * 15;
+            let start = if next_min >= 60 {
+                now.with_minute(0).unwrap() + Duration::hours(1)
+            } else {
+                now.with_minute(next_min).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()
+            };
+            let end = start + Duration::minutes(15);
+            (start, end)
+        }
+    };
+
+    let name = if body.name.is_empty() {
+        format!("BTC-15min-{}", scheduled_start.format("%H%M"))
+    } else {
+        body.name
+    };
+    let depth = body.depth_levels.max(5).min(50);
+    let duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
+
+    match repository::create_session(s.db.as_ref(), &name, scheduled_start, scheduled_end, duration, depth).await {
+        Ok(id) => Json(json!({
+            "ok": true,
+            "id": id,
+            "status": "scheduled",
+            "scheduled_start": scheduled_start.to_rfc3339(),
+            "scheduled_end": scheduled_end.to_rfc3339(),
+            "message": format!("Sesión programada para {} (grabará desde 5s antes)", scheduled_start.format("%H:%M:%S"))
+        })),
         Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
     }
 }

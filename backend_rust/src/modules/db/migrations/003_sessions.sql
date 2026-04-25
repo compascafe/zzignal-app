@@ -7,7 +7,9 @@
 CREATE TABLE recording_sessions (
     id              SERIAL PRIMARY KEY,
     name            TEXT NOT NULL,
-    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    scheduled_start TIMESTAMPTZ NOT NULL,
+    scheduled_end   TIMESTAMPTZ NOT NULL,
+    started_at      TIMESTAMPTZ,
     stopped_at      TIMESTAMPTZ,
     duration_min    INT NOT NULL DEFAULT 15,
 

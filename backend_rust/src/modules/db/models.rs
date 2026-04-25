@@ -38,16 +38,20 @@ pub struct ScheduledExecution {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewSession {
-    pub name:         String,
-    pub duration_min: i32,
-    pub depth_levels: i32,
+    pub name:            String,
+    pub scheduled_start: Option<DateTime<Utc>>,
+    pub scheduled_end:   Option<DateTime<Utc>>,
+    pub duration_min:    i32,
+    pub depth_levels:    i32,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RecordingSession {
     pub id:              i32,
     pub name:            String,
-    pub started_at:      DateTime<Utc>,
+    pub scheduled_start: DateTime<Utc>,
+    pub scheduled_end:   DateTime<Utc>,
+    pub started_at:      Option<DateTime<Utc>>,
     pub stopped_at:      Option<DateTime<Utc>>,
     pub duration_min:    i32,
     pub market_id:       Option<String>,
