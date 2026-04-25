@@ -3,7 +3,9 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::{Path, Query, State},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
+    http::StatusCode,
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -158,4 +160,151 @@ async fn test_execution(State(s): State<Arc<AppState>>) -> Json<Value> {
         Ok(id) => Json(json!({"ok": true, "id": id, "message": "Ejecución de prueba creada para dentro de 1 minuto" })),
         Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
     }
+}
+
+// ─── Recording Sessions ───────────────────────────────────────────────────────
+
+use crate::modules::db::models::NewSession;
+
+pub fn session_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/api/sessions",              get(list_sessions))
+        .route("/api/sessions/active",       get(get_active_session))
+        .route("/api/sessions/start",        post(start_session))
+        .route("/api/sessions/{id}/stop",    post(stop_session))
+        .route("/api/sessions/{id}",         delete(delete_session))
+        .route("/api/sessions/{id}/export",  get(export_session))
+        .route("/api/sessions/{id}/snapshots", get(session_snapshots))
+        .route("/api/sessions/{id}/trades",  get(session_trades))
+        .with_state(state)
+}
+
+async fn list_sessions(State(s): State<Arc<AppState>>) -> Json<Value> {
+    match repository::list_sessions(s.db.as_ref(), 100).await {
+        Ok(rows) => Json(json!(rows)),
+        Err(e)   => Json(json!({"error": e.to_string()})),
+    }
+}
+
+async fn get_active_session(State(s): State<Arc<AppState>>) -> Json<Value> {
+    match repository::get_active_session(s.db.as_ref()).await {
+        Ok(Some(row)) => Json(json!(row)),
+        Ok(None)      => Json(json!(null)),
+        Err(e)        => Json(json!({"error": e.to_string()})),
+    }
+}
+
+async fn start_session(
+    State(s): State<Arc<AppState>>,
+    Json(body): Json<NewSession>,
+) -> Json<Value> {
+    // Verificar que no haya una sesión activa
+    if let Ok(Some(_)) = repository::get_active_session(s.db.as_ref()).await {
+        return Json(json!({"ok": false, "error": "Ya existe una sesión de grabación activa" }));
+    }
+
+    let btc_price = *s.btc_price.read().await;
+    let duration = body.duration_min.max(1).min(60 * 24); // max 24h
+    let depth = body.depth_levels.max(5).min(50);
+
+    match repository::create_session(s.db.as_ref(), &body.name, duration, depth, btc_price).await {
+        Ok(id) => {
+            // Set active session in AppState
+            *s.recording_session.write().await = Some(id);
+            Json(json!({"ok": true, "id": id, "status": "recording" }))
+        }
+        Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+    }
+}
+
+async fn stop_session(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Json<Value> {
+    let final_price = *s.btc_price.read().await;
+    match repository::stop_session(s.db.as_ref(), id, final_price, final_price).await {
+        Ok(_) => {
+            *s.recording_session.write().await = None;
+            Json(json!({"ok": true, "message": "Sesión finalizada" }))
+        }
+        Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+    }
+}
+
+async fn delete_session(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Json<Value> {
+    match repository::delete_session(s.db.as_ref(), id).await {
+        Ok(_) => Json(json!({"ok": true })),
+        Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+    }
+}
+
+async fn session_snapshots(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Json<Value> {
+    match repository::list_session_snapshots(s.db.as_ref(), id).await {
+        Ok(rows) => Json(json!(rows)),
+        Err(e)   => Json(json!({"error": e.to_string()})),
+    }
+}
+
+async fn session_trades(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Json<Value> {
+    match repository::list_session_trades(s.db.as_ref(), id).await {
+        Ok(rows) => Json(json!(rows)),
+        Err(e)   => Json(json!({"error": e.to_string()})),
+    }
+}
+
+// ─── Export Session (CSV) ─────────────────────────────────────────────────────
+
+async fn export_session(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+    Query(q): Query<ExportQuery>,
+) -> Response {
+    let format = q.format.as_deref().unwrap_or("json");
+
+    let snapshots = match repository::list_session_snapshots(s.db.as_ref(), id).await {
+        Ok(rows) => rows,
+        Err(e)   => return Json(json!({"error": e.to_string()})).into_response(),
+    };
+
+    if format == "csv" {
+        let mut csv = String::from("ts,side,best_bid,best_bid_sz,best_ask,best_ask_sz,spread,mid_price,bid_volume,ask_volume,btc_price\n");
+        for snap in snapshots {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{},{},{},{},{}\n",
+                snap.ts.to_rfc3339(),
+                snap.side,
+                snap.best_bid.unwrap_or(0.0),
+                snap.best_bid_sz.unwrap_or(0.0),
+                snap.best_ask.unwrap_or(0.0),
+                snap.best_ask_sz.unwrap_or(0.0),
+                snap.spread.unwrap_or(0.0),
+                snap.mid_price.unwrap_or(0.0),
+                snap.bid_volume.unwrap_or(0.0),
+                snap.ask_volume.unwrap_or(0.0),
+                snap.btc_price.unwrap_or(0.0),
+            ));
+        }
+        return (
+            StatusCode::OK,
+            [("Content-Type", "text/csv"), ("Content-Disposition", &format!("attachment; filename=\"session_{}.csv\"", id))],
+            csv,
+        ).into_response();
+    }
+
+    // JSON default
+    Json(json!({ "snapshots": snapshots })).into_response()
+}
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    format: Option<String>,  // "csv" | "json"
 }

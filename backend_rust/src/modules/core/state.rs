@@ -34,6 +34,9 @@ pub struct AppState {
 
     // Base de datos (None si DATABASE_URL no está configurada)
     pub db:              Option<PgPool>,
+
+    // Sesión de grabación activa (Session Recorder)
+    pub recording_session: RwLock<Option<i32>>,
 }
 
 impl AppState {
@@ -63,6 +66,7 @@ impl AppState {
             cmd_tx,
             broadcast_tx,
             db,
+            recording_session: RwLock::new(None),
         })
     }
 }

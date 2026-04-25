@@ -53,9 +53,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/ws",                  get(ws_handler))
         .with_state(Arc::clone(&state));
 
-    let db_r = db_api::router(state);
+    let db_r = db_api::router(Arc::clone(&state));
+    let session_r = db_api::session_router(state);
 
     core.merge(db_r)
+        .merge(session_r)
         .layer(CorsLayer::permissive())
 }
 

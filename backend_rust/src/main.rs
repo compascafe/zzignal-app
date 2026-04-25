@@ -174,8 +174,14 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             }
         }
 
-        AppMsg::BookUp(b)        => { *state.book_up.write().await        = Some(b.clone()); }
-        AppMsg::BookDown(b)      => { *state.book_down.write().await       = Some(b.clone()); }
+        AppMsg::BookUp(b)        => {
+            *state.book_up.write().await = Some(b.clone());
+            capture_book(state, "up", &b.bids, &b.asks).await;
+        }
+        AppMsg::BookDown(b)      => {
+            *state.book_down.write().await = Some(b.clone());
+            capture_book(state, "down", &b.bids, &b.asks).await;
+        }
         AppMsg::LastTradeUp(p)   => { *state.last_trade_up.write().await   = Some(*p); }
         AppMsg::LastTradeDown(p) => { *state.last_trade_down.write().await  = Some(*p); }
         AppMsg::Balance(b)       => { *state.balance.write().await          = Some(*b); }
@@ -200,6 +206,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                     warn!("DB insert_fill: {e}");
                 }
             }
+            capture_fills(state, fills).await;
         }
 
         AppMsg::Candles { interval, candles } => {
@@ -228,5 +235,65 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         }
 
         AppMsg::OrderResult(r) => { info!("Order result: {}", r); }
+    }
+}
+
+// ─── Session Recorder — Captura por tick ──────────────────────────────────────
+
+use crate::modules::core::worker::PriceLevel;
+use crate::modules::db::repository as session_repo;
+use serde_json::json;
+
+async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &[PriceLevel]) {
+    let session_id = match *state.recording_session.read().await {
+        Some(id) => id,
+        None => return,
+    };
+
+    let best_bid = bids.first().map(|l| l.price);
+    let best_bid_sz = bids.first().map(|l| l.size);
+    let best_ask = asks.first().map(|l| l.price);
+    let best_ask_sz = asks.first().map(|l| l.size);
+    let spread = best_bid.and_then(|bb| best_ask.map(|ba| ba - bb));
+    let mid_price = best_bid.and_then(|bb| best_ask.map(|ba| (bb + ba) / 2.0));
+
+    let bid_volume: f64 = bids.iter().take(20).map(|l| l.size).sum();
+    let ask_volume: f64 = asks.iter().take(20).map(|l| l.size).sum();
+
+    let depth_bids = json!(bids.iter().take(20).map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
+    let depth_asks = json!(asks.iter().take(20).map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
+
+    let btc_price = *state.btc_price.read().await;
+
+    if let Err(e) = session_repo::insert_session_snapshot(
+        state.db.as_ref(), session_id, side,
+        best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
+        Some(bid_volume), Some(ask_volume),
+        Some(depth_bids), Some(depth_asks),
+        btc_price,
+    ).await {
+        warn!("Session snapshot capture: {}", e);
+    }
+}
+
+async fn capture_fills(state: &AppState, fills: &[crate::modules::core::worker::RecentFill]) {
+    let session_id = match *state.recording_session.read().await {
+        Some(id) => id,
+        None => return,
+    };
+
+    let btc_price = *state.btc_price.read().await;
+
+    for fill in fills {
+        let trade_side = match fill.side {
+            crate::modules::core::worker::OrderSide::Buy => "buy",
+            crate::modules::core::worker::OrderSide::Sell => "sell",
+        };
+
+        if let Err(e) = session_repo::insert_session_trade(
+            state.db.as_ref(), session_id, &fill.outcome, trade_side, fill.price, fill.size, btc_price,
+        ).await {
+            warn!("Session trade capture: {}", e);
+        }
     }
 }
