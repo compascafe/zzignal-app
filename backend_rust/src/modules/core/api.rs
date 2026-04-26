@@ -63,7 +63,19 @@ pub fn router(state: Arc<AppState>) -> Router {
     #[cfg(feature = "premium-collector")]
     {
         use crate::modules::premium::collector::api as collector_api;
-        app = app.merge(collector_api::router(state));
+        app = app.merge(collector_api::router(Arc::clone(&state)));
+    }
+
+    #[cfg(feature = "premium-patterns")]
+    {
+        use crate::modules::premium::patterns::api as patterns_api;
+        app = app.merge(patterns_api::router(Arc::clone(&state)));
+    }
+
+    #[cfg(feature = "premium-executor")]
+    {
+        use crate::modules::premium::executor::api as executor_api;
+        app = app.merge(executor_api::router(Arc::clone(&state)));
     }
 
     app.layer(CorsLayer::permissive())

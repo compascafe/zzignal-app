@@ -8,6 +8,9 @@
 //! Compilación:
 //!   cargo build --features premium-collector
 //!   cargo build --features premium-all
+//!
+//! Generar licencias:
+//!   cargo run --bin license-gen -- --module collector --customer acme-corp
 
 #[cfg(feature = "premium-collector")]
 pub mod collector;
@@ -19,3 +22,4 @@ pub mod patterns;
 pub mod executor;
 
 pub mod license;
+pub mod updater;

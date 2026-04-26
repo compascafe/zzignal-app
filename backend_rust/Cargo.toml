@@ -42,6 +42,11 @@ dotenvy = "0.15"
 
 secrecy = { version = "0.10", features = ["serde"] }
 
+# License key system
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+
 # API REST + WebSocket server
 axum       = { version = "0.8", features = ["ws", "macros"] }
 tower-http = { version = "0.6", features = ["cors"] }
@@ -56,6 +61,10 @@ path = "src/main.rs"
 [[bin]]
 name = "setup"
 path = "src/setup.rs"
+
+[[bin]]
+name = "license-gen"
+path = "src/bin/license-gen.rs"
 
 [profile.release]
 opt-level     = 2

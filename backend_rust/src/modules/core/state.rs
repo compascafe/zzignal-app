@@ -43,6 +43,10 @@ pub struct AppState {
     pub mem_sessions:    RwLock<Vec<RecordingSession>>,
     pub mem_snapshots:   RwLock<Vec<SessionSnapshot>>,
     pub mem_trades:      RwLock<Vec<SessionTrade>>,
+
+    // Pattern Detector config (solo disponible con premium-patterns)
+    #[cfg(feature = "premium-patterns")]
+    pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
 }
 
 impl AppState {
@@ -76,6 +80,8 @@ impl AppState {
             mem_sessions:    RwLock::new(vec![]),
             mem_snapshots:   RwLock::new(vec![]),
             mem_trades:      RwLock::new(vec![]),
+            #[cfg(feature = "premium-patterns")]
+            patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })
     }
 }

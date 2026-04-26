@@ -1,5 +1,12 @@
 //! Auto-Execution Engine — Bot de trading automático.
 //!
 //! Rule engine: IF condition THEN action.
-//! Soporta backtesting contra datos históricos.
-//! Pendiente de implementar.
+//! Evalúa condiciones sobre el order book y ejecuta órdenes automáticamente.
+//! Soporta: limit, market, scalp orders con cooldown, max positions y stop loss.
+
+pub mod models;
+pub mod engine;
+pub mod repository;
+pub mod api;
+pub mod scheduler;
+

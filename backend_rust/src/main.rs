@@ -119,6 +119,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Scheduler del módulo Pattern Detector (solo si el feature está activo)
+    #[cfg(feature = "premium-patterns")]
+    {
+        let state5 = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::modules::premium::patterns::scheduler::run_detector(state5).await;
+        });
+    }
+
+    // Scheduler del módulo Executor (solo si el feature está activo)
+    #[cfg(feature = "premium-executor")]
+    {
+        let state6 = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::modules::premium::executor::scheduler::run_executor(state6).await;
+        });
+    }
+
     // Consumer de AppMsg: actualiza estado + persiste en DB + hace broadcast WS
     {
         let state2 = Arc::clone(&state);
