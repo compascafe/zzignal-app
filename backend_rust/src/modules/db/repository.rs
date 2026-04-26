@@ -229,12 +229,12 @@ fn next_trade_id(trades: &[SessionTrade]) -> i32 {
     trades.iter().map(|s| s.id).max().unwrap_or(0) + 1
 }
 
-pub async fn create_session(state: &AppState, name: &str, scheduled_start: DateTime<Utc>, scheduled_end: DateTime<Utc>, duration_min: i32, depth_levels: i32) -> Result<i32> {
+pub async fn create_session(state: &AppState, name: &str, scheduled_start: DateTime<Utc>, scheduled_end: DateTime<Utc>, duration_min: i32, depth_levels: i32, parent_id: Option<i32>) -> Result<i32> {
     if let Some(pool) = state.db.as_ref() {
         let row: (i32,) = sqlx::query_as(
             r#"
-            INSERT INTO recording_sessions (name, scheduled_start, scheduled_end, duration_min, depth_levels, status)
-            VALUES ($1, $2, $3, $4, $5, 'scheduled')
+            INSERT INTO recording_sessions (name, scheduled_start, scheduled_end, duration_min, depth_levels, status, parent_id)
+            VALUES ($1, $2, $3, $4, $5, 'scheduled', $6)
             RETURNING id
             "#,
         )
@@ -243,6 +243,7 @@ pub async fn create_session(state: &AppState, name: &str, scheduled_start: DateT
         .bind(scheduled_end)
         .bind(duration_min)
         .bind(depth_levels)
+        .bind(parent_id)
         .fetch_one(pool)
         .await?;
         return Ok(row.0);
@@ -253,6 +254,7 @@ pub async fn create_session(state: &AppState, name: &str, scheduled_start: DateT
     let id = next_mem_id(&sessions);
     sessions.push(RecordingSession {
         id,
+        parent_id,
         name: name.into(),
         scheduled_start,
         scheduled_end,
@@ -274,6 +276,56 @@ pub async fn create_session(state: &AppState, name: &str, scheduled_start: DateT
         created_at: Utc::now(),
     });
     Ok(id)
+}
+
+/// Creates a parent session and auto-splits into N children of chunk_duration_min each.
+/// Returns (parent_id, Vec<child_id>)
+pub async fn create_session_batch(state: &AppState, name: &str, scheduled_start: DateTime<Utc>, total_duration_min: i32, depth_levels: i32, chunk_duration_min: i32) -> Result<(i32, Vec<i32>)> {
+    use chrono::Duration;
+
+    let scheduled_end = scheduled_start + Duration::minutes(total_duration_min as i64);
+
+    // 1. Create parent session
+    let parent_id = create_session(state, name, scheduled_start, scheduled_end, total_duration_min, depth_levels, None).await?;
+
+    // 2. Create children (each chunk_duration_min long)
+    let num_children = (total_duration_min as f64 / chunk_duration_min as f64).ceil() as i32;
+    let mut child_ids = Vec::with_capacity(num_children as usize);
+    let slot = chunk_duration_min.max(1);
+
+    for i in 0..num_children {
+        let child_start = scheduled_start + Duration::minutes((i * slot) as i64);
+        let child_end   = scheduled_start + Duration::minutes(((i + 1) * slot) as i64);
+        // Cap last child at parent end
+        let child_end = if child_end > scheduled_end { scheduled_end } else { child_end };
+        let child_dur = ((child_end - child_start).num_seconds() / 60).max(1) as i32;
+        let child_name = format!("{}-{:02}", name, i + 1);
+        let child_id = create_session(state, &child_name, child_start, child_end, child_dur, depth_levels, Some(parent_id)).await?;
+        child_ids.push(child_id);
+    }
+
+    Ok((parent_id, child_ids))
+}
+
+/// Lists children of a parent session
+pub async fn list_session_children(state: &AppState, parent_id: i32) -> Result<Vec<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query_as::<_, RecordingSession>(
+            "SELECT * FROM recording_sessions WHERE parent_id = $1 ORDER BY scheduled_start ASC"
+        )
+        .bind(parent_id)
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    }
+
+    let sessions = state.mem_sessions.read().await;
+    let mut children: Vec<_> = sessions.iter()
+        .filter(|s| s.parent_id == Some(parent_id))
+        .cloned()
+        .collect();
+    children.sort_by(|a, b| a.scheduled_start.cmp(&b.scheduled_start));
+    Ok(children)
 }
 
 pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSession>> {

@@ -127,25 +127,7 @@ async fn process_pending_executions(state: Arc<AppState>) {
 }
 
 async fn process_sessions(state: Arc<AppState>) {
-    // 1. Iniciar sesiones programadas (5 segundos antes del scheduled_start)
-    let to_start = match repository::get_sessions_to_start(&state).await {
-        Ok(list) => list,
-        Err(e)   => { warn!("Session scheduler start query: {}", e); return; }
-    };
-    for session in to_start {
-        let btc_price = *state.btc_price.read().await;
-        info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
-        // Set recording flag FIRST to avoid race condition (BUG FIX: ~1s data loss at session start)
-        *state.recording_session.write().await = Some(session.id);
-        if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
-            warn!("No se pudo iniciar sesión #{}: {}", session.id, e);
-            *state.recording_session.write().await = None; // rollback flag
-        } else {
-            info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
-        }
-    }
-
-    // 2. Detener sesiones que ya pasaron su scheduled_end
+    // 1. Detener sesiones que ya pasaron su scheduled_end (PRIMERO los stops, para liberar el slot)
     let to_stop = match repository::get_sessions_to_stop(&state).await {
         Ok(list) => list,
         Err(e)   => { warn!("Session scheduler stop query: {}", e); return; }
@@ -156,8 +138,34 @@ async fn process_sessions(state: Arc<AppState>) {
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("No se pudo detener sesión #{}: {}", session.id, e);
         } else {
-            *state.recording_session.write().await = None;
+            // Only clear recording_session if this was the active one
+            let mut rec = state.recording_session.write().await;
+            if *rec == Some(session.id) {
+                *rec = None;
+            }
             info!("Sesión #{} completada. Final price (BTC): {:?}", session.id, btc_price);
+        }
+    }
+
+    // 2. Iniciar sesiones programadas (solo si no hay ya una grabando — evita overlaps)
+    let current_rec = *state.recording_session.read().await;
+    if current_rec.is_some() {
+        return; // Ya hay una sesión grabando, no iniciar otra
+    }
+
+    let to_start = match repository::get_sessions_to_start(&state).await {
+        Ok(list) => list,
+        Err(e)   => { warn!("Session scheduler start query: {}", e); return; }
+    };
+    for session in to_start {
+        let btc_price = *state.btc_price.read().await;
+        info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
+        *state.recording_session.write().await = Some(session.id);
+        if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
+            warn!("No se pudo iniciar sesión #{}: {}", session.id, e);
+            *state.recording_session.write().await = None;
+        } else {
+            info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
         }
     }
 }

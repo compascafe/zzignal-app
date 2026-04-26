@@ -49,6 +49,7 @@ pub struct NewSession {
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RecordingSession {
     pub id:              i32,
+    pub parent_id:       Option<i32>,
     pub name:            String,
     pub scheduled_start: DateTime<Utc>,
     pub scheduled_end:   DateTime<Utc>,

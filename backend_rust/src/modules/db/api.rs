@@ -176,6 +176,7 @@ pub fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/{id}/export",  get(export_session))
         .route("/api/sessions/{id}/snapshots", get(session_snapshots))
         .route("/api/sessions/{id}/trades",  get(session_trades))
+        .route("/api/sessions/{id}/children", get(session_children))
         .with_state(state)
 }
 
@@ -205,7 +206,7 @@ async fn start_session(
 
     let (scheduled_start, scheduled_end, is_indefinite) = if indefinite {
         let start = body.scheduled_start.unwrap_or(now);
-        let end = start + Duration::days(365); // far future, stopped manually
+        let end = start + Duration::days(365);
         (start, end, true)
     } else if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
         (start, end, false)
@@ -230,23 +231,51 @@ async fn start_session(
         body.name
     };
     let depth = body.depth_levels.max(5).min(50);
-    let duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
+    let total_duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
 
-    match repository::create_session(&s, &name, scheduled_start, scheduled_end, duration, depth).await {
-        Ok(id) => Json(json!({
-            "ok": true,
-            "id": id,
-            "status": "scheduled",
-            "scheduled_start": scheduled_start.to_rfc3339(),
-            "scheduled_end": scheduled_end.to_rfc3339(),
-            "indefinite": is_indefinite,
-            "message": if is_indefinite {
-                "Sesión INDEFINIDA iniciada. Detener manualmente.".into()
-            } else {
-                format!("Sesión programada para {} → {}", scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
+    // Auto-split sessions longer than 15 min into 15-min children
+    if total_duration > 15 && !is_indefinite {
+        match repository::create_session_batch(&s, &name, scheduled_start, total_duration, depth, 15).await {
+            Ok((parent_id, child_ids)) => {
+                // Fetch children for response
+                let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
+                Json(json!({
+                    "ok": true,
+                    "id": parent_id,
+                    "status": "scheduled",
+                    "scheduled_start": scheduled_start.to_rfc3339(),
+                    "scheduled_end": scheduled_end.to_rfc3339(),
+                    "child_ids": child_ids,
+                    "children": children,
+                    "total_duration_min": total_duration,
+                    "chunk_duration_min": 15,
+                    "message": format!("Sesión de {}min creada con {} bloques de 15min cada uno. Programada para {} → {}",
+                        total_duration, child_ids.len(), scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
+                }))
             }
-        })),
-        Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+            Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+        }
+    } else {
+        // Single session (≤15 min or indefinite)
+        let duration = total_duration.max(1);
+        match repository::create_session(&s, &name, scheduled_start, scheduled_end, duration, depth, None).await {
+            Ok(id) => Json(json!({
+                "ok": true,
+                "id": id,
+                "status": "scheduled",
+                "scheduled_start": scheduled_start.to_rfc3339(),
+                "scheduled_end": scheduled_end.to_rfc3339(),
+                "indefinite": is_indefinite,
+                "child_ids": [],
+                "children": [],
+                "message": if is_indefinite {
+                    "Sesión INDEFINIDA iniciada. Detener manualmente.".into()
+                } else {
+                    format!("Sesión programada para {} → {}", scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
+                }
+            })),
+            Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+        }
     }
 }
 
@@ -294,6 +323,16 @@ async fn session_trades(
     }
 }
 
+async fn session_children(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Json<Value> {
+    match repository::list_session_children(&s, id).await {
+        Ok(rows) => Json(json!(rows)),
+        Err(e)   => Json(json!({"error": e.to_string()})),
+    }
+}
+
 // ─── Export Session (CSV / JSON / Parquet) ────────────────────────────────────
 
 async fn export_session(
@@ -303,10 +342,22 @@ async fn export_session(
 ) -> Response {
     let format = q.format.as_deref().unwrap_or("json");
 
-    let snapshots = match repository::list_session_snapshots(&s, id).await {
+    // Fetch snapshots: from session directly + all children if parent
+    let mut snapshots = match repository::list_session_snapshots(&s, id).await {
         Ok(rows) => rows,
         Err(e)   => return Json(json!({"error": e.to_string()})).into_response(),
     };
+
+    // Aggregate children snapshots
+    if let Ok(children) = repository::list_session_children(&s, id).await {
+        for child in &children {
+            if let Ok(child_snaps) = repository::list_session_snapshots(&s, child.id).await {
+                snapshots.extend(child_snaps);
+            }
+        }
+        // Sort by ts for chronological export
+        snapshots.sort_by(|a, b| a.ts.cmp(&b.ts));
+    }
 
     if format == "csv" || format == "csv-depth" {
         let is_depth = format == "csv-depth";
