@@ -123,7 +123,7 @@ jobs:
           CARGO_INCREMENTAL: 1
         run: |
           cd backend_rust
-          cargo build --release -j $(nproc)
+          cargo build --release -j $(nproc) --features premium-all
 
       - name: Package
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'

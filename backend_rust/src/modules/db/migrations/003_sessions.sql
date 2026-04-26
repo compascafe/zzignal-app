@@ -1,90 +1,67 @@
--- Migration 003: Session Recorder
--- Graba sesiones completas del order book por tick para análisis HFT y datasets
+-- Migration 003: Session Recorder (IDEMPOTENTE)
+-- Usa IF NOT EXISTS para no fallar si las tablas ya existen (schema legacy)
+-- Las columnas faltantes se reparan en las migraciones 004, 005 y 006
 
--- ─── Recording Sessions ───────────────────────────────────────────────────────
--- Una sesión = captura completa de UP + DOWN durante N minutos
-
-CREATE TABLE recording_sessions (
+CREATE TABLE IF NOT EXISTS recording_sessions (
     id              SERIAL PRIMARY KEY,
     name            TEXT NOT NULL,
-    scheduled_start TIMESTAMPTZ NOT NULL,
-    scheduled_end   TIMESTAMPTZ NOT NULL,
+    scheduled_start TIMESTAMPTZ,
+    scheduled_end   TIMESTAMPTZ,
     started_at      TIMESTAMPTZ,
     stopped_at      TIMESTAMPTZ,
     duration_min    INT NOT NULL DEFAULT 15,
-
     market_id       TEXT,
     market_title    TEXT,
-
-    capture_mode    VARCHAR(20) NOT NULL DEFAULT 'tick',  -- 'tick' | 'interval'
-    depth_levels    INT NOT NULL DEFAULT 20,              -- niveles de profundidad guardados
-
-    strike_price    DOUBLE PRECISION,                     -- precio de apertura (BTC)
-    final_price     DOUBLE PRECISION,                     -- precio de cierre (BTC)
-    outcome_result  VARCHAR(10),                          -- 'up' | 'down' | 'tie'
-
+    capture_mode    VARCHAR(20) NOT NULL DEFAULT 'tick',
+    depth_levels    INT NOT NULL DEFAULT 20,
+    strike_price    DOUBLE PRECISION,
+    final_price     DOUBLE PRECISION,
+    outcome_result  VARCHAR(10),
     btc_price_start DOUBLE PRECISION,
     btc_price_end   DOUBLE PRECISION,
-
-    status          VARCHAR(20) NOT NULL DEFAULT 'recording',  -- recording | stopped | completed
-
+    status          VARCHAR(20) NOT NULL DEFAULT 'recording',
     tick_count      INT NOT NULL DEFAULT 0,
     trade_count     INT NOT NULL DEFAULT 0,
-
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rs_status       ON recording_sessions(status);
-CREATE INDEX idx_rs_started_at   ON recording_sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rs_status     ON recording_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_rs_started_at ON recording_sessions(started_at DESC);
 
--- ─── Session Snapshots ────────────────────────────────────────────────────────
--- Cada tick del book (UP o DOWN) durante una sesión activa
-
-CREATE TABLE session_snapshots (
+CREATE TABLE IF NOT EXISTS session_snapshots (
     id              SERIAL PRIMARY KEY,
     session_id      INT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
     ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    side            VARCHAR(10) NOT NULL,              -- 'up' | 'down'
+    side            VARCHAR(10) NOT NULL,
     best_bid        DOUBLE PRECISION,
     best_bid_sz     DOUBLE PRECISION,
     best_ask        DOUBLE PRECISION,
     best_ask_sz     DOUBLE PRECISION,
     spread          DOUBLE PRECISION,
-    mid_price       DOUBLE PRECISION,                   -- (best_bid + best_ask) / 2
-
-    bid_volume      DOUBLE PRECISION,                   -- suma de sizes en depth_bids
-    ask_volume      DOUBLE PRECISION,                   -- suma de sizes en depth_asks
-
-    depth_bids      JSONB,                              -- top N niveles: [{p,s},...]
+    mid_price       DOUBLE PRECISION,
+    bid_volume      DOUBLE PRECISION,
+    ask_volume      DOUBLE PRECISION,
+    depth_bids      JSONB,
     depth_asks      JSONB,
-
-    btc_price       DOUBLE PRECISION,                   -- precio BTC en ese instante
-
+    btc_price       DOUBLE PRECISION,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_ss_session_id   ON session_snapshots(session_id);
-CREATE INDEX idx_ss_ts           ON session_snapshots(ts);
-CREATE INDEX idx_ss_session_ts   ON session_snapshots(session_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_ss_session_id ON session_snapshots(session_id);
+CREATE INDEX IF NOT EXISTS idx_ss_ts         ON session_snapshots(ts);
+CREATE INDEX IF NOT EXISTS idx_ss_session_ts ON session_snapshots(session_id, ts DESC);
 
--- ─── Session Trades ───────────────────────────────────────────────────────────
--- Cada fill individual que ocurre durante una sesión
-
-CREATE TABLE session_trades (
+CREATE TABLE IF NOT EXISTS session_trades (
     id              SERIAL PRIMARY KEY,
     session_id      INT NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
     ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    side            VARCHAR(10) NOT NULL,              -- 'up' | 'down' (outcome)
-    trade_side      VARCHAR(10) NOT NULL,              -- 'buy' | 'sell'
+    side            VARCHAR(10) NOT NULL,
+    trade_side      VARCHAR(10) NOT NULL,
     price           DOUBLE PRECISION NOT NULL,
     size            DOUBLE PRECISION NOT NULL,
-
     btc_price       DOUBLE PRECISION,
-
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_st_session_id   ON session_trades(session_id);
-CREATE INDEX idx_st_ts           ON session_trades(ts);
+CREATE INDEX IF NOT EXISTS idx_st_session_id ON session_trades(session_id);
+CREATE INDEX IF NOT EXISTS idx_st_ts         ON session_trades(ts);
