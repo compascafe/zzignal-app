@@ -282,9 +282,9 @@ async fn capture_fills(state: &AppState, fills: &[crate::modules::core::worker::
         None => return,
     };
 
-    let btc_price = *state.btc_price.read().await;
-
     for fill in fills {
+        // Read BTC price per-fill to avoid stale batch prices (BUG FIX)
+        let btc_price = *state.btc_price.read().await;
         let trade_side = match fill.side {
             crate::modules::core::worker::OrderSide::Buy => "buy",
             crate::modules::core::worker::OrderSide::Sell => "sell",

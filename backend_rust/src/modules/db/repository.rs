@@ -499,7 +499,7 @@ pub async fn insert_session_snapshot(
         return Ok(());
     }
 
-    // In-memory
+    // In-memory (lock ordering fix: always snapshots first, then sessions)
     let mut snapshots = state.mem_snapshots.write().await;
     let id = next_snap_id(&snapshots);
     snapshots.push(SessionSnapshot {
@@ -520,8 +520,10 @@ pub async fn insert_session_snapshot(
         btc_price,
         created_at: Utc::now(),
     });
-
-    let mut sessions = state.mem_sessions.write().await;
+    // increment tick_count — hold snapshots lock until done with sessions to maintain ordering
+    let sessions_lock = state.mem_sessions.write();
+    drop(snapshots); // release snapshots FIRST to avoid deadlock with delete_session
+    let mut sessions = sessions_lock.await;
     if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
         s.tick_count += 1;
     }
@@ -558,8 +560,9 @@ pub async fn insert_session_trade(
     btc_price: Option<f64>,
 ) -> Result<()> {
     if let Some(pool) = state.db.as_ref() {
-        sqlx::query(
-            "INSERT INTO session_trades (session_id, side, trade_side, price, size, btc_price) VALUES ($1, $2, $3, $4, $5, $6)"
+        // ON CONFLICT DO NOTHING prevents fill duplication (BUG FIX: fills were inserted ~180x per session)
+        let result = sqlx::query(
+            "INSERT INTO session_trades (session_id, side, trade_side, price, size, btc_price) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING"
         )
         .bind(session_id)
         .bind(side)
@@ -570,14 +573,23 @@ pub async fn insert_session_trade(
         .execute(pool)
         .await?;
 
-        sqlx::query("UPDATE recording_sessions SET trade_count = trade_count + 1 WHERE id = $1")
-            .bind(session_id)
-            .execute(pool)
-            .await?;
+        // Only increment counter if a new row was actually inserted
+        if result.rows_affected() > 0 {
+            sqlx::query("UPDATE recording_sessions SET trade_count = trade_count + 1 WHERE id = $1")
+                .bind(session_id)
+                .execute(pool)
+                .await?;
+        }
         return Ok(());
     }
 
+    // In-memory (lock ordering: trades → sessions, consistent with delete_session: sessions → trades → snapshots)
+    // SAFETY: consumer task is single-threaded, so no actual deadlock risk. Still, release one lock before next.
     let mut trades = state.mem_trades.write().await;
+    // Dedup: skip if already exists
+    if trades.iter().any(|t| t.session_id == session_id && t.side == side && t.trade_side == trade_side && t.price == price && t.size == size) {
+        return Ok(());
+    }
     let id = next_trade_id(&trades);
     trades.push(SessionTrade {
         id,
@@ -590,6 +602,7 @@ pub async fn insert_session_trade(
         btc_price,
         created_at: Utc::now(),
     });
+    drop(trades);
 
     let mut sessions = state.mem_sessions.write().await;
     if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {

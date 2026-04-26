@@ -135,10 +135,12 @@ async fn process_sessions(state: Arc<AppState>) {
     for session in to_start {
         let btc_price = *state.btc_price.read().await;
         info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
+        // Set recording flag FIRST to avoid race condition (BUG FIX: ~1s data loss at session start)
+        *state.recording_session.write().await = Some(session.id);
         if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
             warn!("No se pudo iniciar sesión #{}: {}", session.id, e);
+            *state.recording_session.write().await = None; // rollback flag
         } else {
-            *state.recording_session.write().await = Some(session.id);
             info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
         }
     }
