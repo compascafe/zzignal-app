@@ -127,18 +127,15 @@ async fn process_pending_executions(state: Arc<AppState>) {
 }
 
 async fn process_sessions(state: Arc<AppState>) {
-    let pool = state.db.as_ref();
-    if pool.is_none() { return; }
-
     // 1. Iniciar sesiones programadas (5 segundos antes del scheduled_start)
-    let to_start = match repository::get_sessions_to_start(pool).await {
+    let to_start = match repository::get_sessions_to_start(&state).await {
         Ok(list) => list,
         Err(e)   => { warn!("Session scheduler start query: {}", e); return; }
     };
     for session in to_start {
         let btc_price = *state.btc_price.read().await;
         info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
-        if let Err(e) = repository::start_session_recording(pool, session.id, btc_price).await {
+        if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
             warn!("No se pudo iniciar sesión #{}: {}", session.id, e);
         } else {
             *state.recording_session.write().await = Some(session.id);
@@ -147,14 +144,14 @@ async fn process_sessions(state: Arc<AppState>) {
     }
 
     // 2. Detener sesiones que ya pasaron su scheduled_end
-    let to_stop = match repository::get_sessions_to_stop(pool).await {
+    let to_stop = match repository::get_sessions_to_stop(&state).await {
         Ok(list) => list,
         Err(e)   => { warn!("Session scheduler stop query: {}", e); return; }
     };
     for session in to_stop {
         let btc_price = *state.btc_price.read().await;
         info!("Deteniendo sesión #{} (programada hasta {})", session.id, session.scheduled_end.format("%H:%M:%S"));
-        if let Err(e) = repository::stop_session(pool, session.id, btc_price, btc_price).await {
+        if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("No se pudo detener sesión #{}: {}", session.id, e);
         } else {
             *state.recording_session.write().await = None;

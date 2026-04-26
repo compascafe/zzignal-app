@@ -266,7 +266,7 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
     let btc_price = *state.btc_price.read().await;
 
     if let Err(e) = session_repo::insert_session_snapshot(
-        state.db.as_ref(), session_id, side,
+        state, session_id, side,
         best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
         Some(bid_volume), Some(ask_volume),
         Some(depth_bids), Some(depth_asks),
@@ -291,7 +291,7 @@ async fn capture_fills(state: &AppState, fills: &[crate::modules::core::worker::
         };
 
         if let Err(e) = session_repo::insert_session_trade(
-            state.db.as_ref(), session_id, &fill.outcome, trade_side, fill.price, fill.size, btc_price,
+            state, session_id, &fill.outcome, trade_side, fill.price, fill.size, btc_price,
         ).await {
             warn!("Session trade capture: {}", e);
         }

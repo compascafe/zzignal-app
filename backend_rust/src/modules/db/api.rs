@@ -180,14 +180,14 @@ pub fn session_router(state: Arc<AppState>) -> Router {
 }
 
 async fn list_sessions(State(s): State<Arc<AppState>>) -> Json<Value> {
-    match repository::list_sessions(s.db.as_ref(), 100).await {
+    match repository::list_sessions(&s, 100).await {
         Ok(rows) => Json(json!(rows)),
         Err(e)   => Json(json!({"error": e.to_string()})),
     }
 }
 
 async fn get_active_session(State(s): State<Arc<AppState>>) -> Json<Value> {
-    match repository::get_active_session(s.db.as_ref()).await {
+    match repository::get_active_session(&s).await {
         Ok(Some(row)) => Json(json!(row)),
         Ok(None)      => Json(json!(null)),
         Err(e)        => Json(json!({"error": e.to_string()})),
@@ -229,7 +229,7 @@ async fn start_session(
     let depth = body.depth_levels.max(5).min(50);
     let duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
 
-    match repository::create_session(s.db.as_ref(), &name, scheduled_start, scheduled_end, duration, depth).await {
+    match repository::create_session(&s, &name, scheduled_start, scheduled_end, duration, depth).await {
         Ok(id) => Json(json!({
             "ok": true,
             "id": id,
@@ -247,7 +247,7 @@ async fn stop_session(
     Path(id): Path<i32>,
 ) -> Json<Value> {
     let final_price = *s.btc_price.read().await;
-    match repository::stop_session(s.db.as_ref(), id, final_price, final_price).await {
+    match repository::stop_session(&s, id, final_price, final_price).await {
         Ok(_) => {
             *s.recording_session.write().await = None;
             Json(json!({"ok": true, "message": "Sesión finalizada" }))
@@ -260,7 +260,7 @@ async fn delete_session(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Json<Value> {
-    match repository::delete_session(s.db.as_ref(), id).await {
+    match repository::delete_session(&s, id).await {
         Ok(_) => Json(json!({"ok": true })),
         Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
     }
@@ -270,7 +270,7 @@ async fn session_snapshots(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Json<Value> {
-    match repository::list_session_snapshots(s.db.as_ref(), id).await {
+    match repository::list_session_snapshots(&s, id).await {
         Ok(rows) => Json(json!(rows)),
         Err(e)   => Json(json!({"error": e.to_string()})),
     }
@@ -280,7 +280,7 @@ async fn session_trades(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Json<Value> {
-    match repository::list_session_trades(s.db.as_ref(), id).await {
+    match repository::list_session_trades(&s, id).await {
         Ok(rows) => Json(json!(rows)),
         Err(e)   => Json(json!({"error": e.to_string()})),
     }
@@ -295,7 +295,7 @@ async fn export_session(
 ) -> Response {
     let format = q.format.as_deref().unwrap_or("json");
 
-    let snapshots = match repository::list_session_snapshots(s.db.as_ref(), id).await {
+    let snapshots = match repository::list_session_snapshots(&s, id).await {
         Ok(rows) => rows,
         Err(e)   => return Json(json!({"error": e.to_string()})).into_response(),
     };

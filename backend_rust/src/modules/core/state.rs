@@ -3,6 +3,7 @@ use tokio::sync::{broadcast, RwLock, mpsc as tokio_mpsc};
 use sqlx::PgPool;
 
 use crate::modules::core::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
+use crate::modules::db::models::{RecordingSession, SessionSnapshot, SessionTrade};
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -37,6 +38,11 @@ pub struct AppState {
 
     // Sesión de grabación activa (Session Recorder)
     pub recording_session: RwLock<Option<i32>>,
+
+    // Buffers en memoria para Session Recorder (fallback si no hay DB)
+    pub mem_sessions:    RwLock<Vec<RecordingSession>>,
+    pub mem_snapshots:   RwLock<Vec<SessionSnapshot>>,
+    pub mem_trades:      RwLock<Vec<SessionTrade>>,
 }
 
 impl AppState {
@@ -67,6 +73,9 @@ impl AppState {
             broadcast_tx,
             db,
             recording_session: RwLock::new(None),
+            mem_sessions:    RwLock::new(vec![]),
+            mem_snapshots:   RwLock::new(vec![]),
+            mem_trades:      RwLock::new(vec![]),
         })
     }
 }

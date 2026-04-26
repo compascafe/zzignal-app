@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
 
+use crate::modules::core::state::AppState;
 use crate::modules::db::models::{ScheduledExecution, RecordingSession, SessionSnapshot, SessionTrade};
 
 // ─── Order Book Snapshots ────────────────────────────────────────────────────
@@ -214,142 +215,244 @@ pub async fn delete_execution(pool: Option<&PgPool>, id: i32) -> Result<()> {
     Ok(())
 }
 
-// ─── Recording Sessions ───────────────────────────────────────────────────────
+// ─── Recording Sessions (DB + In-Memory fallback) ────────────────────────────
 
-pub async fn create_session(pool: Option<&PgPool>, name: &str, scheduled_start: DateTime<Utc>, scheduled_end: DateTime<Utc>, duration_min: i32, depth_levels: i32) -> Result<i32> {
-    let Some(pool) = pool else { return Ok(0) };
-    let row: (i32,) = sqlx::query_as(
-        r#"
-        INSERT INTO recording_sessions (name, scheduled_start, scheduled_end, duration_min, depth_levels, status)
-        VALUES ($1, $2, $3, $4, $5, 'scheduled')
-        RETURNING id
-        "#,
-    )
-    .bind(name)
-    .bind(scheduled_start)
-    .bind(scheduled_end)
-    .bind(duration_min)
-    .bind(depth_levels)
-    .fetch_one(pool)
-    .await?;
-    Ok(row.0)
+fn next_mem_id(sessions: &[RecordingSession]) -> i32 {
+    sessions.iter().map(|s| s.id).max().unwrap_or(0) + 1
 }
 
-pub async fn get_active_session(pool: Option<&PgPool>) -> Result<Option<RecordingSession>> {
-    let Some(pool) = pool else { return Ok(None) };
-    let row = sqlx::query_as::<_, RecordingSession>(
-        "SELECT * FROM recording_sessions WHERE status = 'recording' ORDER BY scheduled_start DESC LIMIT 1"
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(row)
+fn next_snap_id(snapshots: &[SessionSnapshot]) -> i32 {
+    snapshots.iter().map(|s| s.id).max().unwrap_or(0) + 1
 }
 
-pub async fn list_sessions(pool: Option<&PgPool>, limit: i64) -> Result<Vec<RecordingSession>> {
-    let Some(pool) = pool else { return Ok(vec![]) };
-    let rows = sqlx::query_as::<_, RecordingSession>(
-        "SELECT * FROM recording_sessions ORDER BY scheduled_start DESC LIMIT $1"
-    )
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
+fn next_trade_id(trades: &[SessionTrade]) -> i32 {
+    trades.iter().map(|s| s.id).max().unwrap_or(0) + 1
 }
 
-/// Busca sesiones 'scheduled' cuyo scheduled_start esté dentro de los próximos 5 segundos
-/// (para empezar a grabar 5s antes del inicio oficial)
-pub async fn get_sessions_to_start(pool: Option<&PgPool>) -> Result<Vec<RecordingSession>> {
-    let Some(pool) = pool else { return Ok(vec![]) };
-    let rows = sqlx::query_as::<_, RecordingSession>(
-        r#"
-        SELECT * FROM recording_sessions
-        WHERE status = 'scheduled'
-          AND scheduled_start <= NOW() + INTERVAL '5 seconds'
-        ORDER BY scheduled_start ASC
-        "#
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
+pub async fn create_session(state: &AppState, name: &str, scheduled_start: DateTime<Utc>, scheduled_end: DateTime<Utc>, duration_min: i32, depth_levels: i32) -> Result<i32> {
+    if let Some(pool) = state.db.as_ref() {
+        let row: (i32,) = sqlx::query_as(
+            r#"
+            INSERT INTO recording_sessions (name, scheduled_start, scheduled_end, duration_min, depth_levels, status)
+            VALUES ($1, $2, $3, $4, $5, 'scheduled')
+            RETURNING id
+            "#,
+        )
+        .bind(name)
+        .bind(scheduled_start)
+        .bind(scheduled_end)
+        .bind(duration_min)
+        .bind(depth_levels)
+        .fetch_one(pool)
+        .await?;
+        return Ok(row.0);
+    }
+
+    // In-memory fallback
+    let mut sessions = state.mem_sessions.write().await;
+    let id = next_mem_id(&sessions);
+    sessions.push(RecordingSession {
+        id,
+        name: name.into(),
+        scheduled_start,
+        scheduled_end,
+        started_at: None,
+        stopped_at: None,
+        duration_min,
+        market_id: None,
+        market_title: None,
+        capture_mode: "tick".into(),
+        depth_levels,
+        strike_price: None,
+        final_price: None,
+        outcome_result: None,
+        btc_price_start: None,
+        btc_price_end: None,
+        status: "scheduled".into(),
+        tick_count: 0,
+        trade_count: 0,
+        created_at: Utc::now(),
+    });
+    Ok(id)
 }
 
-/// Marca una sesión como 'recording' y guarda el strike_price (BTC en ese instante)
-pub async fn start_session_recording(pool: Option<&PgPool>, id: i32, btc_price: Option<f64>) -> Result<()> {
-    let Some(pool) = pool else { return Ok(()) };
-    sqlx::query(
-        r#"
-        UPDATE recording_sessions
-        SET status = 'recording',
-            started_at = NOW(),
-            strike_price = $2,
-            btc_price_start = $2
-        WHERE id = $1 AND status = 'scheduled'
-        "#
-    )
-    .bind(id)
-    .bind(btc_price)
-    .execute(pool)
-    .await?;
-    Ok(())
+pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let row = sqlx::query_as::<_, RecordingSession>(
+            "SELECT * FROM recording_sessions WHERE status = 'recording' ORDER BY scheduled_start DESC LIMIT 1"
+        )
+        .fetch_optional(pool)
+        .await?;
+        return Ok(row);
+    }
+
+    let sessions = state.mem_sessions.read().await;
+    Ok(sessions.iter()
+        .find(|s| s.status == "recording")
+        .cloned())
 }
 
-/// Busca sesiones 'recording' cuyo scheduled_end ya pasó
-pub async fn get_sessions_to_stop(pool: Option<&PgPool>) -> Result<Vec<RecordingSession>> {
-    let Some(pool) = pool else { return Ok(vec![]) };
-    let rows = sqlx::query_as::<_, RecordingSession>(
-        r#"
-        SELECT * FROM recording_sessions
-        WHERE status = 'recording'
-          AND scheduled_end <= NOW()
-        ORDER BY scheduled_end ASC
-        "#
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
+pub async fn list_sessions(state: &AppState, limit: i64) -> Result<Vec<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query_as::<_, RecordingSession>(
+            "SELECT * FROM recording_sessions ORDER BY scheduled_start DESC LIMIT $1"
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    }
+
+    let sessions = state.mem_sessions.read().await;
+    let mut result: Vec<_> = sessions.clone();
+    result.sort_by(|a, b| b.scheduled_start.cmp(&a.scheduled_start));
+    let limit = limit.max(0) as usize;
+    if result.len() > limit { result.truncate(limit); }
+    Ok(result)
 }
 
-pub async fn stop_session(pool: Option<&PgPool>, id: i32, final_price: Option<f64>, btc_price_end: Option<f64>) -> Result<()> {
-    let Some(pool) = pool else { return Ok(()) };
+pub async fn get_sessions_to_start(state: &AppState) -> Result<Vec<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query_as::<_, RecordingSession>(
+            r#"
+            SELECT * FROM recording_sessions
+            WHERE status = 'scheduled'
+              AND scheduled_start <= NOW() + INTERVAL '5 seconds'
+            ORDER BY scheduled_start ASC
+            "#
+        )
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    }
 
-    // Determinar outcome comparando strike_price vs final_price (BTC)
-    sqlx::query(
-        r#"
-        UPDATE recording_sessions
-        SET status = 'completed',
-            stopped_at = NOW(),
-            final_price = $2,
-            btc_price_end = $3,
-            outcome_result = CASE
-                WHEN strike_price IS NULL OR $2 IS NULL THEN NULL
-                WHEN $2 > strike_price THEN 'up'
-                WHEN $2 < strike_price THEN 'down'
-                ELSE 'tie'
-            END
-        WHERE id = $1 AND status = 'recording'
-        "#
-    )
-    .bind(id)
-    .bind(final_price)
-    .bind(btc_price_end)
-    .execute(pool)
-    .await?;
-    Ok(())
+    let now = Utc::now();
+    let threshold = now + chrono::Duration::seconds(5);
+    let sessions = state.mem_sessions.read().await;
+    Ok(sessions.iter()
+        .filter(|s| s.status == "scheduled" && s.scheduled_start <= threshold)
+        .cloned()
+        .collect())
 }
 
-pub async fn delete_session(pool: Option<&PgPool>, id: i32) -> Result<()> {
-    let Some(pool) = pool else { return Ok(()) };
-    sqlx::query("DELETE FROM recording_sessions WHERE id = $1")
+pub async fn start_session_recording(state: &AppState, id: i32, btc_price: Option<f64>) -> Result<()> {
+    if let Some(pool) = state.db.as_ref() {
+        sqlx::query(
+            r#"
+            UPDATE recording_sessions
+            SET status = 'recording',
+                started_at = NOW(),
+                strike_price = $2,
+                btc_price_start = $2
+            WHERE id = $1 AND status = 'scheduled'
+            "#
+        )
         .bind(id)
+        .bind(btc_price)
         .execute(pool)
         .await?;
+        return Ok(());
+    }
+
+    let mut sessions = state.mem_sessions.write().await;
+    if let Some(s) = sessions.iter_mut().find(|s| s.id == id && s.status == "scheduled") {
+        s.status = "recording".into();
+        s.started_at = Some(Utc::now());
+        s.strike_price = btc_price;
+        s.btc_price_start = btc_price;
+    }
     Ok(())
 }
 
-// ─── Session Snapshots ────────────────────────────────────────────────────────
+pub async fn get_sessions_to_stop(state: &AppState) -> Result<Vec<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query_as::<_, RecordingSession>(
+            r#"
+            SELECT * FROM recording_sessions
+            WHERE status = 'recording'
+              AND scheduled_end <= NOW()
+            ORDER BY scheduled_end ASC
+            "#
+        )
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    }
+
+    let now = Utc::now();
+    let sessions = state.mem_sessions.read().await;
+    Ok(sessions.iter()
+        .filter(|s| s.status == "recording" && s.scheduled_end <= now)
+        .cloned()
+        .collect())
+}
+
+pub async fn stop_session(state: &AppState, id: i32, final_price: Option<f64>, btc_price_end: Option<f64>) -> Result<()> {
+    if let Some(pool) = state.db.as_ref() {
+        sqlx::query(
+            r#"
+            UPDATE recording_sessions
+            SET status = 'completed',
+                stopped_at = NOW(),
+                final_price = $2,
+                btc_price_end = $3,
+                outcome_result = CASE
+                    WHEN strike_price IS NULL OR $2 IS NULL THEN NULL
+                    WHEN $2 > strike_price THEN 'up'
+                    WHEN $2 < strike_price THEN 'down'
+                    ELSE 'tie'
+                END
+            WHERE id = $1 AND status = 'recording'
+            "#
+        )
+        .bind(id)
+        .bind(final_price)
+        .bind(btc_price_end)
+        .execute(pool)
+        .await?;
+        return Ok(());
+    }
+
+    let mut sessions = state.mem_sessions.write().await;
+    if let Some(s) = sessions.iter_mut().find(|s| s.id == id && s.status == "recording") {
+        s.status = "completed".into();
+        s.stopped_at = Some(Utc::now());
+        s.final_price = final_price;
+        s.btc_price_end = btc_price_end;
+        s.outcome_result = match (s.strike_price, final_price) {
+            (Some(strike), Some(final_p)) => {
+                if final_p > strike { Some("up".into()) }
+                else if final_p < strike { Some("down".into()) }
+                else { Some("tie".into()) }
+            }
+            _ => None,
+        };
+    }
+    Ok(())
+}
+
+pub async fn delete_session(state: &AppState, id: i32) -> Result<()> {
+    if let Some(pool) = state.db.as_ref() {
+        sqlx::query("DELETE FROM recording_sessions WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        return Ok(());
+    }
+
+    let mut sessions = state.mem_sessions.write().await;
+    sessions.retain(|s| s.id != id);
+    let mut snapshots = state.mem_snapshots.write().await;
+    snapshots.retain(|s| s.session_id != id);
+    let mut trades = state.mem_trades.write().await;
+    trades.retain(|t| t.session_id != id);
+    Ok(())
+}
+
+// ─── Session Snapshots (DB + In-Memory) ──────────────────────────────────────
 
 pub async fn insert_session_snapshot(
-    pool: Option<&PgPool>,
+    state: &AppState,
     session_id: i32,
     side: &str,
     best_bid: Option<f64>,
@@ -360,59 +463,93 @@ pub async fn insert_session_snapshot(
     mid_price: Option<f64>,
     bid_volume: Option<f64>,
     ask_volume: Option<f64>,
-    depth_bids: Option<serde_json::Value>,
-    depth_asks: Option<serde_json::Value>,
+    depth_bids: Option<Value>,
+    depth_asks: Option<Value>,
     btc_price: Option<f64>,
 ) -> Result<()> {
-    let Some(pool) = pool else { return Ok(()) };
-    sqlx::query(
-        r#"
-        INSERT INTO session_snapshots
-            (session_id, side, best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
-             bid_volume, ask_volume, depth_bids, depth_asks, btc_price)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        "#
-    )
-    .bind(session_id)
-    .bind(side)
-    .bind(best_bid)
-    .bind(best_bid_sz)
-    .bind(best_ask)
-    .bind(best_ask_sz)
-    .bind(spread)
-    .bind(mid_price)
-    .bind(bid_volume)
-    .bind(ask_volume)
-    .bind(depth_bids)
-    .bind(depth_asks)
-    .bind(btc_price)
-    .execute(pool)
-    .await?;
-
-    // Increment tick_count
-    sqlx::query("UPDATE recording_sessions SET tick_count = tick_count + 1 WHERE id = $1")
+    if let Some(pool) = state.db.as_ref() {
+        sqlx::query(
+            r#"
+            INSERT INTO session_snapshots
+                (session_id, side, best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
+                 bid_volume, ask_volume, depth_bids, depth_asks, btc_price)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            "#
+        )
         .bind(session_id)
+        .bind(side)
+        .bind(best_bid)
+        .bind(best_bid_sz)
+        .bind(best_ask)
+        .bind(best_ask_sz)
+        .bind(spread)
+        .bind(mid_price)
+        .bind(bid_volume)
+        .bind(ask_volume)
+        .bind(depth_bids)
+        .bind(depth_asks)
+        .bind(btc_price)
         .execute(pool)
         .await?;
 
+        sqlx::query("UPDATE recording_sessions SET tick_count = tick_count + 1 WHERE id = $1")
+            .bind(session_id)
+            .execute(pool)
+            .await?;
+        return Ok(());
+    }
+
+    // In-memory
+    let mut snapshots = state.mem_snapshots.write().await;
+    let id = next_snap_id(&snapshots);
+    snapshots.push(SessionSnapshot {
+        id,
+        session_id,
+        ts: Utc::now(),
+        side: side.into(),
+        best_bid,
+        best_bid_sz,
+        best_ask,
+        best_ask_sz,
+        spread,
+        mid_price,
+        bid_volume,
+        ask_volume,
+        depth_bids,
+        depth_asks,
+        btc_price,
+        created_at: Utc::now(),
+    });
+
+    let mut sessions = state.mem_sessions.write().await;
+    if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
+        s.tick_count += 1;
+    }
     Ok(())
 }
 
-pub async fn list_session_snapshots(pool: Option<&PgPool>, session_id: i32) -> Result<Vec<SessionSnapshot>> {
-    let Some(pool) = pool else { return Ok(vec![]) };
-    let rows = sqlx::query_as::<_, SessionSnapshot>(
-        "SELECT * FROM session_snapshots WHERE session_id = $1 ORDER BY ts ASC"
-    )
-    .bind(session_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
+pub async fn list_session_snapshots(state: &AppState, session_id: i32) -> Result<Vec<SessionSnapshot>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query_as::<_, SessionSnapshot>(
+            "SELECT * FROM session_snapshots WHERE session_id = $1 ORDER BY ts ASC"
+        )
+        .bind(session_id)
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    }
+
+    let snapshots = state.mem_snapshots.read().await;
+    Ok(snapshots.iter()
+        .filter(|s| s.session_id == session_id)
+        .cloned()
+        .collect())
 }
 
-// ─── Session Trades ───────────────────────────────────────────────────────────
+// ─── Session Trades (DB + In-Memory) ─────────────────────────────────────────
 
 pub async fn insert_session_trade(
-    pool: Option<&PgPool>,
+    state: &AppState,
     session_id: i32,
     side: &str,
     trade_side: &str,
@@ -420,34 +557,61 @@ pub async fn insert_session_trade(
     size: f64,
     btc_price: Option<f64>,
 ) -> Result<()> {
-    let Some(pool) = pool else { return Ok(()) };
-    sqlx::query(
-        "INSERT INTO session_trades (session_id, side, trade_side, price, size, btc_price) VALUES ($1, $2, $3, $4, $5, $6)"
-    )
-    .bind(session_id)
-    .bind(side)
-    .bind(trade_side)
-    .bind(price)
-    .bind(size)
-    .bind(btc_price)
-    .execute(pool)
-    .await?;
-
-    sqlx::query("UPDATE recording_sessions SET trade_count = trade_count + 1 WHERE id = $1")
+    if let Some(pool) = state.db.as_ref() {
+        sqlx::query(
+            "INSERT INTO session_trades (session_id, side, trade_side, price, size, btc_price) VALUES ($1, $2, $3, $4, $5, $6)"
+        )
         .bind(session_id)
+        .bind(side)
+        .bind(trade_side)
+        .bind(price)
+        .bind(size)
+        .bind(btc_price)
         .execute(pool)
         .await?;
 
+        sqlx::query("UPDATE recording_sessions SET trade_count = trade_count + 1 WHERE id = $1")
+            .bind(session_id)
+            .execute(pool)
+            .await?;
+        return Ok(());
+    }
+
+    let mut trades = state.mem_trades.write().await;
+    let id = next_trade_id(&trades);
+    trades.push(SessionTrade {
+        id,
+        session_id,
+        ts: Utc::now(),
+        side: side.into(),
+        trade_side: trade_side.into(),
+        price,
+        size,
+        btc_price,
+        created_at: Utc::now(),
+    });
+
+    let mut sessions = state.mem_sessions.write().await;
+    if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
+        s.trade_count += 1;
+    }
     Ok(())
 }
 
-pub async fn list_session_trades(pool: Option<&PgPool>, session_id: i32) -> Result<Vec<SessionTrade>> {
-    let Some(pool) = pool else { return Ok(vec![]) };
-    let rows = sqlx::query_as::<_, SessionTrade>(
-        "SELECT * FROM session_trades WHERE session_id = $1 ORDER BY ts ASC"
-    )
-    .bind(session_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
+pub async fn list_session_trades(state: &AppState, session_id: i32) -> Result<Vec<SessionTrade>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query_as::<_, SessionTrade>(
+            "SELECT * FROM session_trades WHERE session_id = $1 ORDER BY ts ASC"
+        )
+        .bind(session_id)
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    }
+
+    let trades = state.mem_trades.read().await;
+    Ok(trades.iter()
+        .filter(|t| t.session_id == session_id)
+        .cloned()
+        .collect())
 }
