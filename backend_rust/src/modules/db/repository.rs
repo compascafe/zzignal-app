@@ -461,8 +461,15 @@ pub async fn insert_session_snapshot(
     best_ask_sz: Option<f64>,
     spread: Option<f64>,
     mid_price: Option<f64>,
+    bid_volume_5: Option<f64>,
+    ask_volume_5: Option<f64>,
+    bid_volume_10: Option<f64>,
+    ask_volume_10: Option<f64>,
     bid_volume: Option<f64>,
     ask_volume: Option<f64>,
+    imbalance_ratio: Option<f64>,
+    up_probability: Option<f64>,
+    down_probability: Option<f64>,
     depth_bids: Option<Value>,
     depth_asks: Option<Value>,
     btc_price: Option<f64>,
@@ -472,8 +479,9 @@ pub async fn insert_session_snapshot(
             r#"
             INSERT INTO session_snapshots
                 (session_id, side, best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
-                 bid_volume, ask_volume, depth_bids, depth_asks, btc_price)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 bid_volume_5, ask_volume_5, bid_volume_10, ask_volume_10, bid_volume, ask_volume,
+                 imbalance_ratio, up_probability, down_probability, depth_bids, depth_asks, btc_price)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
             "#
         )
         .bind(session_id)
@@ -484,8 +492,15 @@ pub async fn insert_session_snapshot(
         .bind(best_ask_sz)
         .bind(spread)
         .bind(mid_price)
+        .bind(bid_volume_5)
+        .bind(ask_volume_5)
+        .bind(bid_volume_10)
+        .bind(ask_volume_10)
         .bind(bid_volume)
         .bind(ask_volume)
+        .bind(imbalance_ratio)
+        .bind(up_probability)
+        .bind(down_probability)
         .bind(depth_bids)
         .bind(depth_asks)
         .bind(btc_price)
@@ -513,8 +528,15 @@ pub async fn insert_session_snapshot(
         best_ask_sz,
         spread,
         mid_price,
+        bid_volume_5,
+        ask_volume_5,
+        bid_volume_10,
+        ask_volume_10,
         bid_volume,
         ask_volume,
+        imbalance_ratio,
+        up_probability,
+        down_probability,
         depth_bids,
         depth_asks,
         btc_price,

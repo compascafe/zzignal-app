@@ -308,27 +308,68 @@ async fn export_session(
         Err(e)   => return Json(json!({"error": e.to_string()})).into_response(),
     };
 
-    if format == "csv" {
-        let mut csv = String::from("ts,side,best_bid,best_bid_sz,best_ask,best_ask_sz,spread,mid_price,bid_volume,ask_volume,btc_price\n");
-        for snap in snapshots {
-            csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{}\n",
-                snap.ts.to_rfc3339(),
-                snap.side,
-                snap.best_bid.unwrap_or(0.0),
-                snap.best_bid_sz.unwrap_or(0.0),
-                snap.best_ask.unwrap_or(0.0),
-                snap.best_ask_sz.unwrap_or(0.0),
-                snap.spread.unwrap_or(0.0),
-                snap.mid_price.unwrap_or(0.0),
-                snap.bid_volume.unwrap_or(0.0),
-                snap.ask_volume.unwrap_or(0.0),
-                snap.btc_price.unwrap_or(0.0),
-            ));
+    if format == "csv" || format == "csv-depth" {
+        let is_depth = format == "csv-depth";
+        let mut csv = if is_depth {
+            String::from("ts,side,level,price,size,btc_price\n")
+        } else {
+            String::from("ts,side,session_id,best_bid,best_bid_sz,best_ask,best_ask_sz,spread,mid_price,bid_vol_5,ask_vol_5,bid_vol_10,ask_vol_10,bid_vol_all,ask_vol_all,imbalance_ratio,up_prob,down_prob,btc_price\n")
+        };
+
+        for snap in &snapshots {
+            if is_depth {
+                // Expand depth: one row per price level
+                let btc = snap.btc_price.unwrap_or(0.0);
+                let ts = snap.ts.to_rfc3339();
+                // Parse depth_bids
+                if let Some(ref bids) = snap.depth_bids {
+                    if let Some(arr) = bids.as_array() {
+                        for (i, level) in arr.iter().enumerate() {
+                            let p = level["p"].as_f64().unwrap_or(0.0);
+                            let s = level["s"].as_f64().unwrap_or(0.0);
+                            csv.push_str(&format!("{},{},bid_{},{},{},{}\n", ts, snap.side, i, p, s, btc));
+                        }
+                    }
+                }
+                // Parse depth_asks
+                if let Some(ref asks) = snap.depth_asks {
+                    if let Some(arr) = asks.as_array() {
+                        for (i, level) in arr.iter().enumerate() {
+                            let p = level["p"].as_f64().unwrap_or(0.0);
+                            let s = level["s"].as_f64().unwrap_or(0.0);
+                            csv.push_str(&format!("{},{},ask_{},{},{},{}\n", ts, snap.side, i, p, s, btc));
+                        }
+                    }
+                }
+            } else {
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    snap.ts.to_rfc3339(),
+                    snap.side,
+                    snap.session_id,
+                    snap.best_bid.unwrap_or(0.0),
+                    snap.best_bid_sz.unwrap_or(0.0),
+                    snap.best_ask.unwrap_or(0.0),
+                    snap.best_ask_sz.unwrap_or(0.0),
+                    snap.spread.unwrap_or(0.0),
+                    snap.mid_price.unwrap_or(0.0),
+                    snap.bid_volume_5.unwrap_or(0.0),
+                    snap.ask_volume_5.unwrap_or(0.0),
+                    snap.bid_volume_10.unwrap_or(0.0),
+                    snap.ask_volume_10.unwrap_or(0.0),
+                    snap.bid_volume.unwrap_or(0.0),
+                    snap.ask_volume.unwrap_or(0.0),
+                    snap.imbalance_ratio.unwrap_or(0.0),
+                    snap.up_probability.unwrap_or(0.0),
+                    snap.down_probability.unwrap_or(0.0),
+                    snap.btc_price.unwrap_or(0.0),
+                ));
+            }
         }
+        let fname = if is_depth { format!("session_{}_depth.csv", id) } else { format!("session_{}.csv", id) };
         return (
             StatusCode::OK,
-            [("Content-Type", "text/csv"), ("Content-Disposition", &format!("attachment; filename=\"session_{}.csv\"", id))],
+            [("Content-Type", "text/csv"), ("Content-Disposition", &format!("attachment; filename=\"{}\"", fname))],
             csv,
         ).into_response();
     }
@@ -373,23 +414,38 @@ fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> R
         Field::new("best_ask_sz", DataType::Float64, true),
         Field::new("spread", DataType::Float64, true),
         Field::new("mid_price", DataType::Float64, true),
-        Field::new("bid_volume", DataType::Float64, true),
-        Field::new("ask_volume", DataType::Float64, true),
+        Field::new("bid_vol_5", DataType::Float64, true),
+        Field::new("ask_vol_5", DataType::Float64, true),
+        Field::new("bid_vol_10", DataType::Float64, true),
+        Field::new("ask_vol_10", DataType::Float64, true),
+        Field::new("bid_vol_all", DataType::Float64, true),
+        Field::new("ask_vol_all", DataType::Float64, true),
+        Field::new("imbalance_ratio", DataType::Float64, true),
+        Field::new("up_prob", DataType::Float64, true),
+        Field::new("down_prob", DataType::Float64, true),
         Field::new("btc_price", DataType::Float64, true),
     ]));
 
-    let mut session_id_b = Int32Builder::with_capacity(snapshots.len());
-    let mut ts_b = TimestampMicrosecondBuilder::with_capacity(snapshots.len());
-    let mut side_b = StringBuilder::with_capacity(snapshots.len(), snapshots.len() * 4);
-    let mut bb_b = Float64Builder::with_capacity(snapshots.len());
-    let mut bbs_b = Float64Builder::with_capacity(snapshots.len());
-    let mut ba_b = Float64Builder::with_capacity(snapshots.len());
-    let mut bas_b = Float64Builder::with_capacity(snapshots.len());
-    let mut sp_b = Float64Builder::with_capacity(snapshots.len());
-    let mut mp_b = Float64Builder::with_capacity(snapshots.len());
-    let mut bv_b = Float64Builder::with_capacity(snapshots.len());
-    let mut av_b = Float64Builder::with_capacity(snapshots.len());
-    let mut btc_b = Float64Builder::with_capacity(snapshots.len());
+    let n = snapshots.len();
+    let mut session_id_b = Int32Builder::with_capacity(n);
+    let mut ts_b = TimestampMicrosecondBuilder::with_capacity(n);
+    let mut side_b = StringBuilder::with_capacity(n, n * 4);
+    let mut bb_b = Float64Builder::with_capacity(n);
+    let mut bbs_b = Float64Builder::with_capacity(n);
+    let mut ba_b = Float64Builder::with_capacity(n);
+    let mut bas_b = Float64Builder::with_capacity(n);
+    let mut sp_b = Float64Builder::with_capacity(n);
+    let mut mp_b = Float64Builder::with_capacity(n);
+    let mut bv5_b = Float64Builder::with_capacity(n);
+    let mut av5_b = Float64Builder::with_capacity(n);
+    let mut bv10_b = Float64Builder::with_capacity(n);
+    let mut av10_b = Float64Builder::with_capacity(n);
+    let mut bv_b = Float64Builder::with_capacity(n);
+    let mut av_b = Float64Builder::with_capacity(n);
+    let mut imb_b = Float64Builder::with_capacity(n);
+    let mut up_b = Float64Builder::with_capacity(n);
+    let mut dn_b = Float64Builder::with_capacity(n);
+    let mut btc_b = Float64Builder::with_capacity(n);
 
     for snap in snapshots {
         session_id_b.append_value(snap.session_id);
@@ -401,8 +457,15 @@ fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> R
         bas_b.append_option(snap.best_ask_sz);
         sp_b.append_option(snap.spread);
         mp_b.append_option(snap.mid_price);
+        bv5_b.append_option(snap.bid_volume_5);
+        av5_b.append_option(snap.ask_volume_5);
+        bv10_b.append_option(snap.bid_volume_10);
+        av10_b.append_option(snap.ask_volume_10);
         bv_b.append_option(snap.bid_volume);
         av_b.append_option(snap.ask_volume);
+        imb_b.append_option(snap.imbalance_ratio);
+        up_b.append_option(snap.up_probability);
+        dn_b.append_option(snap.down_probability);
         btc_b.append_option(snap.btc_price);
     }
 
@@ -418,8 +481,15 @@ fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> R
             Arc::new(bas_b.finish()),
             Arc::new(sp_b.finish()),
             Arc::new(mp_b.finish()),
+            Arc::new(bv5_b.finish()),
+            Arc::new(av5_b.finish()),
+            Arc::new(bv10_b.finish()),
+            Arc::new(av10_b.finish()),
             Arc::new(bv_b.finish()),
             Arc::new(av_b.finish()),
+            Arc::new(imb_b.finish()),
+            Arc::new(up_b.finish()),
+            Arc::new(dn_b.finish()),
             Arc::new(btc_b.finish()),
         ],
     )?;

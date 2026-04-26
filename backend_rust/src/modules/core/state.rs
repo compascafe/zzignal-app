@@ -71,7 +71,7 @@ impl AppState {
             recent_fills:    RwLock::new(vec![]),
             candles:         RwLock::new(vec![]),
             interval_arc,
-            btc_provider:    RwLock::new(BtcPriceProvider::Binance),
+            btc_provider:    RwLock::new(BtcPriceProvider::Coinbase), // default a Coinbase (Binance bloquea US)
             btc_provider_tx,
             cmd_tx,
             broadcast_tx,

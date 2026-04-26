@@ -82,8 +82,20 @@ pub struct SessionSnapshot {
     pub best_ask_sz: Option<f64>,
     pub spread:      Option<f64>,
     pub mid_price:   Option<f64>,
-    pub bid_volume:  Option<f64>,
-    pub ask_volume:  Option<f64>,
+
+    // Volume breakdown by depth
+    pub bid_volume_5:  Option<f64>,
+    pub ask_volume_5:  Option<f64>,
+    pub bid_volume_10: Option<f64>,
+    pub ask_volume_10: Option<f64>,
+    pub bid_volume:    Option<f64>,  // top 20 (legacy)
+    pub ask_volume:    Option<f64>,  // top 20 (legacy)
+
+    // Derived metrics
+    pub imbalance_ratio: Option<f64>,   // bid_vol_20 / ask_vol_20
+    pub up_probability:  Option<f64>,   // mid_price as probability
+    pub down_probability: Option<f64>,  // 1.0 - mid_price
+
     pub depth_bids:  Option<serde_json::Value>,
     pub depth_asks:  Option<serde_json::Value>,
     pub btc_price:   Option<f64>,

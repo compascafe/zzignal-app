@@ -283,18 +283,34 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
     let spread = best_bid.and_then(|bb| best_ask.map(|ba| ba - bb));
     let mid_price = best_bid.and_then(|bb| best_ask.map(|ba| (bb + ba) / 2.0));
 
-    let bid_volume: f64 = bids.iter().take(20).map(|l| l.size).sum();
-    let ask_volume: f64 = asks.iter().take(20).map(|l| l.size).sum();
+    // Volume breakdown by depth
+    let bid_volume_5: f64 = bids.iter().take(5).map(|l| l.size).sum();
+    let ask_volume_5: f64 = asks.iter().take(5).map(|l| l.size).sum();
+    let bid_volume_10: f64 = bids.iter().take(10).map(|l| l.size).sum();
+    let ask_volume_10: f64 = asks.iter().take(10).map(|l| l.size).sum();
+    let bid_volume: f64 = bids.iter().map(|l| l.size).sum();    // ALL levels
+    let ask_volume: f64 = asks.iter().map(|l| l.size).sum();    // ALL levels
 
-    let depth_bids = json!(bids.iter().take(20).map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
-    let depth_asks = json!(asks.iter().take(20).map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
+    // Imbalance ratio: >1 = bid-heavy, <1 = ask-heavy
+    let imbalance_ratio = if ask_volume > 0.0 { Some(bid_volume / ask_volume) } else { None };
+
+    // UP/DOWN probability: Polymarket tokens trade 0-1, mid_price ≈ probability
+    let up_probability = mid_price;
+    let down_probability = mid_price.map(|p| 1.0 - p);
+
+    // Capture FULL order book (all levels) in JSONB
+    let depth_bids = json!(bids.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
+    let depth_asks = json!(asks.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
 
     let btc_price = *state.btc_price.read().await;
 
     if let Err(e) = session_repo::insert_session_snapshot(
         state, session_id, side,
         best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
+        Some(bid_volume_5), Some(ask_volume_5),
+        Some(bid_volume_10), Some(ask_volume_10),
         Some(bid_volume), Some(ask_volume),
+        imbalance_ratio, up_probability, down_probability,
         Some(depth_bids), Some(depth_asks),
         btc_price,
     ).await {
