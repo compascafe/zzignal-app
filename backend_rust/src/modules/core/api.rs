@@ -54,11 +54,19 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(Arc::clone(&state));
 
     let db_r = db_api::router(Arc::clone(&state));
-    let session_r = db_api::session_router(state);
+    let session_r = db_api::session_router(Arc::clone(&state)); // clone para no consumir state
 
-    core.merge(db_r)
-        .merge(session_r)
-        .layer(CorsLayer::permissive())
+    #[allow(unused_mut)]
+    let mut app = core.merge(db_r).merge(session_r);
+
+    // ─── Premium modules (conditional compilation) ───
+    #[cfg(feature = "premium-collector")]
+    {
+        use crate::modules::premium::collector::api as collector_api;
+        app = app.merge(collector_api::router(state));
+    }
+
+    app.layer(CorsLayer::permissive())
 }
 
 // ─── Status & Mercado ─────────────────────────────────────────────────────────

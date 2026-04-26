@@ -103,11 +103,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Scheduler del módulo DB: snapshots cada 10s + ejecuciones programadas cada 5s
-    // Nota: requiere PostgreSQL (DATABASE_URL) para persistir datos
     {
         let state3 = Arc::clone(&state);
         tokio::spawn(async move {
             crate::modules::db::scheduler::run_scheduler(state3).await;
+        });
+    }
+
+    // Scheduler del módulo Premium Collector (solo si el feature está activo)
+    #[cfg(feature = "premium-collector")]
+    {
+        let state4 = Arc::clone(&state);
+        tokio::spawn(async move {
+            crate::modules::premium::collector::scheduler::run_collector(state4).await;
         });
     }
 
