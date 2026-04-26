@@ -201,28 +201,31 @@ async fn start_session(
     use chrono::{Duration, Timelike};
 
     let now = Utc::now();
-    let (scheduled_start, scheduled_end) = match (body.scheduled_start, body.scheduled_end) {
-        (Some(start), Some(end)) => (start, end),
-        (Some(start), None) => {
-            let end = start + Duration::minutes(body.duration_min.max(1) as i64);
-            (start, end)
-        }
-        _ => {
-            // Auto-calcular próximo intervalo de 15 minutos
-            let minute = now.minute();
-            let next_min = ((minute / 15) + 1) * 15;
-            let start = if next_min >= 60 {
-                now.with_minute(0).unwrap() + Duration::hours(1)
-            } else {
-                now.with_minute(next_min).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()
-            };
-            let end = start + Duration::minutes(15);
-            (start, end)
-        }
+    let indefinite = body.indefinite.unwrap_or(false);
+
+    let (scheduled_start, scheduled_end, is_indefinite) = if indefinite {
+        let start = body.scheduled_start.unwrap_or(now);
+        let end = start + Duration::days(365); // far future, stopped manually
+        (start, end, true)
+    } else if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
+        (start, end, false)
+    } else if let Some(start) = body.scheduled_start {
+        let end = start + Duration::minutes(body.duration_min.max(1) as i64);
+        (start, end, false)
+    } else {
+        let minute = now.minute();
+        let next_min = ((minute / 15) + 1) * 15;
+        let start = if next_min >= 60 {
+            now.with_minute(0).unwrap() + Duration::hours(1)
+        } else {
+            now.with_minute(next_min).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()
+        };
+        let end = start + Duration::minutes(body.duration_min.max(15) as i64);
+        (start, end, false)
     };
 
     let name = if body.name.is_empty() {
-        format!("BTC-15min-{}", scheduled_start.format("%H%M"))
+        format!("BTC-{}", scheduled_start.format("%H%M"))
     } else {
         body.name
     };
@@ -236,7 +239,12 @@ async fn start_session(
             "status": "scheduled",
             "scheduled_start": scheduled_start.to_rfc3339(),
             "scheduled_end": scheduled_end.to_rfc3339(),
-            "message": format!("Sesión programada para {} (grabará desde 5s antes)", scheduled_start.format("%H:%M:%S"))
+            "indefinite": is_indefinite,
+            "message": if is_indefinite {
+                "Sesión INDEFINIDA iniciada. Detener manualmente.".into()
+            } else {
+                format!("Sesión programada para {} → {}", scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
+            }
         })),
         Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
     }
@@ -286,7 +294,7 @@ async fn session_trades(
     }
 }
 
-// ─── Export Session (CSV) ─────────────────────────────────────────────────────
+// ─── Export Session (CSV / JSON / Parquet) ────────────────────────────────────
 
 async fn export_session(
     State(s): State<Arc<AppState>>,
@@ -325,8 +333,105 @@ async fn export_session(
         ).into_response();
     }
 
+    if format == "parquet" {
+        match write_parquet(&snapshots) {
+            Ok(bytes) => {
+                return (
+                    StatusCode::OK,
+                    [
+                        ("Content-Type", "application/octet-stream"),
+                        ("Content-Disposition", &format!("attachment; filename=\"session_{}.parquet\"", id)),
+                    ],
+                    bytes,
+                ).into_response();
+            }
+            Err(e) => return Json(json!({"error": e.to_string()})).into_response(),
+        }
+    }
+
     // JSON default
     Json(json!({ "snapshots": snapshots })).into_response()
+}
+
+/// Writes session snapshots as a Parquet file
+fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> Result<Vec<u8>, anyhow::Error> {
+    use std::sync::Arc;
+    use arrow::array::{Float64Builder, StringBuilder, TimestampMicrosecondBuilder, Int32Builder};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("session_id", DataType::Int32, false),
+        Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new("side", DataType::Utf8, false),
+        Field::new("best_bid", DataType::Float64, true),
+        Field::new("best_bid_sz", DataType::Float64, true),
+        Field::new("best_ask", DataType::Float64, true),
+        Field::new("best_ask_sz", DataType::Float64, true),
+        Field::new("spread", DataType::Float64, true),
+        Field::new("mid_price", DataType::Float64, true),
+        Field::new("bid_volume", DataType::Float64, true),
+        Field::new("ask_volume", DataType::Float64, true),
+        Field::new("btc_price", DataType::Float64, true),
+    ]));
+
+    let mut session_id_b = Int32Builder::with_capacity(snapshots.len());
+    let mut ts_b = TimestampMicrosecondBuilder::with_capacity(snapshots.len());
+    let mut side_b = StringBuilder::with_capacity(snapshots.len(), snapshots.len() * 4);
+    let mut bb_b = Float64Builder::with_capacity(snapshots.len());
+    let mut bbs_b = Float64Builder::with_capacity(snapshots.len());
+    let mut ba_b = Float64Builder::with_capacity(snapshots.len());
+    let mut bas_b = Float64Builder::with_capacity(snapshots.len());
+    let mut sp_b = Float64Builder::with_capacity(snapshots.len());
+    let mut mp_b = Float64Builder::with_capacity(snapshots.len());
+    let mut bv_b = Float64Builder::with_capacity(snapshots.len());
+    let mut av_b = Float64Builder::with_capacity(snapshots.len());
+    let mut btc_b = Float64Builder::with_capacity(snapshots.len());
+
+    for snap in snapshots {
+        session_id_b.append_value(snap.session_id);
+        ts_b.append_value(snap.ts.timestamp_micros());
+        side_b.append_value(&snap.side);
+        bb_b.append_option(snap.best_bid);
+        bbs_b.append_option(snap.best_bid_sz);
+        ba_b.append_option(snap.best_ask);
+        bas_b.append_option(snap.best_ask_sz);
+        sp_b.append_option(snap.spread);
+        mp_b.append_option(snap.mid_price);
+        bv_b.append_option(snap.bid_volume);
+        av_b.append_option(snap.ask_volume);
+        btc_b.append_option(snap.btc_price);
+    }
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(session_id_b.finish()),
+            Arc::new(ts_b.finish()),
+            Arc::new(side_b.finish()),
+            Arc::new(bb_b.finish()),
+            Arc::new(bbs_b.finish()),
+            Arc::new(ba_b.finish()),
+            Arc::new(bas_b.finish()),
+            Arc::new(sp_b.finish()),
+            Arc::new(mp_b.finish()),
+            Arc::new(bv_b.finish()),
+            Arc::new(av_b.finish()),
+            Arc::new(btc_b.finish()),
+        ],
+    )?;
+
+    let mut buf = Vec::new();
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
+    let mut writer = ArrowWriter::try_new(&mut buf, Arc::clone(&schema), Some(props))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(buf)
 }
 
 #[derive(Deserialize)]

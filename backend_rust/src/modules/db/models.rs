@@ -43,6 +43,7 @@ pub struct NewSession {
     pub scheduled_end:   Option<DateTime<Utc>>,
     pub duration_min:    i32,
     pub depth_levels:    i32,
+    pub indefinite:      Option<bool>,  // true = sin fecha de fin, se detiene manualmente
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

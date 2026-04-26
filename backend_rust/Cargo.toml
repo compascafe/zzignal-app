@@ -1,6 +1,6 @@
 [package]
 name        = "polymarket-backend"
-version     = "0.1.0"
+version     = "0.2.0"   # bump para forzar rebuild y nuevas migraciones
 edition     = "2021"
 rust-version = "1.91"   # MSRV
 default-run = "polymarket-backend"
@@ -46,6 +46,10 @@ secrecy = { version = "0.10", features = ["serde"] }
 hmac = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
+
+# Parquet export (HFT datasets)
+parquet = { version = "54", default-features = false, features = ["arrow"] }
+arrow = { version = "54", default-features = false, features = ["ffi"] }
 
 # API REST + WebSocket server
 axum       = { version = "0.8", features = ["ws", "macros"] }
