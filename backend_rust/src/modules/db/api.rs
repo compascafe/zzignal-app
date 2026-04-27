@@ -172,6 +172,8 @@ pub fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/active",       get(get_active_session))
         .route("/api/sessions/start",        post(start_session))
         .route("/api/sessions/{id}/stop",    post(stop_session))
+        .route("/api/sessions/stop-all",    post(stop_all_sessions))
+        .route("/api/sessions/cleanup",     post(cleanup_sessions))
         .route("/api/sessions/{id}",         delete(delete_session))
         .route("/api/sessions/{id}/export",  get(export_session))
         .route("/api/sessions/{id}/snapshots", get(session_snapshots))
@@ -290,6 +292,107 @@ async fn stop_session(
             Json(json!({"ok": true, "message": "Sesión finalizada" }))
         }
         Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+    }
+}
+
+async fn stop_all_sessions(
+    State(s): State<Arc<AppState>>,
+) -> Json<Value> {
+    let btc_price = *s.btc_price.read().await;
+    // Stop recording sessions
+    let mut stopped = 0;
+    let mut cancelled = 0;
+
+    if let Some(pool) = s.db.as_ref() {
+        // Stop all 'recording' sessions
+        let recording: Vec<(i32,)> = sqlx::query_as(
+            "SELECT id FROM recording_sessions WHERE status = 'recording'"
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        for (id,) in &recording {
+            if repository::stop_session(&s, *id, btc_price, btc_price).await.is_ok() {
+                stopped += 1;
+            }
+        }
+
+        // Cancel all 'scheduled' sessions
+        let result = sqlx::query(
+            "UPDATE recording_sessions SET status = 'cancelled' WHERE status = 'scheduled'"
+        )
+        .execute(pool)
+        .await;
+        if let Ok(r) = result {
+            cancelled = r.rows_affected() as i32;
+        }
+    }
+
+    // Also handle in-memory
+    {
+        let mut sessions = s.mem_sessions.write().await;
+        for s in sessions.iter_mut() {
+            if s.status == "recording" {
+                s.status = "completed".into();
+                s.stopped_at = Some(Utc::now());
+                s.final_price = btc_price;
+                s.btc_price_end = btc_price;
+                stopped += 1;
+            } else if s.status == "scheduled" {
+                s.status = "cancelled".into();
+                cancelled += 1;
+            }
+        }
+    }
+
+    *s.recording_session.write().await = None;
+
+    Json(json!({
+        "ok": true,
+        "stopped": stopped,
+        "cancelled": cancelled,
+        "message": format!("{} sesiones detenidas, {} canceladas", stopped, cancelled)
+    }))
+}
+
+async fn cleanup_sessions(
+    State(s): State<Arc<AppState>>,
+) -> Json<Value> {
+    if let Some(pool) = s.db.as_ref() {
+        // Delete cancelled sessions + completed with no data (cascades to snapshots/trades)
+        let result = sqlx::query(
+            r#"
+            DELETE FROM recording_sessions
+            WHERE status IN ('cancelled')
+               OR (status = 'completed' AND tick_count = 0 AND trade_count = 0)
+            "#
+        )
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(r) => Json(json!({
+                "ok": true,
+                "deleted": r.rows_affected(),
+                "message": format!("{} sesiones eliminadas", r.rows_affected())
+            })),
+            Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
+        }
+    } else {
+        // In-memory cleanup
+        let mut sessions = s.mem_sessions.write().await;
+        let before = sessions.len();
+        sessions.retain(|s| {
+            !(s.status == "cancelled" || (s.status == "completed" && s.tick_count == 0 && s.trade_count == 0))
+        });
+        let deleted = before - sessions.len();
+
+        Json(json!({
+            "ok": true,
+            "deleted": deleted,
+            "message": format!("{} sesiones eliminadas", deleted)
+        }))
     }
 }
 
