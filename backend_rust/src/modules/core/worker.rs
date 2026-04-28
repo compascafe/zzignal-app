@@ -145,7 +145,7 @@ pub enum CmdMsg {
 const CLOB_WS: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 const CLOB_URL: &str = "https://clob-v2.polymarket.com";
 
-//   ─── Intervalo de velas (tiempo + ticks) ────────────────────────────────────
+// // ─── Intervalo de velas (tiempo + ticks) ────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CandleInterval {
