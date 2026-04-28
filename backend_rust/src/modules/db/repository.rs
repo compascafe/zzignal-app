@@ -273,6 +273,8 @@ pub async fn create_session(state: &AppState, name: &str, scheduled_start: DateT
         status: "scheduled".into(),
         tick_count: 0,
         trade_count: 0,
+        tag: None,
+        tag_color: "#3b82f6".into(),
         created_at: Utc::now(),
     });
     Ok(id)
@@ -342,6 +344,20 @@ pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSess
     Ok(sessions.iter()
         .find(|s| s.status == "recording")
         .cloned())
+}
+
+pub async fn get_session_by_id(state: &AppState, session_id: i32) -> Result<Option<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let row = sqlx::query_as::<_, RecordingSession>(
+            "SELECT * FROM recording_sessions WHERE id = $1"
+        )
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await?;
+        return Ok(row);
+    }
+    let sessions = state.mem_sessions.read().await;
+    Ok(sessions.iter().find(|s| s.id == session_id).cloned())
 }
 
 pub async fn list_sessions(state: &AppState, limit: i64) -> Result<Vec<RecordingSession>> {
@@ -499,6 +515,27 @@ pub async fn delete_session(state: &AppState, id: i32) -> Result<()> {
     let mut trades = state.mem_trades.write().await;
     trades.retain(|t| t.session_id != id);
     Ok(())
+}
+
+pub async fn update_session_tag(state: &AppState, id: i32, tag: Option<String>, tag_color: Option<String>) -> Result<bool> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query(
+            "UPDATE recording_sessions SET tag = COALESCE($1, tag), tag_color = COALESCE($2, tag_color) WHERE id = $3"
+        )
+        .bind(&tag)
+        .bind(&tag_color)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        return Ok(rows.rows_affected() > 0);
+    }
+    let mut sessions = state.mem_sessions.write().await;
+    if let Some(s) = sessions.iter_mut().find(|s| s.id == id) {
+        if let Some(t) = tag { s.tag = Some(t); }
+        if let Some(c) = tag_color { s.tag_color = c; }
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 // ─── Session Snapshots (DB + In-Memory) ──────────────────────────────────────

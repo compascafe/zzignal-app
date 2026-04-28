@@ -68,6 +68,8 @@ pub struct RecordingSession {
     pub status:          String,
     pub tick_count:      i32,
     pub trade_count:     i32,
+    pub tag:             Option<String>,
+    pub tag_color:       String,
     pub created_at:      DateTime<Utc>,
 }
 

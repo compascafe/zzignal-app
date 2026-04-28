@@ -4,7 +4,7 @@ use axum::{
     Router,
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     http::StatusCode,
     Json,
 };
@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::modules::core::state::AppState;
-use crate::modules::db::models::ScheduledExecution;
+use crate::modules::db::models::{ScheduledExecution, SessionSnapshot, SessionTrade};
 use crate::modules::db::repository;
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -175,6 +175,7 @@ pub fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/stop-all",    post(stop_all_sessions))
         .route("/api/sessions/cleanup",     post(cleanup_sessions))
         .route("/api/sessions/{id}",         delete(delete_session))
+        .route("/api/sessions/{id}",         patch(update_session_tag))
         .route("/api/sessions/{id}/export",  get(export_session))
         .route("/api/sessions/{id}/snapshots", get(session_snapshots))
         .route("/api/sessions/{id}/trades",  get(session_trades))
@@ -406,6 +407,24 @@ async fn delete_session(
     }
 }
 
+#[derive(Deserialize)]
+struct TagUpdate {
+    tag:       Option<String>,
+    tag_color: Option<String>,
+}
+
+async fn update_session_tag(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+    Json(body): Json<TagUpdate>,
+) -> Json<Value> {
+    match repository::update_session_tag(&s, id, body.tag, body.tag_color).await {
+        Ok(true)  => Json(json!({"ok": true})),
+        Ok(false) => Json(json!({"ok": false, "error": "session not found"})),
+        Err(e)    => Json(json!({"ok": false, "error": e.to_string()})),
+    }
+}
+
 async fn session_snapshots(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i32>,
@@ -445,111 +464,179 @@ async fn export_session(
 ) -> Response {
     let format = q.format.as_deref().unwrap_or("json");
 
-    // Fetch snapshots: from session directly + all children if parent
-    let mut snapshots = match repository::list_session_snapshots(&s, id).await {
-        Ok(rows) => rows,
-        Err(e)   => return Json(json!({"error": e.to_string()})).into_response(),
+    // Fetch session metadata
+    let session = match repository::get_session_by_id(&s, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return (StatusCode::NOT_FOUND, "session not found").into_response(),
+        Err(e) => return Json(json!({"error": e.to_string()})).into_response(),
     };
 
-    // Aggregate children snapshots
+    // Fetch snapshots + trades, aggregating children if parent
+    let mut snapshots = repository::list_session_snapshots(&s, id).await.unwrap_or_default();
+    let mut trades = repository::list_session_trades(&s, id).await.unwrap_or_default();
+
     if let Ok(children) = repository::list_session_children(&s, id).await {
         for child in &children {
-            if let Ok(child_snaps) = repository::list_session_snapshots(&s, child.id).await {
-                snapshots.extend(child_snaps);
+            if let Ok(snaps) = repository::list_session_snapshots(&s, child.id).await {
+                snapshots.extend(snaps);
+            }
+            if let Ok(trs) = repository::list_session_trades(&s, child.id).await {
+                trades.extend(trs);
             }
         }
-        // Sort by ts for chronological export
         snapshots.sort_by(|a, b| a.ts.cmp(&b.ts));
+        trades.sort_by(|a, b| a.ts.cmp(&b.ts));
     }
 
-    if format == "csv" || format == "csv-depth" {
-        let is_depth = format == "csv-depth";
-        let mut csv = if is_depth {
-            String::from("ts,side,level,price,size,btc_price\n")
-        } else {
-            String::from("ts,side,session_id,best_bid,best_bid_sz,best_ask,best_ask_sz,spread,mid_price,bid_vol_5,ask_vol_5,bid_vol_10,ask_vol_10,bid_vol_all,ask_vol_all,imbalance_ratio,up_prob,down_prob,btc_price\n")
-        };
+    // Build metadata
+    let metadata = json!({
+        "session_id":       session.id,
+        "name":             session.name,
+        "scheduled_start":  session.scheduled_start,
+        "scheduled_end":    session.scheduled_end,
+        "started_at":       session.started_at,
+        "stopped_at":       session.stopped_at,
+        "duration_min":     session.duration_min,
+        "strike_price":     session.strike_price,
+        "final_price":      session.final_price,
+        "outcome_result":   session.outcome_result,
+        "btc_price_start":  session.btc_price_start,
+        "btc_price_end":    session.btc_price_end,
+        "status":           session.status,
+        "tick_count":       session.tick_count,
+        "trade_count":      session.trade_count,
+        "snapshot_count":   snapshots.len(),
+        "trade_count_export": trades.len(),
+    });
 
-        for snap in &snapshots {
-            if is_depth {
-                // Expand depth: one row per price level
-                let btc = snap.btc_price.unwrap_or(0.0);
-                let ts = snap.ts.to_rfc3339();
-                // Parse depth_bids
-                if let Some(ref bids) = snap.depth_bids {
-                    if let Some(arr) = bids.as_array() {
-                        for (i, level) in arr.iter().enumerate() {
-                            let p = level["p"].as_f64().unwrap_or(0.0);
-                            let s = level["s"].as_f64().unwrap_or(0.0);
-                            csv.push_str(&format!("{},{},bid_{},{},{},{}\n", ts, snap.side, i, p, s, btc));
-                        }
-                    }
-                }
-                // Parse depth_asks
-                if let Some(ref asks) = snap.depth_asks {
-                    if let Some(arr) = asks.as_array() {
-                        for (i, level) in arr.iter().enumerate() {
-                            let p = level["p"].as_f64().unwrap_or(0.0);
-                            let s = level["s"].as_f64().unwrap_or(0.0);
-                            csv.push_str(&format!("{},{},ask_{},{},{},{}\n", ts, snap.side, i, p, s, btc));
-                        }
-                    }
-                }
-            } else {
-                csv.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-                    snap.ts.to_rfc3339(),
-                    snap.side,
-                    snap.session_id,
-                    snap.best_bid.unwrap_or(0.0),
-                    snap.best_bid_sz.unwrap_or(0.0),
-                    snap.best_ask.unwrap_or(0.0),
-                    snap.best_ask_sz.unwrap_or(0.0),
-                    snap.spread.unwrap_or(0.0),
-                    snap.mid_price.unwrap_or(0.0),
-                    snap.bid_volume_5.unwrap_or(0.0),
-                    snap.ask_volume_5.unwrap_or(0.0),
-                    snap.bid_volume_10.unwrap_or(0.0),
-                    snap.ask_volume_10.unwrap_or(0.0),
-                    snap.bid_volume.unwrap_or(0.0),
-                    snap.ask_volume.unwrap_or(0.0),
-                    snap.imbalance_ratio.unwrap_or(0.0),
-                    snap.up_probability.unwrap_or(0.0),
-                    snap.down_probability.unwrap_or(0.0),
-                    snap.btc_price.unwrap_or(0.0),
-                ));
-            }
-        }
-        let fname = if is_depth { format!("session_{}_depth.csv", id) } else { format!("session_{}.csv", id) };
-        return (
-            StatusCode::OK,
-            [("Content-Type", "text/csv"), ("Content-Disposition", &format!("attachment; filename=\"{}\"", fname))],
-            csv,
-        ).into_response();
+    match format {
+        "csv" => csv_export(id, &snapshots, &trades, &metadata),
+        "csv-depth" => csv_depth_export(id, &snapshots),
+        "csv-trades" => csv_trades_export(id, &trades, &metadata),
+        "parquet" => parquet_export(id, &snapshots),
+        "parquet-trades" => parquet_trades_export(id, &trades),
+        _ => Json(json!({ "metadata": metadata, "snapshots": snapshots, "trades": trades })).into_response(),
     }
-
-    if format == "parquet" {
-        match write_parquet(&snapshots) {
-            Ok(bytes) => {
-                return (
-                    StatusCode::OK,
-                    [
-                        ("Content-Type", "application/octet-stream"),
-                        ("Content-Disposition", &format!("attachment; filename=\"session_{}.parquet\"", id)),
-                    ],
-                    bytes,
-                ).into_response();
-            }
-            Err(e) => return Json(json!({"error": e.to_string()})).into_response(),
-        }
-    }
-
-    // JSON default
-    Json(json!({ "snapshots": snapshots })).into_response()
 }
 
-/// Writes session snapshots as a Parquet file
-fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> Result<Vec<u8>, anyhow::Error> {
+// ─── CSV Export ────────────────────────────────────────────────────────────────
+
+fn csv_export(id: i32, snapshots: &[SessionSnapshot], trades: &[SessionTrade], metadata: &Value) -> Response {
+    let mut csv = String::new();
+    // Metadata as header comments
+    if let Some(m) = metadata.as_object() {
+        csv.push_str("# Session Metadata\n");
+        for (k, v) in m {
+            csv.push_str(&format!("# {}={}\n", k, v));
+        }
+        csv.push_str("#\n");
+    }
+
+    csv.push_str("ts,side,session_id,best_bid,best_bid_sz,best_ask,best_ask_sz,spread,mid_price,bid_vol_5,ask_vol_5,bid_vol_10,ask_vol_10,bid_vol_all,ask_vol_all,imbalance_ratio,up_prob,down_prob,btc_price\n");
+    for snap in snapshots {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            snap.ts.to_rfc3339(), snap.side, snap.session_id,
+            snap.best_bid.unwrap_or(0.0), snap.best_bid_sz.unwrap_or(0.0),
+            snap.best_ask.unwrap_or(0.0), snap.best_ask_sz.unwrap_or(0.0),
+            snap.spread.unwrap_or(0.0), snap.mid_price.unwrap_or(0.0),
+            snap.bid_volume_5.unwrap_or(0.0), snap.ask_volume_5.unwrap_or(0.0),
+            snap.bid_volume_10.unwrap_or(0.0), snap.ask_volume_10.unwrap_or(0.0),
+            snap.bid_volume.unwrap_or(0.0), snap.ask_volume.unwrap_or(0.0),
+            snap.imbalance_ratio.unwrap_or(0.0), snap.up_probability.unwrap_or(0.0),
+            snap.down_probability.unwrap_or(0.0), snap.btc_price.unwrap_or(0.0),
+        ));
+    }
+
+    if !trades.is_empty() {
+        csv.push('\n');
+        csv.push_str("# Trades\n#\n");
+        csv.push_str("ts,side,trade_side,price,size,btc_price\n");
+        for t in trades {
+            csv.push_str(&format!("{},{},{},{},{},{}\n",
+                t.ts.to_rfc3339(), t.side, t.trade_side,
+                t.price, t.size, t.btc_price.unwrap_or(0.0)));
+        }
+    }
+
+    (StatusCode::OK,
+     [("Content-Type", "text/csv"), ("Content-Disposition", &format!("attachment; filename=\"session_{}.csv\"", id))],
+     csv).into_response()
+}
+
+fn csv_depth_export(id: i32, snapshots: &[SessionSnapshot]) -> Response {
+    let mut csv = String::from("ts,side,level,price,size,btc_price\n");
+    for snap in snapshots {
+        let btc = snap.btc_price.unwrap_or(0.0);
+        let ts = snap.ts.to_rfc3339();
+        if let Some(ref bids) = snap.depth_bids {
+            if let Some(arr) = bids.as_array() {
+                for (i, level) in arr.iter().enumerate() {
+                    let p = level["p"].as_f64().unwrap_or(0.0);
+                    let s = level["s"].as_f64().unwrap_or(0.0);
+                    csv.push_str(&format!("{},{},bid_{},{},{},{}\n", ts, snap.side, i, p, s, btc));
+                }
+            }
+        }
+        if let Some(ref asks) = snap.depth_asks {
+            if let Some(arr) = asks.as_array() {
+                for (i, level) in arr.iter().enumerate() {
+                    let p = level["p"].as_f64().unwrap_or(0.0);
+                    let s = level["s"].as_f64().unwrap_or(0.0);
+                    csv.push_str(&format!("{},{},ask_{},{},{},{}\n", ts, snap.side, i, p, s, btc));
+                }
+            }
+        }
+    }
+    (StatusCode::OK,
+     [("Content-Type", "text/csv"), ("Content-Disposition", &format!("attachment; filename=\"session_{}_depth.csv\"", id))],
+     csv).into_response()
+}
+
+fn csv_trades_export(id: i32, trades: &[SessionTrade], metadata: &Value) -> Response {
+    let mut csv = String::new();
+    if let Some(m) = metadata.as_object() {
+        csv.push_str("# Session Metadata\n");
+        for (k, v) in m {
+            csv.push_str(&format!("# {}={}\n", k, v));
+        }
+        csv.push_str("#\n");
+    }
+    csv.push_str("ts,side,trade_side,price,size,btc_price\n");
+    for t in trades {
+        csv.push_str(&format!("{},{},{},{},{},{}\n",
+            t.ts.to_rfc3339(), t.side, t.trade_side,
+            t.price, t.size, t.btc_price.unwrap_or(0.0)));
+    }
+    (StatusCode::OK,
+     [("Content-Type", "text/csv"), ("Content-Disposition", &format!("attachment; filename=\"session_{}_trades.csv\"", id))],
+     csv).into_response()
+}
+
+// ─── Parquet Export ────────────────────────────────────────────────────────────
+
+fn parquet_export(id: i32, snapshots: &[SessionSnapshot]) -> Response {
+    match write_parquet(snapshots) {
+        Ok(bytes) => (StatusCode::OK,
+            [("Content-Type", "application/octet-stream"),
+             ("Content-Disposition", &format!("attachment; filename=\"session_{}.parquet\"", id))],
+            bytes).into_response(),
+        Err(e) => Json(json!({"error": e.to_string()})).into_response(),
+    }
+}
+
+fn parquet_trades_export(id: i32, trades: &[SessionTrade]) -> Response {
+    match write_parquet_trades(trades) {
+        Ok(bytes) => (StatusCode::OK,
+            [("Content-Type", "application/octet-stream"),
+             ("Content-Disposition", &format!("attachment; filename=\"session_{}_trades.parquet\"", id))],
+            bytes).into_response(),
+        Err(e) => Json(json!({"error": e.to_string()})).into_response(),
+    }
+}
+
+/// Snapshots Parquet — includes depth as JSON strings
+fn write_parquet(snapshots: &[SessionSnapshot]) -> Result<Vec<u8>, anyhow::Error> {
     use std::sync::Arc;
     use arrow::array::{Float64Builder, StringBuilder, TimestampMicrosecondBuilder, Int32Builder};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -578,6 +665,8 @@ fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> R
         Field::new("up_prob", DataType::Float64, true),
         Field::new("down_prob", DataType::Float64, true),
         Field::new("btc_price", DataType::Float64, true),
+        Field::new("depth_bids_json", DataType::Utf8, true),
+        Field::new("depth_asks_json", DataType::Utf8, true),
     ]));
 
     let n = snapshots.len();
@@ -600,6 +689,8 @@ fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> R
     let mut up_b = Float64Builder::with_capacity(n);
     let mut dn_b = Float64Builder::with_capacity(n);
     let mut btc_b = Float64Builder::with_capacity(n);
+    let mut depth_bids_b = StringBuilder::with_capacity(n, n * 512);
+    let mut depth_asks_b = StringBuilder::with_capacity(n, n * 512);
 
     for snap in snapshots {
         session_id_b.append_value(snap.session_id);
@@ -621,32 +712,94 @@ fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> R
         up_b.append_option(snap.up_probability);
         dn_b.append_option(snap.down_probability);
         btc_b.append_option(snap.btc_price);
+        let bids_str = snap.depth_bids.as_ref().map(|v| v.to_string());
+        let asks_str = snap.depth_asks.as_ref().map(|v| v.to_string());
+        depth_bids_b.append_option(bids_str.as_deref());
+        depth_asks_b.append_option(asks_str.as_deref());
     }
 
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(session_id_b.finish()),
-            Arc::new(ts_b.finish()),
-            Arc::new(side_b.finish()),
-            Arc::new(bb_b.finish()),
-            Arc::new(bbs_b.finish()),
-            Arc::new(ba_b.finish()),
-            Arc::new(bas_b.finish()),
-            Arc::new(sp_b.finish()),
-            Arc::new(mp_b.finish()),
-            Arc::new(bv5_b.finish()),
-            Arc::new(av5_b.finish()),
-            Arc::new(bv10_b.finish()),
-            Arc::new(av10_b.finish()),
-            Arc::new(bv_b.finish()),
-            Arc::new(av_b.finish()),
-            Arc::new(imb_b.finish()),
-            Arc::new(up_b.finish()),
-            Arc::new(dn_b.finish()),
-            Arc::new(btc_b.finish()),
-        ],
-    )?;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![
+        Arc::new(session_id_b.finish()),
+        Arc::new(ts_b.finish()),
+        Arc::new(side_b.finish()),
+        Arc::new(bb_b.finish()),
+        Arc::new(bbs_b.finish()),
+        Arc::new(ba_b.finish()),
+        Arc::new(bas_b.finish()),
+        Arc::new(sp_b.finish()),
+        Arc::new(mp_b.finish()),
+        Arc::new(bv5_b.finish()),
+        Arc::new(av5_b.finish()),
+        Arc::new(bv10_b.finish()),
+        Arc::new(av10_b.finish()),
+        Arc::new(bv_b.finish()),
+        Arc::new(av_b.finish()),
+        Arc::new(imb_b.finish()),
+        Arc::new(up_b.finish()),
+        Arc::new(dn_b.finish()),
+        Arc::new(btc_b.finish()),
+        Arc::new(depth_bids_b.finish()),
+        Arc::new(depth_asks_b.finish()),
+    ])?;
+
+    let mut buf = Vec::new();
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
+    let mut writer = ArrowWriter::try_new(&mut buf, Arc::clone(&schema), Some(props))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(buf)
+}
+
+/// Trades Parquet
+fn write_parquet_trades(trades: &[SessionTrade]) -> Result<Vec<u8>, anyhow::Error> {
+    use std::sync::Arc;
+    use arrow::array::{Float64Builder, StringBuilder, TimestampMicrosecondBuilder, Int32Builder};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use parquet::basic::Compression;
+    use parquet::file::properties::WriterProperties;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("session_id", DataType::Int32, false),
+        Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new("side", DataType::Utf8, false),
+        Field::new("trade_side", DataType::Utf8, false),
+        Field::new("price", DataType::Float64, false),
+        Field::new("size", DataType::Float64, false),
+        Field::new("btc_price", DataType::Float64, true),
+    ]));
+
+    let n = trades.len();
+    let mut sid_b = Int32Builder::with_capacity(n);
+    let mut ts_b = TimestampMicrosecondBuilder::with_capacity(n);
+    let mut side_b = StringBuilder::with_capacity(n, n * 4);
+    let mut ts2_b = StringBuilder::with_capacity(n, n * 4);
+    let mut price_b = Float64Builder::with_capacity(n);
+    let mut size_b = Float64Builder::with_capacity(n);
+    let mut btc_b = Float64Builder::with_capacity(n);
+
+    for t in trades {
+        sid_b.append_value(t.session_id);
+        ts_b.append_value(t.ts.timestamp_micros());
+        side_b.append_value(&t.side);
+        ts2_b.append_value(&t.trade_side);
+        price_b.append_value(t.price);
+        size_b.append_value(t.size);
+        btc_b.append_option(t.btc_price);
+    }
+
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![
+        Arc::new(sid_b.finish()),
+        Arc::new(ts_b.finish()),
+        Arc::new(side_b.finish()),
+        Arc::new(ts2_b.finish()),
+        Arc::new(price_b.finish()),
+        Arc::new(size_b.finish()),
+        Arc::new(btc_b.finish()),
+    ])?;
 
     let mut buf = Vec::new();
     let props = WriterProperties::builder()
@@ -660,5 +813,5 @@ fn write_parquet(snapshots: &[crate::modules::db::models::SessionSnapshot]) -> R
 
 #[derive(Deserialize)]
 struct ExportQuery {
-    format: Option<String>,  // "csv" | "json"
+    format: Option<String>,  // "csv" | "csv-depth" | "csv-trades" | "json" | "parquet" | "parquet-trades"
 }

@@ -21,6 +21,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
         ("006_rescue_sessions_schema",     include_str!("../db/migrations/006_rescue_sessions_schema.sql")),
         ("007_enrich_snapshots",           include_str!("../db/migrations/007_enrich_snapshots.sql")),
         ("008_session_parent",             include_str!("../db/migrations/008_session_parent.sql")),
+        ("009_session_tags",              include_str!("../db/migrations/009_session_tags.sql")),
     ];
 
     for (name, sql) in migrations {
