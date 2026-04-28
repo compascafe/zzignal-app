@@ -21,8 +21,8 @@ use std::str::FromStr as _;
 use alloy::signers::Signer as _;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
-use polymarket_client_sdk::PRIVATE_KEY_VAR; // = "POLYMARKET_PRIVATE_KEY"
-use polymarket_client_sdk::clob::{Client, Config};
+use polymarket_client_sdk_v2::PRIVATE_KEY_VAR; // = "POLYMARKET_PRIVATE_KEY"
+use polymarket_client_sdk_v2::clob::{Client, Config};
 use secrecy::ExposeSecret as _;
 
 #[tokio::main]
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
     // with_chain_id(POLYGON) añade el chain ID 137 a las firmas EIP-155.
     let signer = PrivateKeySigner::from_str(&private_key)
         .context("❌  Clave privada inválida (se esperan 64 hex chars, con o sin 0x)")?
-        .with_chain_id(Some(polymarket_client_sdk::POLYGON));
+        .with_chain_id(Some(polymarket_client_sdk_v2::POLYGON));
 
     let wallet_addr = format!("{:#x}", signer.address());
     println!();
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     // create_or_derive_api_key() está disponible en Client<Unauthenticated>.
     // Firma el request L1 con el signer para probar ownership de la wallet,
     // y el servidor devuelve (o crea) las credenciales L2 asociadas.
-    let client = Client::new("https://clob.polymarket.com", Config::default())
+    let client = Client::new("https://clob-v2.polymarket.com", Config::default())
         .context("❌  No se pudo crear el cliente CLOB")?;
 
     println!("  Conectando con Polymarket CLOB...");

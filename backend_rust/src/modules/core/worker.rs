@@ -10,19 +10,19 @@ use alloy::signers::local::PrivateKeySigner;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Timelike, Utc};
 use futures_util::{SinkExt, StreamExt};
-use polymarket_client_sdk::auth::{Credentials, Normal, Uuid};
-use polymarket_client_sdk::auth::state::Authenticated;
-use polymarket_client_sdk::clob::types::request::{
+use polymarket_client_sdk_v2::auth::{Credentials, Normal, Uuid};
+use polymarket_client_sdk_v2::auth::state::Authenticated;
+use polymarket_client_sdk_v2::clob::types::request::{
     BalanceAllowanceRequest, CancelMarketOrderRequest, LastTradePriceRequest,
     OrderBookSummaryRequest, OrdersRequest, TradesRequest,
 };
-use polymarket_client_sdk::clob::types::Side as ClobSideType;
-use polymarket_client_sdk::clob::types::{Amount, OrderType, Side as ClobSide, SignatureType};
-use polymarket_client_sdk::clob::{Client, Config};
-use polymarket_client_sdk::types::Address;
-use polymarket_client_sdk::gamma;
-use polymarket_client_sdk::gamma::types::request::{EventBySlugRequest, MarketsRequest, PublicProfileRequest};
-use polymarket_client_sdk::types::{Decimal, U256};
+use polymarket_client_sdk_v2::clob::types::Side as ClobSideType;
+use polymarket_client_sdk_v2::clob::types::{Amount, OrderType, Side as ClobSide, SignatureType};
+use polymarket_client_sdk_v2::clob::{Client, Config};
+use polymarket_client_sdk_v2::types::Address;
+use polymarket_client_sdk_v2::gamma;
+use polymarket_client_sdk_v2::gamma::types::request::{EventBySlugRequest, MarketsRequest, PublicProfileRequest};
+use polymarket_client_sdk_v2::types::{Decimal, U256};
 use reqwest::Client as HttpClient;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc as tokio_mpsc};
@@ -143,6 +143,7 @@ pub enum CmdMsg {
 }
 
 const CLOB_WS: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+const CLOB_URL: &str = "https://clob-v2.polymarket.com";
 
 //   ─── Intervalo de velas (tiempo + ticks) ────────────────────────────────────
 
@@ -342,7 +343,7 @@ async fn run_cycle(
     };
     let l2_creds = Credentials::new(api_key, secret_padded, creds.api_passphrase.clone());
 
-    let base_builder = Client::new("https://clob.polymarket.com", Config::default())
+    let base_builder = Client::new(CLOB_URL, Config::default())
         .context("Error creando cliente CLOB")?
         .authentication_builder(&signer)
         .credentials(l2_creds);
@@ -1637,9 +1638,9 @@ fn next_15min_boundary() -> DateTime<Utc> {
 }
 
 fn convert_book(
-    resp: &polymarket_client_sdk::clob::types::response::OrderBookSummaryResponse,
+    resp: &polymarket_client_sdk_v2::clob::types::response::OrderBookSummaryResponse,
 ) -> BookSnapshot {
-    let to_levels = |levels: &[polymarket_client_sdk::clob::types::response::OrderSummary]| {
+    let to_levels = |levels: &[polymarket_client_sdk_v2::clob::types::response::OrderSummary]| {
         levels.iter().map(|l| PriceLevel {
             price: l.price.to_string().parse().unwrap_or(0.0),
             size:  l.size.to_string().parse().unwrap_or(0.0),

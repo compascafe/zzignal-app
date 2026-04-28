@@ -13,7 +13,7 @@ use std::str::FromStr as _;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::Signer as _;
 use anyhow::{Context, Result};
-use polymarket_client_sdk::PRIVATE_KEY_VAR; // = "POLYMARKET_PRIVATE_KEY"
+use polymarket_client_sdk_v2::PRIVATE_KEY_VAR; // = "POLYMARKET_PRIVATE_KEY"
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -72,7 +72,7 @@ impl ClobCredentials {
     pub fn build_signer(&self) -> Result<PrivateKeySigner> {
         let signer = PrivateKeySigner::from_str(&self.private_key)
             .context("Clave privada inválida")?
-            .with_chain_id(Some(polymarket_client_sdk::POLYGON));
+            .with_chain_id(Some(polymarket_client_sdk_v2::POLYGON));
         Ok(signer)
     }
 

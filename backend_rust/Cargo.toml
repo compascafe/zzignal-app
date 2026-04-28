@@ -15,7 +15,7 @@ premium-all       = ["premium-collector", "premium-patterns", "premium-executor"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 
-polymarket-client-sdk = { version = "0.4", features = ["clob", "gamma", "rtds"] }
+polymarket_client_sdk_v2 = { version = "0.5", features = ["clob", "gamma"] }
 
 alloy = { version = "1.8", default-features = false, features = [
     "signer-local",
