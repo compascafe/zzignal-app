@@ -796,6 +796,21 @@ async fn run_btc_price_stream(
 
                                         if let Some(p) = price {
                                             let _ = tx.send(AppMsg::BtcPrice(p));
+
+                                            // Check for interval change on every tick
+                                            if let Ok(iv) = interval_arc.lock() {
+                                                if *iv != last_interval {
+                                                    last_interval = *iv;
+                                                    generator.set_interval(last_interval);
+                                                    let snap = generator.snapshot();
+                                                    let _ = tx.send(AppMsg::Candles {
+                                                        interval: last_interval.binance_str().to_string(),
+                                                        candles: snap,
+                                                    });
+                                                    info!("Intervalo cambiado a {:?}", last_interval);
+                                                }
+                                            }
+
                                             if let Some(c) = generator.on_tick(p, volume, now_ms) {
                                                 let _ = tx.send(AppMsg::CandleUpdate(c));
                                             }
