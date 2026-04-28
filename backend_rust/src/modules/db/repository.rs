@@ -7,6 +7,13 @@ use sqlx::PgPool;
 use crate::modules::core::state::AppState;
 use crate::modules::db::models::{ScheduledExecution, RecordingSession, SessionSnapshot, SessionTrade};
 
+/// Explicit column list for RecordingSession queries.
+/// Uses COALESCE for tag/tag_color so queries work even before migration 009/010.
+const SESS_COLS: &str = "SELECT id, parent_id, name, scheduled_start, scheduled_end, started_at, stopped_at,\
+    duration_min, market_id, market_title, capture_mode, depth_levels,\
+    strike_price, final_price, outcome_result, btc_price_start, btc_price_end,\
+    status, tick_count, trade_count, tag, tag_color, created_at FROM recording_sessions";
+
 // ─── Order Book Snapshots ────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -313,7 +320,7 @@ pub async fn create_session_batch(state: &AppState, name: &str, scheduled_start:
 pub async fn list_session_children(state: &AppState, parent_id: i32) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         let rows = sqlx::query_as::<_, RecordingSession>(
-            "SELECT * FROM recording_sessions WHERE parent_id = $1 ORDER BY scheduled_start ASC"
+            &format!("{SESS_COLS} WHERE parent_id = $1 ORDER BY scheduled_start ASC")
         )
         .bind(parent_id)
         .fetch_all(pool)
@@ -333,7 +340,7 @@ pub async fn list_session_children(state: &AppState, parent_id: i32) -> Result<V
 pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         let row = sqlx::query_as::<_, RecordingSession>(
-            "SELECT * FROM recording_sessions WHERE status = 'recording' ORDER BY scheduled_start DESC LIMIT 1"
+            &format!("{SESS_COLS} WHERE status = 'recording' ORDER BY scheduled_start DESC LIMIT 1")
         )
         .fetch_optional(pool)
         .await?;
@@ -349,7 +356,7 @@ pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSess
 pub async fn get_session_by_id(state: &AppState, session_id: i32) -> Result<Option<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         let row = sqlx::query_as::<_, RecordingSession>(
-            "SELECT * FROM recording_sessions WHERE id = $1"
+            &format!("{SESS_COLS} WHERE id = $1")
         )
         .bind(session_id)
         .fetch_optional(pool)
@@ -363,7 +370,7 @@ pub async fn get_session_by_id(state: &AppState, session_id: i32) -> Result<Opti
 pub async fn list_sessions(state: &AppState, limit: i64) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         let rows = sqlx::query_as::<_, RecordingSession>(
-            "SELECT * FROM recording_sessions ORDER BY scheduled_start DESC LIMIT $1"
+            &format!("{SESS_COLS} ORDER BY scheduled_start DESC LIMIT $1")
         )
         .bind(limit)
         .fetch_all(pool)
@@ -382,12 +389,7 @@ pub async fn list_sessions(state: &AppState, limit: i64) -> Result<Vec<Recording
 pub async fn get_sessions_to_start(state: &AppState) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         let rows = sqlx::query_as::<_, RecordingSession>(
-            r#"
-            SELECT * FROM recording_sessions
-            WHERE status = 'scheduled'
-              AND scheduled_start <= NOW() + INTERVAL '5 seconds'
-            ORDER BY scheduled_start ASC
-            "#
+            &format!("{SESS_COLS} WHERE status = 'scheduled' AND scheduled_start <= NOW() + INTERVAL '5 seconds' ORDER BY scheduled_start ASC")
         )
         .fetch_all(pool)
         .await?;
@@ -435,12 +437,7 @@ pub async fn start_session_recording(state: &AppState, id: i32, btc_price: Optio
 pub async fn get_sessions_to_stop(state: &AppState) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         let rows = sqlx::query_as::<_, RecordingSession>(
-            r#"
-            SELECT * FROM recording_sessions
-            WHERE status = 'recording'
-              AND scheduled_end <= NOW()
-            ORDER BY scheduled_end ASC
-            "#
+            &format!("{SESS_COLS} WHERE status = 'recording' AND scheduled_end <= NOW() ORDER BY scheduled_end ASC")
         )
         .fetch_all(pool)
         .await?;
