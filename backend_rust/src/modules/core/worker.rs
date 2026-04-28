@@ -148,60 +148,96 @@ const CLOB_WS: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CandleInterval {
+    FiveHundredMs,
     OneSecond,
     OneMinute,
     FiveMinutes,
     FifteenMinutes,
     OneHour,
+    TenTicks,
+    HundredTicks,
+    ThousandTicks,
 }
 
 impl CandleInterval {
     pub fn binance_str(self) -> &'static str {
         match self {
-            Self::OneSecond      => "1s",
-            Self::OneMinute      => "1m",
-            Self::FiveMinutes    => "5m",
-            Self::FifteenMinutes => "15m",
-            Self::OneHour        => "1h",
+            Self::FiveHundredMs   => "500ms",
+            Self::OneSecond       => "1s",
+            Self::OneMinute       => "1m",
+            Self::FiveMinutes     => "5m",
+            Self::FifteenMinutes  => "15m",
+            Self::OneHour         => "1h",
+            Self::TenTicks        => "10t",
+            Self::HundredTicks    => "100t",
+            Self::ThousandTicks   => "1000t",
         }
     }
     pub fn label(self) -> &'static str {
-        match self {
-            Self::OneSecond      => "1s",
-            Self::OneMinute      => "1m",
-            Self::FiveMinutes    => "5m",
-            Self::FifteenMinutes => "15m",
-            Self::OneHour        => "1h",
-        }
+        self.binance_str()
     }
-    /// Segundos entre refrescos REST
     pub fn refresh_secs(self) -> u64 {
         match self {
-            Self::OneSecond      => 3,
-            Self::OneMinute      => 15,
-            Self::FiveMinutes    => 30,
-            Self::FifteenMinutes => 60,
-            Self::OneHour        => 120,
+            Self::FiveHundredMs   => 3,
+            Self::OneSecond       => 3,
+            Self::OneMinute       => 15,
+            Self::FiveMinutes     => 30,
+            Self::FifteenMinutes  => 60,
+            Self::OneHour         => 120,
+            Self::TenTicks        => 5,
+            Self::HundredTicks    => 10,
+            Self::ThousandTicks   => 15,
         }
     }
-    /// Número de velas a pedir
     pub fn limit(self) -> u32 {
         match self {
-            Self::OneSecond      => 300,
-            Self::OneMinute      => 200,
-            Self::FiveMinutes    => 200,
-            Self::FifteenMinutes => 200,
-            Self::OneHour        => 100,
+            Self::FiveHundredMs   => 500,
+            Self::OneSecond       => 300,
+            Self::OneMinute       => 200,
+            Self::FiveMinutes     => 200,
+            Self::FifteenMinutes  => 200,
+            Self::OneHour         => 100,
+            Self::TenTicks        => 300,
+            Self::HundredTicks    => 200,
+            Self::ThousandTicks   => 100,
         }
     }
-    /// Milisegundos de duración
     pub fn millis(self) -> i64 {
         match self {
-            Self::OneSecond      => 1_000,
-            Self::OneMinute      => 60_000,
-            Self::FiveMinutes    => 300_000,
-            Self::FifteenMinutes => 900_000,
-            Self::OneHour        => 3_600_000,
+            Self::FiveHundredMs   => 500,
+            Self::OneSecond       => 1_000,
+            Self::OneMinute       => 60_000,
+            Self::FiveMinutes     => 300_000,
+            Self::FifteenMinutes  => 900_000,
+            Self::OneHour         => 3_600_000,
+            Self::TenTicks        => 0, // tick-based, no time
+            Self::HundredTicks    => 0,
+            Self::ThousandTicks   => 0,
+        }
+    }
+    pub fn is_tick_based(self) -> bool {
+        matches!(self, Self::TenTicks | Self::HundredTicks | Self::ThousandTicks)
+    }
+    pub fn ticks_per_candle(self) -> u32 {
+        match self {
+            Self::TenTicks      => 10,
+            Self::HundredTicks  => 100,
+            Self::ThousandTicks => 1000,
+            _ => 0,
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "500ms"  => Some(Self::FiveHundredMs),
+            "1s"     => Some(Self::OneSecond),
+            "1m"     => Some(Self::OneMinute),
+            "5m"     => Some(Self::FiveMinutes),
+            "15m"    => Some(Self::FifteenMinutes),
+            "1h"     => Some(Self::OneHour),
+            "10t"    => Some(Self::TenTicks),
+            "100t"   => Some(Self::HundredTicks),
+            "1000t"  => Some(Self::ThousandTicks),
+            _        => None,
         }
     }
 }
@@ -535,6 +571,8 @@ async fn run_live(
 
 struct TickCandleGenerator {
     interval_ms: i64,
+    ticks_per_candle: u32,  // 0 = time-based
+    tick_count: u32,
     current:     Option<Candle>,
     history:     Vec<Candle>,
     max_history: usize,
@@ -542,23 +580,50 @@ struct TickCandleGenerator {
 
 impl TickCandleGenerator {
     fn new(interval_ms: i64, max_history: usize) -> Self {
-        Self { interval_ms, current: None, history: Vec::with_capacity(max_history), max_history }
+        Self { interval_ms, ticks_per_candle: 0, tick_count: 0, current: None, history: Vec::with_capacity(max_history), max_history }
     }
 
-    fn set_interval(&mut self, interval_ms: i64) {
-        self.interval_ms = interval_ms;
+    fn set_interval(&mut self, iv: CandleInterval) {
+        self.interval_ms = iv.millis();
+        self.ticks_per_candle = iv.ticks_per_candle();
         self.current = None;
-        // Conservar history para que el usuario no pierda todo al cambiar intervalo
+        self.tick_count = 0;
     }
 
     /// Recibe un tick de precio. Devuelve la vela actualizada (para CandleUpdate).
     fn on_tick(&mut self, price: f64, volume: f64, now_ms: i64) -> Option<Candle> {
-        let open_time = (now_ms / self.interval_ms) * self.interval_ms;
+        let open_time = if self.ticks_per_candle > 0 {
+            // Tick-based: open_time = timestamp of candle start
+            // We keep open_time from the current candle or use now_ms for new
+            now_ms
+        } else {
+            (now_ms / self.interval_ms) * self.interval_ms
+        };
+
+        self.tick_count += 1;
+        let should_close = if self.ticks_per_candle > 0 {
+            self.tick_count > self.ticks_per_candle
+        } else {
+            match &self.current {
+                Some(c) => c.open_time != open_time,
+                None => false,
+            }
+        };
+
+        if should_close {
+            // Cerrar vela anterior
+            if let Some(c) = &self.current {
+                let finished = c.clone();
+                self.push_history(finished);
+            }
+            self.current = None;
+            self.tick_count = 1; // reset after close
+        }
 
         match &mut self.current {
             None => {
                 let c = Candle {
-                    open_time,
+                    open_time: now_ms,
                     open:   price,
                     high:   price,
                     low:    price,
@@ -568,29 +633,12 @@ impl TickCandleGenerator {
                 self.current = Some(c.clone());
                 Some(c)
             }
-            Some(c) if c.open_time == open_time => {
+            Some(c) => {
                 c.high = c.high.max(price);
                 c.low  = c.low.min(price);
                 c.close = price;
                 c.volume += volume;
                 Some(c.clone())
-            }
-            Some(c) => {
-                // Cerrar vela anterior
-                let finished = c.clone();
-                self.push_history(finished);
-
-                // Nueva vela
-                let new = Candle {
-                    open_time,
-                    open:   price,
-                    high:   price,
-                    low:    price,
-                    close:  price,
-                    volume,
-                };
-                self.current = Some(new.clone());
-                Some(new)
             }
         }
     }
@@ -623,7 +671,7 @@ async fn run_btc_price_stream(
     interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
 ) {
     let mut backoff = Duration::from_secs(2);
-    let mut generator = TickCandleGenerator::new(CandleInterval::OneMinute.millis(), 200);
+    let mut generator = TickCandleGenerator::new(60_000, 200);
     let mut last_interval = CandleInterval::OneMinute;
 
     loop {
@@ -634,7 +682,7 @@ async fn run_btc_price_stream(
         if let Ok(iv) = interval_arc.lock() {
             if *iv != last_interval {
                 last_interval = *iv;
-                generator.set_interval(last_interval.millis());
+                generator.set_interval(last_interval);
                 let snap = generator.snapshot();
                 let _ = tx.send(AppMsg::Candles {
                     interval: last_interval.binance_str().to_string(),

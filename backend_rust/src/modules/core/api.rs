@@ -243,13 +243,9 @@ async fn set_interval(
     State(s):    State<Arc<AppState>>,
     Json(body):  Json<IntervalBody>,
 ) -> Json<Value> {
-    let iv = match body.interval.as_str() {
-        "1s"  => CandleInterval::OneSecond,
-        "1m"  => CandleInterval::OneMinute,
-        "5m"  => CandleInterval::FiveMinutes,
-        "15m" => CandleInterval::FifteenMinutes,
-        "1h"  => CandleInterval::OneHour,
-        other => return Json(json!({"ok": false, "error": format!("intervalo desconocido: {other}")})),
+    let iv = match CandleInterval::from_str(&body.interval) {
+        Some(iv) => iv,
+        None => return Json(json!({"ok": false, "error": format!("intervalo desconocido: {}", body.interval)})),
     };
     if let Ok(mut guard) = s.interval_arc.lock() {
         *guard = iv;
@@ -509,16 +505,10 @@ async fn handle_ws_cmd(text: &str, state: &AppState) {
         }
         "set_interval" => {
             if let Some(iv_str) = v["interval"].as_str() {
-                let iv = match iv_str {
-                    "1s"  => Some(CandleInterval::OneSecond),
-                    "1m"  => Some(CandleInterval::OneMinute),
-                    "5m"  => Some(CandleInterval::FiveMinutes),
-                    "15m" => Some(CandleInterval::FifteenMinutes),
-                    "1h"  => Some(CandleInterval::OneHour),
-                    _     => None,
-                };
-                if let (Some(iv), Ok(mut guard)) = (iv, state.interval_arc.lock()) {
-                    *guard = iv;
+                if let Some(iv) = CandleInterval::from_str(iv_str) {
+                    if let Ok(mut guard) = state.interval_arc.lock() {
+                        *guard = iv;
+                    }
                 }
             }
         }
