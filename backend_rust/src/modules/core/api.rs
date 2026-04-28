@@ -22,6 +22,8 @@ use crate::modules::db::api as db_api;
 
 pub fn router(state: Arc<AppState>) -> Router {
     let core = Router::new()
+        // Health check — despliegue + BD
+        .route("/api/health",          get(get_health))
         // Status / mercado
         .route("/api/status",          get(get_status))
         .route("/api/market",          get(get_market))
@@ -79,6 +81,55 @@ pub fn router(state: Arc<AppState>) -> Router {
     }
 
     app.layer(CorsLayer::permissive())
+}
+
+// ─── Health Check — Despliegue + BD ────────────────────────────────────────────
+// Verifica: compilación, conexión BD, migraciones, tablas existentes
+
+async fn get_health(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let app_version   = env!("CARGO_PKG_VERSION");
+    let build_time    = option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("dev");
+    let git_sha       = option_env!("VERGEN_GIT_SHA").unwrap_or("dev");
+    let target        = option_env!("VERGEN_CARGO_TARGET_TRIPLE").unwrap_or("unknown");
+
+    let (db_ok, db_error, tables) = match s.db.as_ref() {
+        Some(pool) => {
+            match sqlx::query("SELECT 1 AS ping").fetch_one(pool).await {
+                Ok(_) => {
+                    // Listar tablas existentes (para verificar migraciones)
+                    let tables = match sqlx::query_as::<_, (String,)>(r#"
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                        ORDER BY table_name
+                    "#).fetch_all(pool).await {
+                        Ok(rows) => rows.into_iter().map(|(t,)| t).collect::<Vec<_>>(),
+                        Err(e) => vec![format!("error leyendo tablas: {}", e)],
+                    };
+                    (true, None, tables)
+                }
+                Err(e) => {
+                    let msg = format!("ping falló: {e}");
+                    (false, Some(msg), vec![])
+                }
+            }
+        }
+        None => (false, Some("DATABASE_URL no configurada".into()), vec![]),
+    };
+
+    Json(json!({
+        "app": {
+            "version":    app_version,
+            "build_time": build_time,
+            "git_sha":    git_sha,
+            "target":     target,
+        },
+        "database": {
+            "connected": db_ok,
+            "error":     db_error,
+            "tables":    tables,
+        },
+        "status": *s.status.read().await,
+    }))
 }
 
 // ─── Status & Mercado ─────────────────────────────────────────────────────────

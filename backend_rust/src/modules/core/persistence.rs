@@ -1,14 +1,35 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
+use tracing::info;
 
 use crate::modules::core::worker::{Candle, OrderSide, RecentFill};
 
 // ─── Migraciones ─────────────────────────────────────────────────────────────
+// Runner manual: ejecuta cada .sql en orden. Todas las migraciones son
+// idempotentes (IF NOT EXISTS / DO $$ ... END $$) por lo que es seguro
+// re-ejecutarlas en cada arranque.
 
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
-    sqlx::migrate!("./src/modules/db/migrations").run(pool).await?;
+    let migrations: &[(&str, &str)] = &[
+        ("001_init",                       include_str!("../db/migrations/001_init.sql")),
+        ("002_orderbook_executions",       include_str!("../db/migrations/002_orderbook_executions.sql")),
+        ("003_sessions",                   include_str!("../db/migrations/003_sessions.sql")),
+        ("004_sessions_scheduled_columns", include_str!("../db/migrations/004_sessions_scheduled_columns.sql")),
+        ("005_fix_sessions_schema",        include_str!("../db/migrations/005_fix_sessions_schema.sql")),
+        ("006_rescue_sessions_schema",     include_str!("../db/migrations/006_rescue_sessions_schema.sql")),
+        ("007_enrich_snapshots",           include_str!("../db/migrations/007_enrich_snapshots.sql")),
+        ("008_session_parent",             include_str!("../db/migrations/008_session_parent.sql")),
+    ];
+
+    for (name, sql) in migrations {
+        info!("Migración: {}", name);
+        sqlx::query(sql).execute(pool).await.map_err(|e| {
+            anyhow!("{} falló: {}", name, e)
+        })?;
+    }
+
     Ok(())
 }
 

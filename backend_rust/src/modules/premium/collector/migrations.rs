@@ -1,9 +1,7 @@
-/// Registra las migraciones del módulo collector en el sistema de migraciones.
-/// Se llama desde `persistence::run_migrations()` cuando el feature está activo.
+/// Runner manual de migraciones para el módulo collector.
+/// Se llama desde el scheduler cuando el feature premium-collector está activo.
 ///
-/// La migración se ejecuta vía sqlx::query porque sqlx::migrate! solo soporta
-/// una carpeta de migraciones. Las migraciones del collector van en
-/// `src/modules/premium/collector/migrations/`.
+/// Todas las migraciones son idempotentes — se ejecutan en cada arranque.
 
 use sqlx::PgPool;
 

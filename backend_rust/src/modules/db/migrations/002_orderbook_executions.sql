@@ -4,7 +4,7 @@
 -- ─── Order Book Snapshots ─────────────────────────────────────────────────────
 -- Guarda snapshots periódicos del order book UP/DOWN para análisis histórico
 
-CREATE TABLE order_book_snapshots (
+CREATE TABLE IF NOT EXISTS order_book_snapshots (
     id          SERIAL PRIMARY KEY,
     ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     side        VARCHAR(10) NOT NULL,              -- 'up' | 'down'
@@ -18,14 +18,14 @@ CREATE TABLE order_book_snapshots (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_obs_ts    ON order_book_snapshots(ts DESC);
-CREATE INDEX idx_obs_side  ON order_book_snapshots(side);
-CREATE INDEX idx_obs_ts_side ON order_book_snapshots(ts DESC, side);
+CREATE INDEX IF NOT EXISTS idx_obs_ts    ON order_book_snapshots(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_obs_side  ON order_book_snapshots(side);
+CREATE INDEX IF NOT EXISTS idx_obs_ts_side ON order_book_snapshots(ts DESC, side);
 
 -- ─── Scheduled Executions ─────────────────────────────────────────────────────
 -- Programar ejecuciones de órdenes en el futuro (limit/market/scalp)
 
-CREATE TABLE scheduled_executions (
+CREATE TABLE IF NOT EXISTS scheduled_executions (
     id            SERIAL PRIMARY KEY,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     scheduled_at  TIMESTAMPTZ NOT NULL,
@@ -43,6 +43,6 @@ CREATE TABLE scheduled_executions (
     error_message TEXT
 );
 
-CREATE INDEX idx_se_scheduled_at ON scheduled_executions(scheduled_at);
-CREATE INDEX idx_se_status       ON scheduled_executions(status);
-CREATE INDEX idx_se_pending      ON scheduled_executions(scheduled_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_se_scheduled_at ON scheduled_executions(scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_se_status       ON scheduled_executions(status);
+CREATE INDEX IF NOT EXISTS idx_se_pending      ON scheduled_executions(scheduled_at) WHERE status = 'pending';
