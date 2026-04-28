@@ -48,9 +48,9 @@ jobs:
       - name: Setup Directories
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.SERVER_IP }}
+          host: ${{ secrets.SERVER_IP_SG }}
           username: ubuntu
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          key: ${{ secrets.SERVER_SSH_KEY_SG }}
           script: |
             sudo mkdir -p /var/www/zzignal-app
             sudo mkdir -p /home/ubuntu/zzignal-app
@@ -61,9 +61,9 @@ jobs:
         if: steps.changes.outputs.FRONTEND_CHANGED == 'true'
         uses: easingthemes/ssh-deploy@main
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY_SG }}
           ARGS: "-rlgoDzvc -i --delete"
-          REMOTE_HOST: ${{ secrets.SERVER_IP }}
+          REMOTE_HOST: ${{ secrets.SERVER_IP_SG }}
           REMOTE_USER: "ubuntu"
           SOURCE: "frontend_react/dist/"
           TARGET: "/var/www/zzignal-app"
@@ -136,9 +136,9 @@ jobs:
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: easingthemes/ssh-deploy@main
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY_SG }}
           ARGS: "-rlgoDzvc -i"
-          REMOTE_HOST: ${{ secrets.SERVER_IP }}
+          REMOTE_HOST: ${{ secrets.SERVER_IP_SG }}
           REMOTE_USER: "ubuntu"
           SOURCE: "deploy.tar.gz"
           TARGET: "/home/ubuntu/zzignal-app/"
@@ -147,9 +147,9 @@ jobs:
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.SERVER_IP }}
+          host: ${{ secrets.SERVER_IP_SG }}
           username: ubuntu
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          key: ${{ secrets.SERVER_SSH_KEY_SG }}
           script: |
             cd /home/ubuntu/zzignal-app
             tar -xzf deploy.tar.gz
@@ -161,8 +161,8 @@ jobs:
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.SERVER_IP }}
+          host: ${{ secrets.SERVER_IP_SG }}
           username: ubuntu
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          key: ${{ secrets.SERVER_SSH_KEY_SG }}
           script: |
             sudo systemctl restart zzignal-app
