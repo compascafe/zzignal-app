@@ -624,7 +624,7 @@ impl TickCandleGenerator {
         match &mut self.current {
             None => {
                 let c = Candle {
-                    open_time: now_ms,
+                    open_time,
                     open:   price,
                     high:   price,
                     low:    price,
