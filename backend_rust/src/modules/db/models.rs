@@ -91,8 +91,8 @@ pub struct SessionSnapshot {
     pub ask_volume_5:  Option<f64>,
     pub bid_volume_10: Option<f64>,
     pub ask_volume_10: Option<f64>,
-    pub bid_volume:    Option<f64>,  // top 20 (legacy)
-    pub ask_volume:    Option<f64>,  // top 20 (legacy)
+    pub bid_volume:    Option<f64>,  // ALL levels
+    pub ask_volume:    Option<f64>,  // ALL levels
 
     // Derived metrics
     pub imbalance_ratio: Option<f64>,   // bid_vol_20 / ask_vol_20
