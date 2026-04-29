@@ -58,6 +58,9 @@ tower-http = { version = "0.6", features = ["cors"] }
 # Base de datos PostgreSQL
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "chrono"] }
 
+# Allocator optimizado para 2GB Lightsail
+mimalloc = "0.1"
+
 [[bin]]
 name = "polymarket-backend"
 path = "src/main.rs"

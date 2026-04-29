@@ -4,6 +4,10 @@
 
 #![allow(dead_code)]
 
+use mimalloc::MiMalloc;
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 mod modules;
 
 use std::sync::{mpsc, Arc, Mutex};

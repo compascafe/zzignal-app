@@ -723,3 +723,32 @@ pub async fn list_session_trades(state: &AppState, session_id: i32) -> Result<Ve
         .cloned()
         .collect())
 }
+
+// ─── HFT Snapshots (unified 20-column format) ─────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct HftSnapshotRow {
+    pub id:                     i32,
+    pub ts:                     DateTime<Utc>,
+    pub btc_price_binance:      Option<f64>,
+    pub btc_bid_vol_5:          Option<f64>,
+    pub btc_ask_vol_5:          Option<f64>,
+    pub poly_mid_price:         Option<f64>,
+    pub poly_imbalance:         Option<f64>,
+    pub latency_delta:          Option<f64>,
+    pub session_id:             Option<i32>,
+    pub binance_lag_ms:         Option<i64>,
+    pub binance_micro_price_at_t: Option<f64>,
+    pub created_at:             DateTime<Utc>,
+}
+
+pub async fn query_hft_snapshots(pool: Option<&PgPool>, session_id: i32) -> Result<Vec<HftSnapshotRow>> {
+    let Some(pool) = pool else { return Ok(vec![]) };
+    let rows = sqlx::query_as::<_, HftSnapshotRow>(
+        "SELECT * FROM hft_snapshots WHERE session_id = $1 ORDER BY ts ASC"
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
