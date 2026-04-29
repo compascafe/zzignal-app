@@ -7,25 +7,22 @@ use chrono::Utc;
 
 use crate::modules::hft::types::HftMetrics;
 
-/// Fila de CSV con el formato solicitado:
-/// timestamp, btc_price_binance, btc_bid_vol_5, btc_ask_vol_5,
-/// poly_mid_price, poly_imbalance, latency_delta
 #[derive(Debug, Clone)]
 struct CsvRow {
-    ts:              String,
-    btc_price:       f64,
-    btc_bid_vol_5:   f64,
-    btc_ask_vol_5:   f64,
-    poly_mid_price:  f64,
-    poly_imbalance:  f64,
-    latency_delta:   f64,
+    ts:                     String,
+    btc_price:              f64,
+    btc_bid_vol_5:          f64,
+    btc_ask_vol_5:          f64,
+    binance_lag_ms:         i64,
+    binance_micro_price_at_t: f64,
+    poly_mid_price:         f64,
+    poly_imbalance:         f64,
+    latency_delta:          f64,
 }
 
-/// Buffer de CSV con flush automático cada 60 segundos.
-/// Thread-safe: usa Mutex<Vec> para escrituras concurrentes.
 pub struct CsvLogger {
-    path:    String,
-    buffer:  Mutex<Vec<CsvRow>>,
+    path:   String,
+    buffer: Mutex<Vec<CsvRow>>,
 }
 
 impl CsvLogger {
@@ -36,23 +33,23 @@ impl CsvLogger {
         }
     }
 
-    /// Añade una fila al buffer desde las métricas HFT.
     pub fn push(&self, metrics: &HftMetrics) {
         let row = CsvRow {
-            ts:             Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
-            btc_price:      metrics.btc_price_binance,
-            btc_bid_vol_5:  metrics.binance_bid_vol_5,
-            btc_ask_vol_5:  metrics.binance_ask_vol_5,
-            poly_mid_price: metrics.poly_mid_price,
-            poly_imbalance: metrics.poly_imbalance,
-            latency_delta:  metrics.latency_delta,
+            ts:                      Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            btc_price:               metrics.btc_price_binance,
+            btc_bid_vol_5:           metrics.binance_bid_vol_5,
+            btc_ask_vol_5:           metrics.binance_ask_vol_5,
+            binance_lag_ms:          metrics.binance_lag_ms,
+            binance_micro_price_at_t: metrics.binance_micro_price_at_t,
+            poly_mid_price:          metrics.poly_mid_price,
+            poly_imbalance:          metrics.poly_imbalance,
+            latency_delta:           metrics.latency_delta,
         };
         if let Ok(mut buf) = self.buffer.lock() {
             buf.push(row);
         }
     }
 
-    /// Flush del buffer a disco. Si el archivo no tiene headers, los escribe primero.
     pub fn flush(&self) {
         let rows: Vec<CsvRow> = {
             let mut buf = match self.buffer.lock() {
@@ -76,22 +73,23 @@ impl CsvLogger {
             }
         };
 
-        // Escribir header si es primera vez
         if !file_exists {
             let _ = writeln!(
                 file,
-                "timestamp,btc_price_binance,btc_bid_vol_5,btc_ask_vol_5,poly_mid_price,poly_imbalance,latency_delta"
+                "timestamp,btc_price_binance,btc_bid_vol_5,btc_ask_vol_5,binance_lag_ms,binance_micro_price_at_t,poly_mid_price,poly_imbalance,latency_delta"
             );
         }
 
         for row in &rows {
             let _ = writeln!(
                 file,
-                "{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{}",
                 row.ts,
                 row.btc_price,
                 row.btc_bid_vol_5,
                 row.btc_ask_vol_5,
+                row.binance_lag_ms,
+                row.binance_micro_price_at_t,
                 row.poly_mid_price,
                 row.poly_imbalance,
                 row.latency_delta,
@@ -99,13 +97,9 @@ impl CsvLogger {
         }
 
         if rows.len() > 10 {
-            tracing::info!("HFT CSV: {} ({:.1} KB)", self.path, estimate_kb(&rows));
+            tracing::info!("HFT CSV: {} ({:.1} KB)", self.path, rows.len() as f64 * 140.0 / 1024.0);
         }
     }
-}
-
-fn estimate_kb(rows: &[CsvRow]) -> f64 {
-    rows.len() as f64 * 120.0 / 1024.0
 }
 
 /// Tarea de fondo: flush del CSV cada 60 segundos.

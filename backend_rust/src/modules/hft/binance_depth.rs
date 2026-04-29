@@ -8,22 +8,17 @@ use tokio_tungstenite::connect_async;
 use tracing::{info, warn};
 
 use crate::modules::core::worker::PriceLevel;
-use crate::modules::hft::types::BinanceDepth;
+use crate::modules::hft::types::{BinanceDepth, BinanceState, PriceRingBuffer};
 
-/// Binance combined stream: depth20@100ms + ticker en una sola conexión WebSocket.
-///
-/// Formato de mensajes recibidos:
-/// ```json
-/// {"stream":"btcusdt@depth20@100ms","data":{"lastUpdateId":...,"bids":[...],"asks":[...]}}
-/// {"stream":"btcusdt@ticker","data":{"e":"24hrTicker","E":...,"c":"...","v":"..."}}
-/// ```
 const BINANCE_COMBINED_WS: &str =
     "wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/btcusdt@ticker";
 
-/// Tarea de fondo: conecta al WebSocket combinado de Binance y mantiene
-/// actualizado `state.binance_depth` con el último snapshot de profundidad.
+/// Tarea de fondo: conecta al WebSocket combinado de Binance.
+/// - Escribe el snapshot completo en `depth: RwLock<BinanceDepth>`
+/// - Pushea estado compacto en `ring: PriceRingBuffer` (lock-free)
 pub async fn run_binance_depth_stream(
     depth:  Arc<RwLock<Option<BinanceDepth>>>,
+    ring:   Arc<PriceRingBuffer>,
     mut shutdown: broadcast::Receiver<()>,
 ) {
     let mut backoff = Duration::from_secs(2);
@@ -72,20 +67,11 @@ pub async fn run_binance_depth_stream(
                                         Some(d) => d,
                                         None => continue,
                                     };
-                                    let event_time = data
-                                        .get("E")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or(0);
-                                    let btc_price = data
-                                        .get("c")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                        .unwrap_or(0.0);
-                                    let btc_volume_24h = data
-                                        .get("v")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                        .unwrap_or(0.0);
+                                    let event_time = data.get("E").and_then(|v| v.as_i64()).unwrap_or(0);
+                                    let btc_price  = data.get("c").and_then(|v| v.as_str())
+                                        .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                                    let btc_volume_24h = data.get("v").and_then(|v| v.as_str())
+                                        .and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
 
                                     if let Some(ref mut d) = last_depth {
                                         d.event_time = event_time;
@@ -107,9 +93,7 @@ pub async fn run_binance_depth_stream(
                                         .unwrap_or(0);
 
                                     let parse_levels = |arr: &serde_json::Value| -> Vec<PriceLevel> {
-                                        arr.as_array()
-                                            .iter()
-                                            .flat_map(|a| a.iter())
+                                        arr.as_array().iter().flat_map(|a| a.iter())
                                             .filter_map(|entry| {
                                                 let pair = entry.as_array()?;
                                                 let price = pair.get(0)?.as_str()?.parse::<f64>().ok()?;
@@ -123,10 +107,11 @@ pub async fn run_binance_depth_stream(
                                     let bids = data.get("bids").map_or(vec![], |b| parse_levels(b));
                                     let asks = data.get("asks").map_or(vec![], |a| parse_levels(a));
 
+                                    // ── Full depth snapshot ──────────────────────
                                     let current = BinanceDepth {
                                         last_update_id,
-                                        bids,
-                                        asks,
+                                        bids: bids.clone(),
+                                        asks: asks.clone(),
                                         event_time:     last_depth.as_ref().map_or(0, |d| d.event_time),
                                         local_time:     now_ms,
                                         btc_price:      last_depth.as_ref().map_or(0.0, |d| d.btc_price),
@@ -135,6 +120,34 @@ pub async fn run_binance_depth_stream(
 
                                     *depth.write().await = Some(current.clone());
                                     last_depth = Some(current);
+
+                                    // ── Compact ring buffer push (lock-free) ────
+                                    let bb_bid = bids.first().map(|l| l.price).unwrap_or(0.0);
+                                    let bb_ask = asks.first().map(|l| l.price).unwrap_or(0.0);
+                                    let mid_p  = if bb_bid > 0.0 && bb_ask > 0.0 { (bb_bid + bb_ask) / 2.0 } else { 0.0 };
+                                    let bid_vol_5: f64 = bids.iter().take(5).map(|l| l.size).sum();
+                                    let ask_vol_5: f64 = asks.iter().take(5).map(|l| l.size).sum();
+                                    let bid_vol_20: f64 = bids.iter().map(|l| l.size).sum();
+                                    let ask_vol_20: f64 = asks.iter().map(|l| l.size).sum();
+                                    let total_liq = bid_vol_20 + ask_vol_20;
+                                    let imb = if total_liq > 0.0 {
+                                        ((bid_vol_20 - ask_vol_20) / total_liq) as f32
+                                    } else { 0.0f32 };
+                                    let mic_p = {
+                                        let tv = bid_vol_5 + ask_vol_5;
+                                        if tv > 0.0 { (ask_vol_5 * bb_bid + bid_vol_5 * bb_ask) / tv }
+                                        else { mid_p }
+                                    };
+
+                                    let evt_ms = last_depth.as_ref().map_or(0, |d| d.event_time) as u64;
+                                    let compact = BinanceState {
+                                        timestamp:       if evt_ms > 0 { evt_ms } else { now_ms as u64 },
+                                        mid_price:       mid_p,
+                                        micro_price:     mic_p,
+                                        total_liquidity: total_liq,
+                                        imbalance:       imb,
+                                    };
+                                    ring.push(compact);
                                 }
 
                                 _ => {}

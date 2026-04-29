@@ -24,6 +24,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
         ("009_session_tags",              include_str!("../db/migrations/009_session_tags.sql")),
         ("010_force_tags",                include_str!("../db/migrations/010_force_tags.sql")),
         ("011_hft_binance_depth",         include_str!("../db/migrations/011_hft_binance_depth.sql")),
+        ("012_ring_buffer_lookback",      include_str!("../db/migrations/012_ring_buffer_lookback.sql")),
     ];
 
     for (name, sql) in migrations {

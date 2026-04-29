@@ -2,11 +2,11 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use crate::modules::core::worker::PriceLevel;
-use crate::modules::hft::types::{BinanceDepth, HftMetrics};
+use crate::modules::hft::types::{BinanceDepth, HftMetrics, PriceRingBuffer};
 
 /// Ventana deslizante para VPIN (rolling window de las últimas N muestras)
 pub struct VpinWindow {
-    buffer:   VecDeque<f64>,   // valores de imbalance individual
+    buffer:   VecDeque<f64>,
     max_size: usize,
     sum:      f64,
 }
@@ -44,45 +44,46 @@ impl VpinState {
 }
 
 /// Calcula micro-price (volume-weighted mid-price) de un libro de órdenes.
-/// P = (ask_vol * best_bid + bid_vol * best_ask) / (bid_vol + ask_vol)
 pub fn micro_price(best_bid: f64, best_ask: f64, bid_vol_top5: f64, ask_vol_top5: f64) -> f64 {
     let total_vol = bid_vol_top5 + ask_vol_top5;
     if total_vol <= 0.0 { return (best_bid + best_ask) / 2.0; }
     (ask_vol_top5 * best_bid + bid_vol_top5 * best_ask) / total_vol
 }
 
-/// Volume Buy-Sell imbalance (VBS)
-/// VBS = (bid_vol - ask_vol) / (bid_vol + ask_vol)
-/// Rango: -1 (puro sell) a +1 (puro buy)
+/// Volume Buy-Sell imbalance (VBS). Rango: -1 (puro sell) a +1 (puro buy)
 pub fn vbs(bid_vol: f64, ask_vol: f64) -> f64 {
     let total = bid_vol + ask_vol;
     if total <= 0.0 { return 0.0; }
     (bid_vol - ask_vol) / total
 }
 
-/// Depth ratio: bid_volume / ask_volume. > 1 = bid-heavy, < 1 = ask-heavy.
+/// Depth ratio: bid_volume / ask_volume
 pub fn depth_ratio(bid_vol: f64, ask_vol: f64) -> f64 {
     if ask_vol <= 0.0 { return if bid_vol > 0.0 { f64::INFINITY } else { 1.0 }; }
     bid_vol / ask_vol
 }
 
-/// Spread absoluto: best_ask - best_bid
 pub fn spread(best_bid: f64, best_ask: f64) -> f64 { best_ask - best_bid }
 
-/// Suma volumen de los primeros N niveles
 fn sum_vol(levels: &[PriceLevel], n: usize) -> f64 {
     levels.iter().take(n).map(|l| l.size).sum()
 }
 
-/// Calcula todas las métricas HFT a partir de los snapshots de ambos libros.
-/// - `binance`: último snapshot de Binance
-/// - `poly_bids`, `poly_asks`: snapshot actual del Polymarket
+/// Calcula todas las métricas HFT a partir de los snapshots de ambos libros
+/// + look-back en el ring buffer de Binance.
+///
+/// - `binance`: snapshot actual completo de Binance (latest depth)
+/// - `ring`: ring buffer con histórico de estados compactos de Binance
+/// - `poly_event_ts`: timestamp local del evento de Polymarket (ms)
+/// - `poly_bids`, `poly_asks`: snapshot del Polymarket
 /// - `vpin_state`: estado acumulado de VPIN
 pub fn compute_hft_metrics(
-    binance:   &BinanceDepth,
-    poly_bids: &[PriceLevel],
-    poly_asks: &[PriceLevel],
-    vpin_state: &VpinState,
+    binance:       &BinanceDepth,
+    ring:          &PriceRingBuffer,
+    poly_event_ts: i64,
+    poly_bids:     &[PriceLevel],
+    poly_asks:     &[PriceLevel],
+    vpin_state:    &VpinState,
 ) -> HftMetrics {
     // ─── Binance depth ──────────────────────────────────────────────
     let bb_bid = binance.bids.first().map(|l| l.price).unwrap_or(0.0);
@@ -101,15 +102,22 @@ pub fn compute_hft_metrics(
     let btc_price_binance       = if bb_bid > 0.0 && bb_ask > 0.0 { (bb_bid + bb_ask) / 2.0 } else { 0.0 };
     let binance_micro_price     = micro_price(bb_bid, bb_ask, binance_bid_vol_5, binance_ask_vol_5);
 
-    // VPIN: acumula el VBS (imbalance) en la ventana deslizante
+    // VPIN
     {
         let mut window = vpin_state.window.lock().unwrap();
         window.push(binance_vbs_val.abs());
     }
     let binance_vpin_val = vpin_state.window.lock().unwrap().vpin();
 
-    // Latencia: tiempo local - tiempo del evento de Binance (ms)
     let latency_delta = (binance.local_time - binance.event_time) as f64;
+
+    // ─── Look-back: ring buffer ─────────────────────────────────────
+    let (binance_lag_ms, binance_micro_price_at_t) = if let Some(hist_state) = ring.get_closest_to(poly_event_ts as u64) {
+        let lag = poly_event_ts - hist_state.timestamp as i64;
+        (lag, hist_state.micro_price)
+    } else {
+        (0, binance_micro_price)
+    };
 
     // ─── Polymarket depth ───────────────────────────────────────────
     let pb_bid = poly_bids.first().map(|l| l.price).unwrap_or(0.0);
@@ -139,6 +147,8 @@ pub fn compute_hft_metrics(
         binance_ask_vol_20,
         binance_event_time:   binance.event_time,
         latency_delta,
+        binance_lag_ms,
+        binance_micro_price_at_t,
         poly_mid_price,
         poly_micro_price:     poly_micro,
         poly_spread:          poly_spread_val,

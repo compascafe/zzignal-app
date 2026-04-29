@@ -566,12 +566,12 @@ pub async fn insert_session_snapshot(
     binance_depth_asks:  Option<Value>,
 ) -> Result<()> {
     if let Some(pool) = state.db.as_ref() {
-        // Usar la query con las columnas HFT si hay métricas disponibles
         let (m_bn_bid_vol_5, m_bn_ask_vol_5,
              m_bn_bid_vol_10, m_bn_ask_vol_10,
              m_bn_bid_vol_20, m_bn_ask_vol_20,
              m_bn_mid, m_bn_micro, m_bn_vbs, m_bn_vpin, m_bn_depth_r, m_bn_spread,
-             m_bn_evt, m_latency, m_poly_micro, m_poly_vbs) =
+             m_bn_evt, m_latency, m_poly_micro, m_poly_vbs,
+             m_bn_lag, m_bn_micro_at_t) =
             if let Some(m) = hft_metrics {
                 (Some(m.binance_bid_vol_5), Some(m.binance_ask_vol_5),
                  Some(m.binance_bid_vol_10), Some(m.binance_ask_vol_10),
@@ -580,9 +580,10 @@ pub async fn insert_session_snapshot(
                  Some(m.binance_vbs), Some(m.binance_vpin),
                  Some(m.binance_depth_ratio), Some(m.binance_spread),
                  Some(m.binance_event_time), Some(m.latency_delta),
-                 Some(m.poly_micro_price), Some(m.poly_vbs))
+                 Some(m.poly_micro_price), Some(m.poly_vbs),
+                 Some(m.binance_lag_ms), Some(m.binance_micro_price_at_t))
             } else {
-                (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
+                (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
             };
 
         sqlx::query(
@@ -596,9 +597,9 @@ pub async fn insert_session_snapshot(
                  binance_bid_vol_20, binance_ask_vol_20,
                  binance_mid_price, binance_micro_price, binance_vbs, binance_vpin,
                  binance_depth_ratio, binance_spread, binance_event_time, latency_delta,
-                 poly_micro_price, poly_vbs)
+                 poly_micro_price, poly_vbs, binance_lag_ms, binance_micro_price_at_t)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-                    $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
+                    $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40)
             "#
         )
         .bind(session_id)
@@ -639,6 +640,8 @@ pub async fn insert_session_snapshot(
         .bind(m_latency)
         .bind(m_poly_micro)
         .bind(m_poly_vbs)
+        .bind(m_bn_lag)
+        .bind(m_bn_micro_at_t)
         .execute(pool)
         .await?;
 
@@ -653,8 +656,9 @@ pub async fn insert_session_snapshot(
                 r#"
                 INSERT INTO hft_snapshots
                     (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5,
-                     poly_mid_price, poly_imbalance, latency_delta, session_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7)
+                     poly_mid_price, poly_imbalance, latency_delta, session_id,
+                     binance_lag_ms, binance_micro_price_at_t)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
                 "#
             )
             .bind(m.btc_price_binance)
@@ -664,6 +668,8 @@ pub async fn insert_session_snapshot(
             .bind(m.poly_imbalance)
             .bind(m.latency_delta)
             .bind(session_id)
+            .bind(m.binance_lag_ms)
+            .bind(m.binance_micro_price_at_t)
             .execute(pool)
             .await;
         }

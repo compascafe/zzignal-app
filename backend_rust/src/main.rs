@@ -16,6 +16,7 @@ mod modules;
 
 use std::sync::{mpsc, Arc, Mutex};
 
+use chrono::Utc;
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -24,6 +25,7 @@ use crate::modules::core::credentials::ClobCredentials;
 use crate::modules::core::state::AppState;
 use crate::modules::core::persistence as db;
 use crate::modules::hft::types::BinanceDepth;
+use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::VpinState;
 use crate::modules::hft::logger::CsvLogger;
 
@@ -80,7 +82,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ─── HFT Module ─────────────────────────────────────────────────────────────
     let binance_depth = Arc::new(RwLock::new(None::<BinanceDepth>));
-    let vpin_state    = Arc::new(VpinState::new(50)); // VPIN window: últimas 50 muestras
+    let binance_ring  = Arc::new(PriceRingBuffer::new());
+    let vpin_state    = Arc::new(VpinState::new(50));
     let csv_logger    = Arc::new(CsvLogger::new("hft_snapshots.csv"));
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
@@ -93,6 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db,
         Arc::clone(&btc_provider_tx),
         Arc::clone(&binance_depth),
+        Arc::clone(&binance_ring),
         Arc::clone(&vpin_state),
         Arc::clone(&csv_logger),
     );
@@ -118,9 +122,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Binance depth stream (HFT module) — tarea de fondo
     {
         let depth2    = Arc::clone(&binance_depth);
+        let ring2     = Arc::clone(&binance_ring);
         let shutdown2 = shutdown_tx.subscribe();
         tokio::spawn(async move {
-            crate::modules::hft::binance_depth::run_binance_depth_stream(depth2, shutdown2).await;
+            crate::modules::hft::binance_depth::run_binance_depth_stream(depth2, ring2, shutdown2).await;
         });
     }
 
@@ -171,7 +176,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Consumer de AppMsg: actualiza estado + persiste en DB + hace broadcast WS
     {
         let state2 = Arc::clone(&state);
-        // Bridge std::mpsc → tokio mpsc para poder usarlo en async
         let (bridge_tx, mut bridge_rx) = tokio_mpsc::unbounded_channel::<AppMsg>();
         std::thread::spawn(move || {
             while let Ok(msg) = rx.recv() {
@@ -180,11 +184,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         tokio::spawn(async move {
             while let Some(msg) = bridge_rx.recv().await {
-                // Broadcast JSON a clientes WS
                 if let Some(json) = msg.to_json() {
                     let _ = state2.broadcast_tx.send(json);
                 }
-                // Actualizar estado en memoria y persistir en DB
                 update_state(&msg, &state2).await;
             }
         });
@@ -196,9 +198,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("============================================");
     info!(" Polymarket BTC 15-min Backend");
-    info!(" REST API:  http://{}/api/...", addr);
-    info!(" WebSocket: ws://{}/ws", addr);
-    info!(" HFT CSV:   hft_snapshots.csv");
+    info!(" REST API:    http://{}/api/...", addr);
+    info!(" WebSocket:   ws://{}/ws", addr);
+    info!(" HFT CSV:     hft_snapshots.csv");
+    info!(" Ring Buffer: {} slots", binance_ring.len());
     info!("============================================");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -209,7 +212,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 // ─── Consumer de AppMsg ───────────────────────────────────────────────────────
 
-/// Tick counter para muestrear BTC ticks (1 de cada 10 actualizaciones → ~1/s)
 static BTC_TICK_COUNTER: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 
@@ -308,6 +310,9 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
         None => return,
     };
 
+    // Timestamp local del evento de Polymarket (ms) para look-back
+    let poly_event_ts = Utc::now().timestamp_millis();
+
     let best_bid = bids.first().map(|l| l.price);
     let best_bid_sz = bids.first().map(|l| l.size);
     let best_ask = asks.first().map(|l| l.price);
@@ -315,7 +320,6 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
     let spread = best_bid.and_then(|bb| best_ask.map(|ba| ba - bb));
     let mid_price = best_bid.and_then(|bb| best_ask.map(|ba| (bb + ba) / 2.0));
 
-    // Volume breakdown by depth (Polymarket)
     let bid_volume_5: f64 = bids.iter().take(5).map(|l| l.size).sum();
     let ask_volume_5: f64 = asks.iter().take(5).map(|l| l.size).sum();
     let bid_volume_10: f64 = bids.iter().take(10).map(|l| l.size).sum();
@@ -323,27 +327,23 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
     let bid_volume: f64 = bids.iter().map(|l| l.size).sum();
     let ask_volume: f64 = asks.iter().map(|l| l.size).sum();
 
-    // Imbalance ratio (Polymarket)
     let imbalance_ratio = if ask_volume > 0.0 { Some(bid_volume / ask_volume) } else { None };
-
-    // UP/DOWN probability
     let up_probability = mid_price;
     let down_probability = mid_price.map(|p| 1.0 - p);
 
-    // Capture FULL order book (all levels) in JSONB
     let depth_bids = json!(bids.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
     let depth_asks = json!(asks.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
 
     let btc_price = *state.btc_price.read().await;
 
-    // ─── HFT metrics: cross-exchange Binance ↔ Polymarket ──────────────────
+    // ─── HFT metrics: cross-exchange + look-back via ring buffer ──────────
     let binance_opt = state.binance_depth.read().await.clone();
 
     let (hft_fields, hft_json_bids, hft_json_asks) = if let Some(ref binance) = binance_opt {
         let metrics = crate::modules::hft::metrics::compute_hft_metrics(
-            binance, bids, asks, &state.vpin_state,
+            binance, &state.binance_ring, poly_event_ts,
+            bids, asks, &state.vpin_state,
         );
-        // Push to CSV logger
         state.csv_logger.push(&metrics);
 
         let bn_bids_json = json!(binance.bids.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());

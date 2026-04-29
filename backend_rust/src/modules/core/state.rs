@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use crate::modules::core::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
 use crate::modules::db::models::{RecordingSession, SessionSnapshot, SessionTrade};
 use crate::modules::hft::types::BinanceDepth;
+use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::VpinState;
 use crate::modules::hft::logger::CsvLogger;
 
@@ -51,8 +52,11 @@ pub struct AppState {
     pub mem_trades:      RwLock<Vec<SessionTrade>>,
 
     // ─── HFT Module ─────────────────────────────────────────────────────────
-    /// Último snapshot del order book de Binance (top 20 niveles, actualizado cada 100ms)
+    /// Último snapshot completo del order book de Binance (top 20 niveles)
     pub binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
+
+    /// Ring buffer lock-free con histórico compacto de estados de Binance
+    pub binance_ring:    Arc<PriceRingBuffer>,
 
     /// Estado acumulado de VPIN (ventana deslizante)
     pub vpin_state:      Arc<VpinState>,
@@ -66,6 +70,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cmd_tx:          tokio_mpsc::UnboundedSender<CmdMsg>,
         broadcast_tx:    broadcast::Sender<String>,
@@ -74,6 +79,7 @@ impl AppState {
         db:              Option<PgPool>,
         btc_provider_tx: Arc<tokio::sync::watch::Sender<BtcPriceProvider>>,
         binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
+        binance_ring:    Arc<PriceRingBuffer>,
         vpin_state:      Arc<VpinState>,
         csv_logger:      Arc<CsvLogger>,
     ) -> Arc<Self> {
@@ -102,6 +108,7 @@ impl AppState {
             mem_snapshots:   RwLock::new(vec![]),
             mem_trades:      RwLock::new(vec![]),
             binance_depth,
+            binance_ring,
             vpin_state,
             csv_logger,
             #[cfg(feature = "premium-patterns")]
