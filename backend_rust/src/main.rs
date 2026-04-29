@@ -301,7 +301,8 @@ use crate::modules::db::repository as session_repo;
 use serde_json::json;
 
 async fn capture_book_db(state: &AppState, side: &str, bids: &[PriceLevel], asks: &[PriceLevel]) {
-    let session_id = match *state.recording_session.read().await { Some(id) => id, None => return };
+    let session_ids = state.recording_sessions.read().await.clone();
+    if session_ids.is_empty() { return; }
 
     let best_bid = bids.first().map(|l| l.price);
     let best_bid_sz = bids.first().map(|l| l.size);
@@ -320,27 +321,32 @@ async fn capture_book_db(state: &AppState, side: &str, bids: &[PriceLevel], asks
     let dasks = json!(asks.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
     let btc_price = *state.btc_price.read().await;
 
-    if let Err(e) = session_repo::insert_session_snapshot(
-        state, session_id, side,
-        best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
-        Some(bid_vol_5), Some(ask_vol_5), Some(bid_vol_10), Some(ask_vol_10),
-        Some(bid_vol), Some(ask_vol), imb, mid_price, mid_price.map(|p| 1.0 - p),
-        Some(dbids), Some(dasks), btc_price,
-        None, None, None,
-    ).await { warn!("Session snapshot: {}", e); }
+    for &session_id in &session_ids {
+        if let Err(e) = session_repo::insert_session_snapshot(
+            state, session_id, side,
+            best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
+            Some(bid_vol_5), Some(ask_vol_5), Some(bid_vol_10), Some(ask_vol_10),
+            Some(bid_vol), Some(ask_vol), imb, mid_price, mid_price.map(|p| 1.0 - p),
+            Some(dbids.clone()), Some(dasks.clone()), btc_price,
+            None, None, None,
+        ).await { warn!("Session snapshot #{}: {}", session_id, e); }
+    }
 }
 
 async fn capture_fills_db(state: &AppState, fills: &[crate::modules::core::worker::RecentFill]) {
-    let session_id = match *state.recording_session.read().await { Some(id) => id, None => return };
+    let session_ids = state.recording_sessions.read().await.clone();
+    if session_ids.is_empty() { return; }
     for fill in fills {
         let btc_price = *state.btc_price.read().await;
         let trade_side = match fill.side {
             crate::modules::core::worker::OrderSide::Buy => "buy",
             crate::modules::core::worker::OrderSide::Sell => "sell",
         };
-        if let Err(e) = session_repo::insert_session_trade(
-            state, session_id, &fill.outcome, trade_side, fill.price, fill.size, btc_price,
-        ).await { warn!("Session trade: {}", e); }
+        for &session_id in &session_ids {
+            if let Err(e) = session_repo::insert_session_trade(
+                state, session_id, &fill.outcome, trade_side, fill.price, fill.size, btc_price,
+            ).await { warn!("Session trade #{}: {}", session_id, e); }
+        }
     }
 }
 
@@ -398,23 +404,25 @@ async fn capture_combined(
     // In-memory buffer (always — works without PostgreSQL)
     state.mem_hft.write().await.push(rec.clone());
 
-    // DB insert (only if PostgreSQL is available)
-    let session_id = *state.recording_session.read().await;
-    if let (Some(pool), Some(sid)) = (state.db.as_ref(), session_id) {
-        let _ = sqlx::query(
-            "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
-        )
-        .bind(rec.binance_price)
-        .bind(rec.binance_vol_100ms)
-        .bind(0.0f64)
-        .bind(rec.poly_mid)
-        .bind(rec.poly_imbalance)
-        .bind(rec.latencia_ms as f64)
-        .bind(sid)
-        .bind(rec.latencia_ms)
-        .bind(rec.binance_micro_price)
-        .execute(pool)
-        .await;
+    // DB insert (only if PostgreSQL is available) — write to all recording sessions
+    let session_ids = state.recording_sessions.read().await.clone();
+    if let Some(pool) = state.db.as_ref() {
+        for &sid in &session_ids {
+            let _ = sqlx::query(
+                "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
+            )
+            .bind(rec.binance_price)
+            .bind(rec.binance_vol_100ms)
+            .bind(0.0f64)
+            .bind(rec.poly_mid)
+            .bind(rec.poly_imbalance)
+            .bind(rec.latencia_ms as f64)
+            .bind(sid)
+            .bind(rec.latencia_ms)
+            .bind(rec.binance_micro_price)
+            .execute(pool)
+            .await;
+        }
     }
 }
 

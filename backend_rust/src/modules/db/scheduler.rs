@@ -142,10 +142,7 @@ async fn process_sessions(state: Arc<AppState>) {
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("No se pudo detener sesión #{}: {}", session.id, e);
         } else {
-            let mut rec = state.recording_session.write().await;
-            if *rec == Some(session.id) {
-                *rec = None;
-            }
+            state.recording_sessions.write().await.retain(|&sid| sid != session.id);
             info!("Sesión #{} completada. Final price (BTC): {:?}", session.id, btc_price);
         }
         if let Some(pid) = parent_id {
@@ -158,15 +155,10 @@ async fn process_sessions(state: Arc<AppState>) {
         auto_generate_child(&state, pid).await;
     }
 
-    // 3. Iniciar sesiones programadas (solo si no hay ya una grabando)
-    let current_rec = *state.recording_session.read().await;
-    if current_rec.is_some() {
-        return;
-    }
-
-    // Restart recovery: padres grabando sin hijos activos
+    // 3. Restart recovery: padres grabando sin hijos activos
     recover_orphaned_parents(&state).await;
 
+    // 4. Iniciar sesiones programadas (multi-sesión: todas las que toque)
     let to_start = match repository::get_sessions_to_start(&state).await {
         Ok(list) => list,
         Err(e)   => { warn!("Session scheduler start query: {}", e); return; }
@@ -174,10 +166,10 @@ async fn process_sessions(state: Arc<AppState>) {
     for session in to_start {
         let btc_price = *state.btc_price.read().await;
         info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
-        *state.recording_session.write().await = Some(session.id);
+        state.recording_sessions.write().await.push(session.id);
         if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
             warn!("No se pudo iniciar sesión #{}: {}", session.id, e);
-            *state.recording_session.write().await = None;
+            state.recording_sessions.write().await.retain(|&sid| sid != session.id);
         } else {
             info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
         }

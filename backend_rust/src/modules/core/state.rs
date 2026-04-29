@@ -37,7 +37,7 @@ pub struct AppState {
 
     pub db:              Option<PgPool>,
 
-    pub recording_session: RwLock<Option<i32>>,
+    pub recording_sessions: RwLock<Vec<i32>>,
     pub mem_sessions:    RwLock<Vec<RecordingSession>>,
     pub mem_snapshots:   RwLock<Vec<SessionSnapshot>>,
     pub mem_trades:      RwLock<Vec<SessionTrade>>,
@@ -91,7 +91,7 @@ impl AppState {
             broadcast_tx,
             shutdown_tx,
             db,
-            recording_session: RwLock::new(None),
+            recording_sessions: RwLock::new(vec![]),
             mem_sessions:      RwLock::new(vec![]),
             mem_snapshots:     RwLock::new(vec![]),
             mem_trades:        RwLock::new(vec![]),

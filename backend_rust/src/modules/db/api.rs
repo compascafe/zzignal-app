@@ -247,7 +247,7 @@ async fn start_session(
         if let Err(e) = repository::start_session_recording(&s, child_id, btc_price).await {
             warn!("No se pudo iniciar hijo #{}: {}", child_id, e);
         }
-        *s.recording_session.write().await = Some(child_id);
+        s.recording_sessions.write().await.push(child_id);
 
         let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
         return Json(json!({
@@ -346,13 +346,15 @@ async fn stop_session(
         for child in &children {
             if child.status == "recording" || child.status == "scheduled" {
                 let _ = repository::stop_session(&s, child.id, final_price, final_price).await;
+                // Remove child from active recording sessions
+                s.recording_sessions.write().await.retain(|&sid| sid != child.id);
             }
         }
     }
 
     match repository::stop_session(&s, id, final_price, final_price).await {
         Ok(_) => {
-            *s.recording_session.write().await = None;
+            s.recording_sessions.write().await.retain(|&sid| sid != id);
             Json(json!({"ok": true, "message": "Sesión finalizada" }))
         }
         Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
@@ -410,7 +412,7 @@ async fn stop_all_sessions(
         }
     }
 
-    *s.recording_session.write().await = None;
+    s.recording_sessions.write().await.clear();
 
     Json(json!({
         "ok": true,
