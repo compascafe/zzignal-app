@@ -395,7 +395,10 @@ async fn capture_combined(
     };
     state.csv_logger.push(rec.clone());
 
-    // Insert into hft_snapshots DB table for session export
+    // In-memory buffer (always — works without PostgreSQL)
+    state.mem_hft.write().await.push(rec.clone());
+
+    // DB insert (only if PostgreSQL is available)
     let session_id = *state.recording_session.read().await;
     if let (Some(pool), Some(sid)) = (state.db.as_ref(), session_id) {
         let _ = sqlx::query(

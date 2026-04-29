@@ -9,6 +9,7 @@ use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::TrackingState;
 use crate::modules::hft::binance_depth::BinanceTickEvent;
 use crate::modules::hft::logger::CsvLogger;
+use crate::modules::hft::types::CsvRecord;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -42,6 +43,8 @@ pub struct AppState {
     pub mem_trades:      RwLock<Vec<SessionTrade>>,
 
     // ─── HFT Module ─────────────────────────────────────────────────────────
+    /// Buffer en memoria de HFT snapshots (fallback si no hay PostgreSQL)
+    pub mem_hft:         RwLock<Vec<CsvRecord>>,
     pub binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
     pub binance_ring:    Arc<PriceRingBuffer>,
     pub tracking_state:  Arc<TrackingState>,
@@ -92,6 +95,7 @@ impl AppState {
             mem_sessions:      RwLock::new(vec![]),
             mem_snapshots:     RwLock::new(vec![]),
             mem_trades:        RwLock::new(vec![]),
+            mem_hft:           RwLock::new(vec![]),
             binance_depth,
             binance_ring,
             tracking_state,

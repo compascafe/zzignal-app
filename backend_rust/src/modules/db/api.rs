@@ -468,6 +468,15 @@ async fn export_session(
 
     let rows = repository::query_hft_snapshots(s.db.as_ref(), id).await.unwrap_or_default();
 
+    // Fallback to in-memory buffer if DB is empty
+    let has_data = !rows.is_empty();
+    let mem_rows = if !has_data {
+        let mem = s.mem_hft.read().await;
+        mem.iter().cloned().collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
+
     let mut csv = String::new();
     // Metadata header
     csv.push_str("# Session Metadata\n");
@@ -489,26 +498,34 @@ async fn export_session(
     // Unified 20-column header
     csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed\n");
 
-    for r in &rows {
-        csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            r.ts.to_rfc3339(),
-            "",  // ts_exchange — no disponible en hft_snapshots DB
-            "BOOK_UPDATE",  // event_type por defecto; en v2 vendrá del real-time CSV
-            r.binance_lag_ms.unwrap_or(0),
-            r.btc_price_binance.unwrap_or(0.0),
-            r.binance_micro_price_at_t.unwrap_or(0.0),
-            0.0,  // binance_imbalance
-            0.0,  // binance_vol_100ms
-            0.0,  // binance_vol_24h
-            0.0, 0.0,  // poly_bid, poly_ask
-            r.poly_mid_price.unwrap_or(0.0),
-            0.0,  // poly_spread
-            0.0, 0.0,  // poly_bid_vol_all, poly_ask_vol_all
-            r.poly_imbalance.unwrap_or(0.0),
-            "", 0.0, 0.0,  // trade_side, trade_price, trade_size
-            0,   // is_informed
-        ));
+    if has_data {
+        for r in &rows {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                r.ts.to_rfc3339(), "", "BOOK_UPDATE",
+                r.binance_lag_ms.unwrap_or(0),
+                r.btc_price_binance.unwrap_or(0.0),
+                r.binance_micro_price_at_t.unwrap_or(0.0),
+                0.0, 0.0, 0.0,
+                0.0, 0.0,
+                r.poly_mid_price.unwrap_or(0.0),
+                0.0, 0.0, 0.0,
+                r.poly_imbalance.unwrap_or(0.0),
+                "", 0.0, 0.0, 0,
+            ));
+        }
+    } else {
+        for r in &mem_rows {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                r.ts_local, r.ts_exchange, r.event_type.as_str(),
+                r.latencia_ms, r.binance_price, r.binance_micro_price,
+                r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
+                r.poly_bid, r.poly_ask, r.poly_mid, r.poly_spread,
+                r.poly_bid_vol_all, r.poly_ask_vol_all, r.poly_imbalance,
+                r.trade_side, r.trade_price, r.trade_size, r.is_informed,
+            ));
+        }
     }
 
     (StatusCode::OK,
