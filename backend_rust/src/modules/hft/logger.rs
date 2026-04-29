@@ -3,55 +3,29 @@ use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::Utc;
-
-use crate::modules::hft::types::HftMetrics;
-
-#[derive(Debug, Clone)]
-struct CsvRow {
-    ts:                     String,
-    btc_price:              f64,
-    btc_bid_vol_5:          f64,
-    btc_ask_vol_5:          f64,
-    binance_lag_ms:         i64,
-    binance_micro_price_at_t: f64,
-    poly_mid_price:         f64,
-    poly_imbalance:         f64,
-    latency_delta:          f64,
-}
+use crate::modules::hft::types::CsvRecord;
 
 pub struct CsvLogger {
     path:   String,
-    buffer: Mutex<Vec<CsvRow>>,
+    buffer: Mutex<Vec<CsvRecord>>,
 }
 
 impl CsvLogger {
     pub fn new(path: &str) -> Self {
         Self {
             path:   path.to_string(),
-            buffer: Mutex::new(Vec::with_capacity(1024)),
+            buffer: Mutex::new(Vec::with_capacity(2048)),
         }
     }
 
-    pub fn push(&self, metrics: &HftMetrics) {
-        let row = CsvRow {
-            ts:                      Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
-            btc_price:               metrics.btc_price_binance,
-            btc_bid_vol_5:           metrics.binance_bid_vol_5,
-            btc_ask_vol_5:           metrics.binance_ask_vol_5,
-            binance_lag_ms:          metrics.binance_lag_ms,
-            binance_micro_price_at_t: metrics.binance_micro_price_at_t,
-            poly_mid_price:          metrics.poly_mid_price,
-            poly_imbalance:          metrics.poly_imbalance,
-            latency_delta:           metrics.latency_delta,
-        };
+    pub fn push(&self, rec: CsvRecord) {
         if let Ok(mut buf) = self.buffer.lock() {
-            buf.push(row);
+            buf.push(rec);
         }
     }
 
     pub fn flush(&self) {
-        let rows: Vec<CsvRow> = {
+        let rows: Vec<CsvRecord> = {
             let mut buf = match self.buffer.lock() {
                 Ok(b) => b,
                 Err(_) => return,
@@ -76,40 +50,52 @@ impl CsvLogger {
         if !file_exists {
             let _ = writeln!(
                 file,
-                "timestamp,btc_price_binance,btc_bid_vol_5,btc_ask_vol_5,binance_lag_ms,binance_micro_price_at_t,poly_mid_price,poly_imbalance,latency_delta"
+                "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
+                 binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,\
+                 poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
+                 trade_price,trade_size,is_informed"
             );
         }
 
-        for row in &rows {
+        for r in &rows {
             let _ = writeln!(
                 file,
-                "{},{},{},{},{},{},{},{},{}",
-                row.ts,
-                row.btc_price,
-                row.btc_bid_vol_5,
-                row.btc_ask_vol_5,
-                row.binance_lag_ms,
-                row.binance_micro_price_at_t,
-                row.poly_mid_price,
-                row.poly_imbalance,
-                row.latency_delta,
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                r.ts_local,
+                r.ts_exchange,
+                r.event_type.as_str(),
+                r.latencia_ms,
+                r.binance_price,
+                r.binance_micro_price,
+                r.binance_imbalance,
+                r.binance_vol_100ms,
+                r.binance_vol_24h,
+                r.poly_bid,
+                r.poly_ask,
+                r.poly_mid,
+                r.poly_spread,
+                r.poly_bid_vol_all,
+                r.poly_ask_vol_all,
+                r.poly_imbalance,
+                r.trade_side,
+                r.trade_price,
+                r.trade_size,
+                r.is_informed,
             );
         }
 
         if rows.len() > 10 {
-            tracing::info!("HFT CSV: {} ({:.1} KB)", self.path, rows.len() as f64 * 140.0 / 1024.0);
+            tracing::info!("HFT CSV: {} ({} filas)", self.path, rows.len());
         }
     }
 }
 
-/// Tarea de fondo: flush del CSV cada 60 segundos.
+/// Flush del CSV cada 60 segundos.
 pub async fn csv_flush_loop(logger: Arc<CsvLogger>, mut shutdown: tokio::sync::broadcast::Receiver<()>) {
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     loop {
         tokio::select! {
-            _ = interval.tick() => {
-                logger.flush();
-            }
+            _ = interval.tick() => { logger.flush(); }
             _ = shutdown.recv() => {
                 logger.flush();
                 tracing::info!("HFT CSV: flush final y shutdown");

@@ -6,7 +6,6 @@ use sqlx::PgPool;
 
 use crate::modules::core::state::AppState;
 use crate::modules::db::models::{ScheduledExecution, RecordingSession, SessionSnapshot, SessionTrade};
-use crate::modules::hft::types::HftMetrics;
 
 /// Explicit column list for RecordingSession queries.
 /// Uses COALESCE for tag/tag_color so queries work even before migration 009/010.
@@ -560,46 +559,19 @@ pub async fn insert_session_snapshot(
     depth_bids: Option<Value>,
     depth_asks: Option<Value>,
     btc_price: Option<f64>,
-    // ─── HFT cross-exchange metrics ──────────────────────────────────────
-    hft_metrics:         Option<&HftMetrics>,
-    binance_depth_bids:  Option<Value>,
-    binance_depth_asks:  Option<Value>,
+    // Columnas HFT opcionales (None = NULL en DB)
+    _hft_json_bids: Option<Value>,
+    _hft_json_asks: Option<Value>,
+    _hft_metrics: Option<()>,
 ) -> Result<()> {
     if let Some(pool) = state.db.as_ref() {
-        let (m_bn_bid_vol_5, m_bn_ask_vol_5,
-             m_bn_bid_vol_10, m_bn_ask_vol_10,
-             m_bn_bid_vol_20, m_bn_ask_vol_20,
-             m_bn_mid, m_bn_micro, m_bn_vbs, m_bn_vpin, m_bn_depth_r, m_bn_spread,
-             m_bn_evt, m_latency, m_poly_micro, m_poly_vbs,
-             m_bn_lag, m_bn_micro_at_t) =
-            if let Some(m) = hft_metrics {
-                (Some(m.binance_bid_vol_5), Some(m.binance_ask_vol_5),
-                 Some(m.binance_bid_vol_10), Some(m.binance_ask_vol_10),
-                 Some(m.binance_bid_vol_20), Some(m.binance_ask_vol_20),
-                 Some(m.binance_mid_price), Some(m.binance_micro_price),
-                 Some(m.binance_vbs), Some(m.binance_vpin),
-                 Some(m.binance_depth_ratio), Some(m.binance_spread),
-                 Some(m.binance_event_time), Some(m.latency_delta),
-                 Some(m.poly_micro_price), Some(m.poly_vbs),
-                 Some(m.binance_lag_ms), Some(m.binance_micro_price_at_t))
-            } else {
-                (None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
-            };
-
         sqlx::query(
             r#"
             INSERT INTO session_snapshots
                 (session_id, side, best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
                  bid_volume_5, ask_volume_5, bid_volume_10, ask_volume_10, bid_volume, ask_volume,
-                 imbalance_ratio, up_probability, down_probability, depth_bids, depth_asks, btc_price,
-                 binance_depth_bids, binance_depth_asks,
-                 binance_bid_vol_5, binance_ask_vol_5, binance_bid_vol_10, binance_ask_vol_10,
-                 binance_bid_vol_20, binance_ask_vol_20,
-                 binance_mid_price, binance_micro_price, binance_vbs, binance_vpin,
-                 binance_depth_ratio, binance_spread, binance_event_time, latency_delta,
-                 poly_micro_price, poly_vbs, binance_lag_ms, binance_micro_price_at_t)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-                    $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40)
+                 imbalance_ratio, up_probability, down_probability, depth_bids, depth_asks, btc_price)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
             "#
         )
         .bind(session_id)
@@ -622,26 +594,6 @@ pub async fn insert_session_snapshot(
         .bind(depth_bids)
         .bind(depth_asks)
         .bind(btc_price)
-        .bind(binance_depth_bids)
-        .bind(binance_depth_asks)
-        .bind(m_bn_bid_vol_5)
-        .bind(m_bn_ask_vol_5)
-        .bind(m_bn_bid_vol_10)
-        .bind(m_bn_ask_vol_10)
-        .bind(m_bn_bid_vol_20)
-        .bind(m_bn_ask_vol_20)
-        .bind(m_bn_mid)
-        .bind(m_bn_micro)
-        .bind(m_bn_vbs)
-        .bind(m_bn_vpin)
-        .bind(m_bn_depth_r)
-        .bind(m_bn_spread)
-        .bind(m_bn_evt)
-        .bind(m_latency)
-        .bind(m_poly_micro)
-        .bind(m_poly_vbs)
-        .bind(m_bn_lag)
-        .bind(m_bn_micro_at_t)
         .execute(pool)
         .await?;
 
@@ -649,65 +601,23 @@ pub async fn insert_session_snapshot(
             .bind(session_id)
             .execute(pool)
             .await?;
-
-        // También insertar en hft_snapshots (formato CSV-friendly) si hay métricas
-        if let Some(m) = hft_metrics {
-            let _ = sqlx::query(
-                r#"
-                INSERT INTO hft_snapshots
-                    (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5,
-                     poly_mid_price, poly_imbalance, latency_delta, session_id,
-                     binance_lag_ms, binance_micro_price_at_t)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                "#
-            )
-            .bind(m.btc_price_binance)
-            .bind(m.binance_bid_vol_5)
-            .bind(m.binance_ask_vol_5)
-            .bind(m.poly_mid_price)
-            .bind(m.poly_imbalance)
-            .bind(m.latency_delta)
-            .bind(session_id)
-            .bind(m.binance_lag_ms)
-            .bind(m.binance_micro_price_at_t)
-            .execute(pool)
-            .await;
-        }
-
         return Ok(());
     }
 
-    // In-memory (lock ordering fix: always snapshots first, then sessions)
+    // In-memory fallback
     let mut snapshots = state.mem_snapshots.write().await;
     let id = next_snap_id(&snapshots);
     snapshots.push(SessionSnapshot {
-        id,
-        session_id,
-        ts: Utc::now(),
-        side: side.into(),
-        best_bid,
-        best_bid_sz,
-        best_ask,
-        best_ask_sz,
-        spread,
-        mid_price,
-        bid_volume_5,
-        ask_volume_5,
-        bid_volume_10,
-        ask_volume_10,
-        bid_volume,
-        ask_volume,
-        imbalance_ratio,
-        up_probability,
-        down_probability,
-        depth_bids,
-        depth_asks,
-        btc_price,
+        id, session_id, ts: Utc::now(), side: side.into(),
+        best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
+        bid_volume_5, ask_volume_5, bid_volume_10, ask_volume_10,
+        bid_volume, ask_volume,
+        imbalance_ratio, up_probability, down_probability,
+        depth_bids, depth_asks, btc_price,
         created_at: Utc::now(),
     });
-    // increment tick_count — hold snapshots lock until done with sessions to maintain ordering
     let sessions_lock = state.mem_sessions.write();
-    drop(snapshots); // release snapshots FIRST to avoid deadlock with delete_session
+    drop(snapshots);
     let mut sessions = sessions_lock.await;
     if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
         s.tick_count += 1;

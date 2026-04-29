@@ -1,65 +1,100 @@
 use serde::Serialize;
 use crate::modules::core::worker::PriceLevel;
 
-// Re-export compact state from ring_buffer
 pub use crate::modules::hft::ring_buffer::{BinanceState, PriceRingBuffer};
 
-/// Snapshot del order book de Binance (top 20 niveles) — referencia completa
-#[derive(Debug, Clone, Serialize)]
+/// Snapshot completo del order book de Binance (top 20 niveles)
+#[derive(Debug, Clone)]
 pub struct BinanceDepth {
     pub last_update_id: u64,
     pub bids:           Vec<PriceLevel>,
     pub asks:           Vec<PriceLevel>,
-    pub event_time:     i64,  // Binance E (ms)
-    pub local_time:     i64,  // nuestra máquina (ms)
-    pub btc_price:      f64,  // último precio del ticker
-    pub btc_volume_24h: f64,  // volumen 24h del ticker
+    pub event_time:     i64,   // Binance E (ms)
+    pub local_time:     i64,   // nuestra máquina (ms)
+    pub btc_price:      f64,   // último precio del ticker
+    pub btc_volume_24h: f64,   // volumen 24h del ticker
 }
 
 impl Default for BinanceDepth {
     fn default() -> Self {
         Self {
             last_update_id: 0,
-            bids:           vec![],
-            asks:           vec![],
-            event_time:     0,
-            local_time:     0,
-            btc_price:      0.0,
+            bids: vec![],
+            asks: vec![],
+            event_time: 0,
+            local_time: 0,
+            btc_price: 0.0,
             btc_volume_24h: 0.0,
         }
     }
 }
 
-/// Métricas HFT calculadas a partir de los dos libros (Binance + Polymarket)
-#[derive(Debug, Clone, Serialize)]
-pub struct HftMetrics {
-    // ─── Binance (CEX) ──────────────────────────────────────────────
-    pub btc_price_binance:    f64,
-    pub binance_mid_price:    f64,
-    pub binance_micro_price:  f64,
-    pub binance_vbs:          f64,
-    pub binance_vpin:         f64,
-    pub binance_depth_ratio:  f64,
-    pub binance_spread:       f64,
-    pub binance_bid_vol_5:    f64,
-    pub binance_ask_vol_5:    f64,
-    pub binance_bid_vol_10:   f64,
-    pub binance_ask_vol_10:   f64,
-    pub binance_bid_vol_20:   f64,
-    pub binance_ask_vol_20:   f64,
-    pub binance_event_time:   i64,
-    pub latency_delta:        f64,  // ms (local - binance event)
+/// Tipo de evento en el pipeline unificado
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub enum EventType {
+    BookUpdate,
+    Trade,
+    BinanceTick,
+}
 
-    // ─── Look-back (Ring Buffer) ───────────────────────────────────
-    /// Lag entre el evento de Polymarket y el snapshot de Binance más cercano (ms)
-    pub binance_lag_ms:       i64,
-    /// Micro-price del snapshot de Binance en el instante más cercano al evento Poly
-    pub binance_micro_price_at_t: f64,
+impl EventType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BookUpdate => "BOOK_UPDATE",
+            Self::Trade => "TRADE",
+            Self::BinanceTick => "BINANCE_TICK",
+        }
+    }
+}
 
-    // ─── Polymarket (DEX) ───────────────────────────────────────────
-    pub poly_mid_price:       f64,
-    pub poly_micro_price:     f64,
-    pub poly_spread:          f64,
-    pub poly_imbalance:       f64,
-    pub poly_vbs:             f64,
+/// Registro unificado para CSV de 20 columnas (ordenado según especificación).
+#[derive(Debug, Clone)]
+pub struct CsvRecord {
+    pub ts_local:            String,
+    pub ts_exchange:         String,
+    pub event_type:          EventType,
+    pub latencia_ms:         i64,
+    pub binance_price:       f64,
+    pub binance_micro_price: f64,
+    pub binance_imbalance:   f32,
+    pub binance_vol_100ms:   f64,
+    pub binance_vol_24h:     f64,
+    pub poly_bid:            f64,
+    pub poly_ask:            f64,
+    pub poly_mid:            f64,
+    pub poly_spread:         f64,
+    pub poly_bid_vol_all:    f64,
+    pub poly_ask_vol_all:    f64,
+    pub poly_imbalance:      f64,
+    pub trade_side:          String,
+    pub trade_price:         f64,
+    pub trade_size:          f64,
+    pub is_informed:         u8,
+}
+
+impl Default for CsvRecord {
+    fn default() -> Self {
+        Self {
+            ts_local:            String::new(),
+            ts_exchange:         String::new(),
+            event_type:          EventType::BookUpdate,
+            latencia_ms:         0,
+            binance_price:       0.0,
+            binance_micro_price: 0.0,
+            binance_imbalance:   0.0,
+            binance_vol_100ms:   0.0,
+            binance_vol_24h:     0.0,
+            poly_bid:            0.0,
+            poly_ask:            0.0,
+            poly_mid:            0.0,
+            poly_spread:         0.0,
+            poly_bid_vol_all:    0.0,
+            poly_ask_vol_all:    0.0,
+            poly_imbalance:      0.0,
+            trade_side:          String::new(),
+            trade_price:         0.0,
+            trade_size:          0.0,
+            is_informed:         0,
+        }
+    }
 }

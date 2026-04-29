@@ -116,7 +116,7 @@ pub enum AppMsg {
     LastTradeDown(f64),
     Balance(f64),
     BtcOpen(f64),
-    BtcPrice(f64),
+    BtcTick { price: f64, volume: f64, event_time: i64 },
     OrderResult(String),
     OpenOrders(Vec<OpenOrder>),
     RecentFills(Vec<RecentFill>),
@@ -795,7 +795,8 @@ async fn run_btc_price_stream(
                                         }
 
                                         if let Some(p) = price {
-                                            let _ = tx.send(AppMsg::BtcPrice(p));
+                                            let evt = now_ms; // local time when binance tick arrived
+                                            let _ = tx.send(AppMsg::BtcTick { price: p, volume, event_time: evt });
 
                                             // Check for interval change on every tick
                                             if let Ok(iv) = interval_arc.lock() {
@@ -1594,7 +1595,7 @@ impl AppMsg {
             AppMsg::BtcOpen(price) => {
                 Some(format!(r#"{{"type":"btc_price","open":{}}}"#, price))
             }
-            AppMsg::BtcPrice(price) => {
+            AppMsg::BtcTick { price, .. } => {
                 Some(format!(r#"{{"type":"btc_price","price":{}}}"#, price))
             }
             AppMsg::OrderResult(msg) => {

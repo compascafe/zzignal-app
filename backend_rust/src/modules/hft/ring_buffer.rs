@@ -3,7 +3,7 @@ use std::hint;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Capacidad del ring buffer (debe ser potencia de 2).
-const RING_CAP: usize = 2048;
+const RING_CAP: usize = 4096;
 const RING_MASK: usize = RING_CAP - 1;
 
 /// Estado compacto de Binance en un instante. `repr(C)` para layout predecible.
