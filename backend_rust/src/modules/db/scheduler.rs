@@ -2,10 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 use serde_json::json;
+use chrono::Utc;
 
 use crate::modules::core::state::AppState;
 use crate::modules::core::worker::{CmdMsg, OrderSide, Outcome};
-use crate::modules::db::repository;
+use crate::modules::db::{api, repository};
 
 /// Corre en background:
 ///  1. Cada 10s guarda snapshot del order book en PostgreSQL
@@ -127,31 +128,44 @@ async fn process_pending_executions(state: Arc<AppState>) {
 }
 
 async fn process_sessions(state: Arc<AppState>) {
-    // 1. Detener sesiones que ya pasaron su scheduled_end (PRIMERO los stops, para liberar el slot)
+    // 1. Detener sesiones que ya pasaron su scheduled_end
     let to_stop = match repository::get_sessions_to_stop(&state).await {
         Ok(list) => list,
         Err(e)   => { warn!("Session scheduler stop query: {}", e); return; }
     };
+    let mut parents_to_replenish: Vec<i32> = Vec::new();
+
     for session in to_stop {
         let btc_price = *state.btc_price.read().await;
+        let parent_id = session.parent_id;
         info!("Deteniendo sesión #{} (programada hasta {})", session.id, session.scheduled_end.format("%H:%M:%S"));
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("No se pudo detener sesión #{}: {}", session.id, e);
         } else {
-            // Only clear recording_session if this was the active one
             let mut rec = state.recording_session.write().await;
             if *rec == Some(session.id) {
                 *rec = None;
             }
             info!("Sesión #{} completada. Final price (BTC): {:?}", session.id, btc_price);
         }
+        if let Some(pid) = parent_id {
+            parents_to_replenish.push(pid);
+        }
     }
 
-    // 2. Iniciar sesiones programadas (solo si no hay ya una grabando — evita overlaps)
+    // 2. Auto-generar siguiente hijo para padres indefinidos
+    for pid in parents_to_replenish {
+        auto_generate_child(&state, pid).await;
+    }
+
+    // 3. Iniciar sesiones programadas (solo si no hay ya una grabando)
     let current_rec = *state.recording_session.read().await;
     if current_rec.is_some() {
-        return; // Ya hay una sesión grabando, no iniciar otra
+        return;
     }
+
+    // Restart recovery: padres grabando sin hijos activos
+    recover_orphaned_parents(&state).await;
 
     let to_start = match repository::get_sessions_to_start(&state).await {
         Ok(list) => list,
@@ -167,6 +181,62 @@ async fn process_sessions(state: Arc<AppState>) {
         } else {
             info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
         }
+    }
+}
+
+/// Crea el siguiente hijo para un padre indefinido si no tiene hijos activos.
+/// La duración del chunk se lee de parent.duration_min.
+async fn auto_generate_child(state: &AppState, parent_id: i32) {
+    let parent = match repository::get_session_by_id(state, parent_id).await {
+        Ok(Some(p)) => p,
+        _ => return,
+    };
+    if parent.status != "recording" {
+        return;
+    }
+    let chunk_min = parent.duration_min.max(1);
+    let children = repository::list_session_children(state, parent_id).await.unwrap_or_default();
+    let has_active = children.iter().any(|c| c.status == "recording" || c.status == "scheduled");
+    if has_active {
+        return;
+    }
+    let last_end = children.iter().map(|c| c.scheduled_end).max().unwrap_or_else(Utc::now);
+    create_next_child(state, parent_id, parent.depth_levels, last_end, chunk_min).await;
+}
+
+/// Recupera padres indefinidos huérfanos (ej. tras reinicio del backend)
+async fn recover_orphaned_parents(state: &AppState) {
+    let parents = match repository::list_sessions(state, 200).await {
+        Ok(list) => list,
+        Err(_) => return,
+    };
+    for parent in &parents {
+        if parent.status != "recording" || parent.parent_id.is_some() {
+            continue;
+        }
+        let chunk_min = parent.duration_min.max(1);
+        let children = repository::list_session_children(state, parent.id).await.unwrap_or_default();
+        let has_active = children.iter().any(|c| c.status == "recording" || c.status == "scheduled");
+        if has_active {
+            continue;
+        }
+        let last_end = children.iter().map(|c| c.scheduled_end).max().unwrap_or_else(Utc::now);
+        // Redondear al siguiente bloque según chunk_min
+        let slot_secs = (chunk_min as i64) * 60;
+        let secs = last_end.timestamp();
+        let bucket = ((secs / slot_secs) + 1) * slot_secs;
+        let next_start = chrono::DateTime::from_timestamp(bucket, 0)
+            .unwrap_or(last_end + chrono::Duration::minutes(chunk_min as i64));
+        create_next_child(state, parent.id, parent.depth_levels, next_start, chunk_min).await;
+    }
+}
+
+async fn create_next_child(state: &AppState, parent_id: i32, depth_levels: i32, start: chrono::DateTime<Utc>, chunk_min: i32) {
+    let end = start + chrono::Duration::minutes(chunk_min as i64);
+    let name = api::child_session_name(start, chunk_min);
+    match repository::create_session(state, &name, start, end, chunk_min, depth_levels, Some(parent_id)).await {
+        Ok(child_id) => info!("Auto-gen child #{} for parent #{}: {}", child_id, parent_id, name),
+        Err(e) => warn!("Failed to auto-gen child for parent #{}: {}", parent_id, e),
     }
 }
 

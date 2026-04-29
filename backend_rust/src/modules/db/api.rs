@@ -11,6 +11,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tracing::warn;
+
 use crate::modules::core::state::AppState;
 use crate::modules::db::models::ScheduledExecution;
 use crate::modules::db::repository;
@@ -204,17 +206,72 @@ async fn start_session(
     use chrono::{Duration, Timelike};
 
     let now = Utc::now();
-    let indefinite = body.indefinite.unwrap_or(false);
+    let depth = body.depth_levels.max(5).min(50);
 
-    let (scheduled_start, scheduled_end, is_indefinite) = if indefinite {
-        let start = body.scheduled_start.unwrap_or(now);
-        let end = start + Duration::days(365);
-        (start, end, true)
-    } else if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
-        (start, end, false)
+    // ── Indefinite mode: parent + auto-generated children ────────────────────
+    if body.indefinite.unwrap_or(false) {
+        let chunk_min = body.duration_min.max(1); // chunk size: 5, 15, etc. Default 15
+        let parent_start = body.scheduled_start.unwrap_or(now);
+        let parent_end = parent_start + Duration::days(365);
+        let parent_name = if body.name.is_empty() {
+            format!("BTC{}-Indefinida-{}", chunk_min, parent_start.format("%Y%m%dT%H%M"))
+        } else {
+            body.name.clone()
+        };
+
+        // 1. Create parent — duration_min stores the chunk size for auto-generation
+        let parent_id = match repository::create_session(&s, &parent_name, parent_start, parent_end, chunk_min, depth, None).await {
+            Ok(id) => id,
+            Err(e) => return Json(json!({"ok": false, "error": format!("Parent: {}", e)})),
+        };
+
+        // 2. Start parent immediately
+        let btc_price = *s.btc_price.read().await;
+        if let Err(e) = repository::start_session_recording(&s, parent_id, btc_price).await {
+            warn!("No se pudo iniciar padre #{}: {}", parent_id, e);
+        }
+
+        // 3. Create first child
+        let child_start = parent_start;
+        let child_end = child_start + Duration::minutes(chunk_min as i64);
+        let child_name = child_session_name(child_start, chunk_min);
+        let child_id = match repository::create_session(&s, &child_name, child_start, child_end, chunk_min, depth, Some(parent_id)).await {
+            Ok(id) => id,
+            Err(e) => {
+                let _ = repository::stop_session(&s, parent_id, None, None).await;
+                return Json(json!({"ok": false, "error": format!("First child: {}", e)}));
+            }
+        };
+
+        // 4. Start child immediately
+        if let Err(e) = repository::start_session_recording(&s, child_id, btc_price).await {
+            warn!("No se pudo iniciar hijo #{}: {}", child_id, e);
+        }
+        *s.recording_session.write().await = Some(child_id);
+
+        let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
+        return Json(json!({
+            "ok": true,
+            "id": parent_id,
+            "status": "recording",
+            "indefinite": true,
+            "chunk_min": chunk_min,
+            "scheduled_start": parent_start.to_rfc3339(),
+            "scheduled_end": parent_end.to_rfc3339(),
+            "child_ids": vec![child_id],
+            "children": children,
+            "active_child_id": child_id,
+            "message": format!("Sesión INDEFINIDA iniciada. Hijos de {}min auto-generados. Primer hijo: {} ({})",
+                chunk_min, child_name, child_start.format("%H:%M")),
+        }));
+    }
+
+    // ── Non-indefinite (existing logic) ──────────────────────────────────────
+    let (scheduled_start, scheduled_end) = if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
+        (start, end)
     } else if let Some(start) = body.scheduled_start {
         let end = start + Duration::minutes(body.duration_min.max(1) as i64);
-        (start, end, false)
+        (start, end)
     } else {
         let minute = now.minute();
         let next_min = ((minute / 15) + 1) * 15;
@@ -224,7 +281,7 @@ async fn start_session(
             now.with_minute(next_min).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()
         };
         let end = start + Duration::minutes(body.duration_min.max(15) as i64);
-        (start, end, false)
+        (start, end)
     };
 
     let name = if body.name.is_empty() {
@@ -232,14 +289,11 @@ async fn start_session(
     } else {
         body.name
     };
-    let depth = body.depth_levels.max(5).min(50);
     let total_duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
 
-    // Auto-split sessions longer than 15 min into 15-min children
-    if total_duration > 15 && !is_indefinite {
+    if total_duration > 15 {
         match repository::create_session_batch(&s, &name, scheduled_start, total_duration, depth, 15).await {
             Ok((parent_id, child_ids)) => {
-                // Fetch children for response
                 let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
                 Json(json!({
                     "ok": true,
@@ -258,7 +312,6 @@ async fn start_session(
             Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
         }
     } else {
-        // Single session (≤15 min or indefinite)
         let duration = total_duration.max(1);
         match repository::create_session(&s, &name, scheduled_start, scheduled_end, duration, depth, None).await {
             Ok(id) => Json(json!({
@@ -267,18 +320,19 @@ async fn start_session(
                 "status": "scheduled",
                 "scheduled_start": scheduled_start.to_rfc3339(),
                 "scheduled_end": scheduled_end.to_rfc3339(),
-                "indefinite": is_indefinite,
+                "indefinite": false,
                 "child_ids": [],
                 "children": [],
-                "message": if is_indefinite {
-                    "Sesión INDEFINIDA iniciada. Detener manualmente.".into()
-                } else {
-                    format!("Sesión programada para {} → {}", scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
-                }
+                "message": format!("Sesión programada para {} → {}", scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
             })),
             Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
         }
     }
+}
+
+/// Genera nombre de sesión hijo: BTC{chunk_min}{YYYYMMDD}_{HHMM}UTC
+pub(crate) fn child_session_name(start: DateTime<Utc>, chunk_min: i32) -> String {
+    format!("BTC{}{}_{}UTC", chunk_min, start.format("%Y%m%d"), start.format("%H%M"))
 }
 
 async fn stop_session(
@@ -286,6 +340,16 @@ async fn stop_session(
     Path(id): Path<i32>,
 ) -> Json<Value> {
     let final_price = *s.btc_price.read().await;
+
+    // Cascada: si es un padre, detener también todos los hijos activos
+    if let Ok(children) = repository::list_session_children(&s, id).await {
+        for child in &children {
+            if child.status == "recording" || child.status == "scheduled" {
+                let _ = repository::stop_session(&s, child.id, final_price, final_price).await;
+            }
+        }
+    }
+
     match repository::stop_session(&s, id, final_price, final_price).await {
         Ok(_) => {
             *s.recording_session.write().await = None;
