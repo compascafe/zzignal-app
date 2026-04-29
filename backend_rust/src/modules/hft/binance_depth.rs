@@ -25,7 +25,7 @@ pub struct BinanceTickEvent {
 /// Tarea de fondo: conecta al WebSocket combinado de Binance.
 /// - Escribe snapshot completo en `depth`
 /// - Pushea estado compacto en `ring` (lock-free)
-/// - Emite BINANCE_TICK a `tick_tx` cuando el precio cambia > $0.10
+/// - Emite BINANCE_TICK a `tick_tx` cuando el precio cambia > $0.15
 pub async fn run_binance_depth_stream(
     depth:     Arc<RwLock<Option<BinanceDepth>>>,
     ring:      Arc<PriceRingBuffer>,
@@ -90,8 +90,8 @@ pub async fn run_binance_depth_stream(
                                         d.local_time = now_ms;
                                     }
 
-                                    // Emitir BINANCE_TICK si delta > $0.10
-                                    if (btc_price - last_tick_price).abs() > 0.10 && last_depth.is_some() {
+                                    // Emitir BINANCE_TICK si delta > $0.15
+                                    if (btc_price - last_tick_price).abs() > 0.15 && last_depth.is_some() {
                                         let tick = BinanceTickEvent {
                                             price: btc_price,
                                             volume: 0.0,
