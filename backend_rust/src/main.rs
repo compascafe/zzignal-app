@@ -364,7 +364,26 @@ async fn capture_combined(
             ),
             _ => unreachable!(),
         };
-        state.csv_logger.push(rec);
+        state.csv_logger.push(rec.clone());
+
+        // Insert into hft_snapshots DB table for session export
+        let session_id = *state.recording_session.read().await;
+        if let (Some(pool), Some(sid)) = (state.db.as_ref(), session_id) {
+            let _ = sqlx::query(
+                "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
+            )
+            .bind(rec.binance_price)
+            .bind(rec.binance_vol_100ms)
+            .bind(0.0f64)
+            .bind(rec.poly_mid)
+            .bind(rec.poly_imbalance)
+            .bind(rec.latencia_ms as f64)
+            .bind(sid)
+            .bind(rec.latencia_ms)
+            .bind(rec.binance_micro_price)
+            .execute(pool)
+            .await;
+        }
     }
 }
 
