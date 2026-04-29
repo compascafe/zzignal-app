@@ -20,7 +20,7 @@ use crate::modules::core::worker::{AppMsg, BtcPriceProvider, CandleInterval, Cmd
 use crate::modules::core::credentials::ClobCredentials;
 use crate::modules::core::state::AppState;
 use crate::modules::core::persistence as db;
-use crate::modules::hft::types::{BinanceDepth, EventType};
+use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType};
 use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::{self, TrackingState};
 use crate::modules::hft::logger::CsvLogger;
@@ -353,8 +353,9 @@ async fn capture_combined(
     let poly_ts = Utc::now().timestamp_millis();
     let binance_opt = state.binance_depth.read().await.clone();
 
-    if let Some(ref binance) = binance_opt {
-        let rec = match evt_type {
+    // Always build record — use defaults if Binance is unavailable
+    let rec = if let Some(ref binance) = binance_opt {
+        match evt_type {
             EventType::BookUpdate => metrics::build_book_update(
                 binance, &state.binance_ring, poly_bids, poly_asks, &state.tracking_state, poly_ts,
             ),
@@ -363,27 +364,54 @@ async fn capture_combined(
                 poly_ts, trade_side, trade_price, trade_size,
             ),
             _ => unreachable!(),
-        };
-        state.csv_logger.push(rec.clone());
-
-        // Insert into hft_snapshots DB table for session export
-        let session_id = *state.recording_session.read().await;
-        if let (Some(pool), Some(sid)) = (state.db.as_ref(), session_id) {
-            let _ = sqlx::query(
-                "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
-            )
-            .bind(rec.binance_price)
-            .bind(rec.binance_vol_100ms)
-            .bind(0.0f64)
-            .bind(rec.poly_mid)
-            .bind(rec.poly_imbalance)
-            .bind(rec.latencia_ms as f64)
-            .bind(sid)
-            .bind(rec.latencia_ms)
-            .bind(rec.binance_micro_price)
-            .execute(pool)
-            .await;
         }
+    } else {
+        // Binance not connected — use Poly-only defaults
+        let pb_bid = poly_bids.first().map(|l| l.price).unwrap_or(0.0);
+        let pb_ask = poly_asks.first().map(|l| l.price).unwrap_or(0.0);
+        let pb_mid = if pb_bid > 0.0 && pb_ask > 0.0 { (pb_bid + pb_ask) / 2.0 } else { 0.0 };
+        let pb_vol_bid: f64 = poly_bids.iter().map(|l| l.size).sum();
+        let pb_vol_ask: f64 = poly_asks.iter().map(|l| l.size).sum();
+        let pb_imb = if pb_vol_ask > 0.0 { pb_vol_bid / pb_vol_ask } else { 0.0 };
+
+        let mut rec = CsvRecord {
+            event_type: evt_type,
+            ts_local: Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            poly_bid: pb_bid,
+            poly_ask: pb_ask,
+            poly_mid: pb_mid,
+            poly_spread: if pb_bid > 0.0 && pb_ask > 0.0 { pb_ask - pb_bid } else { 0.0 },
+            poly_bid_vol_all: pb_vol_bid,
+            poly_ask_vol_all: pb_vol_ask,
+            poly_imbalance: if pb_imb.is_finite() { pb_imb } else { 0.0 },
+            ..Default::default()
+        };
+        if evt_type == EventType::Trade {
+            rec.trade_side = trade_side.to_string();
+            rec.trade_price = trade_price;
+            rec.trade_size = trade_size;
+        }
+        rec
+    };
+    state.csv_logger.push(rec.clone());
+
+    // Insert into hft_snapshots DB table for session export
+    let session_id = *state.recording_session.read().await;
+    if let (Some(pool), Some(sid)) = (state.db.as_ref(), session_id) {
+        let _ = sqlx::query(
+            "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
+        )
+        .bind(rec.binance_price)
+        .bind(rec.binance_vol_100ms)
+        .bind(0.0f64)
+        .bind(rec.poly_mid)
+        .bind(rec.poly_imbalance)
+        .bind(rec.latencia_ms as f64)
+        .bind(sid)
+        .bind(rec.latencia_ms)
+        .bind(rec.binance_micro_price)
+        .execute(pool)
+        .await;
     }
 }
 
