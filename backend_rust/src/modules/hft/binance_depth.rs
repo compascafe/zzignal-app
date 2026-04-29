@@ -30,7 +30,7 @@ pub async fn run_binance_depth_stream(
     depth:     Arc<RwLock<Option<BinanceDepth>>>,
     ring:      Arc<PriceRingBuffer>,
     tick_tx:   mpsc::UnboundedSender<BinanceTickEvent>,
-    _tracking:  Arc<metrics::TrackingState>,
+    tracking:  Arc<metrics::TrackingState>,
     mut shutdown: broadcast::Receiver<()>,
 ) {
     let mut backoff = Duration::from_secs(2);
@@ -158,12 +158,14 @@ pub async fn run_binance_depth_stream(
                                         else { mid_p }
                                     };
                                     let evt_ms = last_depth.as_ref().map_or(0, |d| d.event_time) as u64;
+                                    let vol_100 = tracking.vol_100ms(now_ms);
                                     ring.push(BinanceState {
-                                        timestamp:       if evt_ms > 0 { evt_ms } else { now_ms as u64 },
-                                        mid_price:       mid_p,
-                                        micro_price:     mic_p,
-                                        total_liquidity: total_liq,
-                                        imbalance:       imb,
+                                        timestamp:         if evt_ms > 0 { evt_ms } else { now_ms as u64 },
+                                        mid_price:         mid_p,
+                                        micro_price:       mic_p,
+                                        total_liquidity:   total_liq,
+                                        binance_vol_100ms: vol_100,
+                                        imbalance:         imb,
                                     });
 
                                     last_depth = Some(current);

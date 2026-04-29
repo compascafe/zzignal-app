@@ -7,30 +7,27 @@ const RING_CAP: usize = 4096;
 const RING_MASK: usize = RING_CAP - 1;
 
 /// Estado compacto de Binance en un instante. `repr(C)` para layout predecible.
-/// 40 bytes por slot (con padding de alineación a 8).
+/// 48 bytes por slot (con padding de alineación a 8).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct BinanceState {
-    /// Timestamp del evento de Binance (ms, campo `E` del ticker)
-    pub timestamp: u64,
-    /// Mid-price: (best_bid + best_ask) / 2
-    pub mid_price: f64,
-    /// Micro-price ponderado por volumen (top 5 niveles)
-    pub micro_price: f64,
-    /// Volumen total bid + ask (top 20 niveles) para medir liquidez
-    pub total_liquidity: f64,
-    /// Volume Buy-Sell imbalance: (bid_vol - ask_vol) / (bid_vol + ask_vol)
-    pub imbalance: f32,
+    pub timestamp:         u64,  // ms (Binance event_time)
+    pub mid_price:         f64,  // (best_bid + best_ask) / 2
+    pub micro_price:       f64,  // volume-weighted (top 5)
+    pub total_liquidity:   f64,  // bid+ask vol (top 20)
+    pub binance_vol_100ms: f64,  // vol tradeado en últimos 100ms
+    pub imbalance:         f32,  // VBS
 }
 
 impl Default for BinanceState {
     fn default() -> Self {
         Self {
-            timestamp: 0,
-            mid_price: 0.0,
-            micro_price: 0.0,
-            total_liquidity: 0.0,
-            imbalance: 0.0,
+            timestamp:         0,
+            mid_price:         0.0,
+            micro_price:       0.0,
+            total_liquidity:   0.0,
+            binance_vol_100ms: 0.0,
+            imbalance:         0.0,
         }
     }
 }

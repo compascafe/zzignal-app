@@ -5,33 +5,59 @@ use chrono::Utc;
 use crate::modules::core::worker::PriceLevel;
 use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType, PriceRingBuffer};
 
-/// Estado de tracking compartido entre hilos: volumen reciente y último movimiento grande.
+/// Welford's online algorithm para running mean + std deviation del volumen.
+pub(super) struct RunningStats {
+    count: u64,
+    mean:  f64,
+    m2:    f64,  // sum of squared differences
+}
+
+impl RunningStats {
+    fn new() -> Self { Self { count: 0, mean: 0.0, m2: 0.0 } }
+
+    fn push(&mut self, val: f64) {
+        self.count += 1;
+        let delta   = val - self.mean;
+        self.mean  += delta / self.count as f64;
+        let delta2  = val - self.mean;
+        self.m2    += delta * delta2;
+    }
+
+    fn std_dev(&self) -> f64 {
+        if self.count < 2 { return 0.0; }
+        (self.m2 / (self.count - 1) as f64).sqrt()
+    }
+
+    fn is_spike(&self, val: f64, n_sigmas: f64) -> bool {
+        if self.count < 10 { return false; } // need warmup
+        val > self.mean + n_sigmas * self.std_dev()
+    }
+}
+
+/// Estado de tracking compartido: volumen deslizante, detección de big moves y spikes.
 pub struct TrackingState {
-    /// Ventana de volumen: pares (ts_ms, volume_btc) con expiración a 100ms
-    pub vol_window:   Mutex<Vec<(i64, f64)>>,
-    /// Timestamp del último movimiento de precio > $1.00 en Binance (ms)
-    pub last_big_move: Mutex<Option<i64>>,
-    /// Último precio conocido de Binance (para detectar cambios > $1.00)
+    pub vol_window:       Mutex<Vec<(i64, f64)>>,
+    pub last_big_move:    Mutex<Option<i64>>,
     pub last_binance_price: Mutex<Option<f64>>,
+    pub(super) vol_stats:  Mutex<RunningStats>,
 }
 
 impl TrackingState {
     pub fn new() -> Self {
         Self {
-            vol_window:          Mutex::new(Vec::with_capacity(64)),
-            last_big_move:       Mutex::new(None),
-            last_binance_price:  Mutex::new(None),
+            vol_window:         Mutex::new(Vec::with_capacity(64)),
+            last_big_move:      Mutex::new(None),
+            last_binance_price: Mutex::new(None),
+            vol_stats:          Mutex::new(RunningStats::new()),
         }
     }
 
-    /// Añade volumen a la ventana deslizante de 100ms
     pub fn push_volume(&self, ts_ms: i64, vol: f64) {
         if vol <= 0.0 { return; }
-        let mut w = self.vol_window.lock().unwrap();
-        w.push((ts_ms, vol));
+        self.vol_window.lock().unwrap().push((ts_ms, vol));
+        self.vol_stats.lock().unwrap().push(vol);
     }
 
-    /// Calcula volumen sumado en los últimos 100ms
     pub fn vol_100ms(&self, now_ms: i64) -> f64 {
         let mut w = self.vol_window.lock().unwrap();
         let cutoff = now_ms - 100;
@@ -39,7 +65,7 @@ impl TrackingState {
         w.iter().map(|(_, v)| *v).sum()
     }
 
-    /// Registra un cambio de precio de Binance. Si delta > $1.00, marca last_big_move.
+    /// Registra precio. Si delta > $1.00, marca big_move.
     pub fn track_price(&self, price: f64, now_ms: i64) {
         let mut last = self.last_binance_price.lock().unwrap();
         if let Some(prev) = *last {
@@ -50,13 +76,20 @@ impl TrackingState {
         *last = Some(price);
     }
 
-    /// Devuelve is_informed: 1 si hubo big_move en los últimos 100ms, 0 si no.
+    /// Flag de trading informado: 1 si hubo big move (>$1.00) O spike de volumen (>2σ) en últimos 100ms.
     pub fn is_informed(&self, now_ms: i64) -> u8 {
+        // Check big move
         let bm = self.last_big_move.lock().unwrap();
-        match *bm {
-            Some(ts) if now_ms - ts <= 100 => 1,
-            _ => 0,
+        if let Some(ts) = *bm {
+            if now_ms - ts <= 100 { return 1; }
         }
+        // Check volume spike: último volumen > mean + 2σ
+        let vol_now = self.vol_100ms(now_ms);
+        let stats = self.vol_stats.lock().unwrap();
+        if stats.is_spike(vol_now, 2.0) {
+            return 1;
+        }
+        0
     }
 }
 
@@ -106,10 +139,10 @@ pub fn build_book_update(
     };
 
     // Look-back en ring buffer
-    let (lag_ms, mic_at_t) = if let Some(hist) = ring.get_closest_to(poly_event_ts as u64) {
-        (poly_event_ts - hist.timestamp as i64, hist.micro_price)
+    let (lag_ms, mic_at_t, bn_vol_100) = if let Some(hist) = ring.get_closest_to(poly_event_ts as u64) {
+        (poly_event_ts - hist.timestamp as i64, hist.micro_price, hist.binance_vol_100ms)
     } else {
-        (0, bb_mic)
+        (0, bb_mic, 0.0)
     };
 
     let pb_bid  = poly_bids.first().map(|l| l.price).unwrap_or(0.0);
@@ -128,7 +161,7 @@ pub fn build_book_update(
         binance_price:       bb_mid,
         binance_micro_price: mic_at_t,
         binance_imbalance:   bb_imb,
-        binance_vol_100ms:   tracking.vol_100ms(now.timestamp_millis()),
+        binance_vol_100ms:   bn_vol_100,
         binance_vol_24h:     binance.btc_volume_24h,
         poly_bid:            pb_bid,
         poly_ask:            pb_ask,
