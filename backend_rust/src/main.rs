@@ -16,13 +16,16 @@ mod modules;
 
 use std::sync::{mpsc, Arc, Mutex};
 
-use tokio::sync::{broadcast, mpsc as tokio_mpsc};
+use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 use crate::modules::core::worker::{AppMsg, BtcPriceProvider, CandleInterval, CmdMsg, ConnStatus};
 use crate::modules::core::credentials::ClobCredentials;
 use crate::modules::core::state::AppState;
 use crate::modules::core::persistence as db;
+use crate::modules::hft::types::BinanceDepth;
+use crate::modules::hft::metrics::VpinState;
+use crate::modules::hft::logger::CsvLogger;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -75,13 +78,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (btc_provider_tx, btc_provider_rx) = tokio::sync::watch::channel(BtcPriceProvider::Binance);
     let btc_provider_tx   = Arc::new(btc_provider_tx);
 
+    // ─── HFT Module ─────────────────────────────────────────────────────────────
+    let binance_depth = Arc::new(RwLock::new(None::<BinanceDepth>));
+    let vpin_state    = Arc::new(VpinState::new(50)); // VPIN window: últimas 50 muestras
+    let csv_logger    = Arc::new(CsvLogger::new("hft_snapshots.csv"));
+    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+
     // AppState compartido
     let state = AppState::new(
         cmd_tx,
         bcast_tx.clone(),
+        shutdown_tx.clone(),
         Arc::clone(&interval_arc),
         db,
         Arc::clone(&btc_provider_tx),
+        Arc::clone(&binance_depth),
+        Arc::clone(&vpin_state),
+        Arc::clone(&csv_logger),
     );
 
     // Worker (hilo OS con su propio runtime tokio)
@@ -100,6 +113,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .block_on(crate::modules::core::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
             })
             .expect("spawn worker");
+    }
+
+    // Binance depth stream (HFT module) — tarea de fondo
+    {
+        let depth2    = Arc::clone(&binance_depth);
+        let shutdown2 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            crate::modules::hft::binance_depth::run_binance_depth_stream(depth2, shutdown2).await;
+        });
+    }
+
+    // CSV flush task — cada 60 segundos
+    {
+        let logger2   = Arc::clone(&csv_logger);
+        let shutdown3 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            crate::modules::hft::logger::csv_flush_loop(logger2, shutdown3).await;
+        });
     }
 
     // Scheduler del módulo DB: snapshots cada 10s + ejecuciones programadas cada 5s
@@ -167,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(" Polymarket BTC 15-min Backend");
     info!(" REST API:  http://{}/api/...", addr);
     info!(" WebSocket: ws://{}/ws", addr);
+    info!(" HFT CSV:   hft_snapshots.csv");
     info!("============================================");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -283,18 +315,18 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
     let spread = best_bid.and_then(|bb| best_ask.map(|ba| ba - bb));
     let mid_price = best_bid.and_then(|bb| best_ask.map(|ba| (bb + ba) / 2.0));
 
-    // Volume breakdown by depth
+    // Volume breakdown by depth (Polymarket)
     let bid_volume_5: f64 = bids.iter().take(5).map(|l| l.size).sum();
     let ask_volume_5: f64 = asks.iter().take(5).map(|l| l.size).sum();
     let bid_volume_10: f64 = bids.iter().take(10).map(|l| l.size).sum();
     let ask_volume_10: f64 = asks.iter().take(10).map(|l| l.size).sum();
-    let bid_volume: f64 = bids.iter().map(|l| l.size).sum();    // ALL levels
-    let ask_volume: f64 = asks.iter().map(|l| l.size).sum();    // ALL levels
+    let bid_volume: f64 = bids.iter().map(|l| l.size).sum();
+    let ask_volume: f64 = asks.iter().map(|l| l.size).sum();
 
-    // Imbalance ratio: >1 = bid-heavy, <1 = ask-heavy
+    // Imbalance ratio (Polymarket)
     let imbalance_ratio = if ask_volume > 0.0 { Some(bid_volume / ask_volume) } else { None };
 
-    // UP/DOWN probability: Polymarket tokens trade 0-1, mid_price ≈ probability
+    // UP/DOWN probability
     let up_probability = mid_price;
     let down_probability = mid_price.map(|p| 1.0 - p);
 
@@ -303,6 +335,24 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
     let depth_asks = json!(asks.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
 
     let btc_price = *state.btc_price.read().await;
+
+    // ─── HFT metrics: cross-exchange Binance ↔ Polymarket ──────────────────
+    let binance_opt = state.binance_depth.read().await.clone();
+
+    let (hft_fields, hft_json_bids, hft_json_asks) = if let Some(ref binance) = binance_opt {
+        let metrics = crate::modules::hft::metrics::compute_hft_metrics(
+            binance, bids, asks, &state.vpin_state,
+        );
+        // Push to CSV logger
+        state.csv_logger.push(&metrics);
+
+        let bn_bids_json = json!(binance.bids.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
+        let bn_asks_json = json!(binance.asks.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
+
+        (Some(metrics), Some(bn_bids_json), Some(bn_asks_json))
+    } else {
+        (None, None, None)
+    };
 
     if let Err(e) = session_repo::insert_session_snapshot(
         state, session_id, side,
@@ -313,6 +363,9 @@ async fn capture_book(state: &AppState, side: &str, bids: &[PriceLevel], asks: &
         imbalance_ratio, up_probability, down_probability,
         Some(depth_bids), Some(depth_asks),
         btc_price,
+        hft_fields.as_ref(),
+        hft_json_bids,
+        hft_json_asks,
     ).await {
         warn!("Session snapshot capture: {}", e);
     }
@@ -325,7 +378,6 @@ async fn capture_fills(state: &AppState, fills: &[crate::modules::core::worker::
     };
 
     for fill in fills {
-        // Read BTC price per-fill to avoid stale batch prices (BUG FIX)
         let btc_price = *state.btc_price.read().await;
         let trade_side = match fill.side {
             crate::modules::core::worker::OrderSide::Buy => "buy",

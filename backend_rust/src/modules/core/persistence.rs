@@ -23,6 +23,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
         ("008_session_parent",             include_str!("../db/migrations/008_session_parent.sql")),
         ("009_session_tags",              include_str!("../db/migrations/009_session_tags.sql")),
         ("010_force_tags",                include_str!("../db/migrations/010_force_tags.sql")),
+        ("011_hft_binance_depth",         include_str!("../db/migrations/011_hft_binance_depth.sql")),
     ];
 
     for (name, sql) in migrations {

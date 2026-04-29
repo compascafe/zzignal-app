@@ -4,6 +4,9 @@ use sqlx::PgPool;
 
 use crate::modules::core::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
 use crate::modules::db::models::{RecordingSession, SessionSnapshot, SessionTrade};
+use crate::modules::hft::types::BinanceDepth;
+use crate::modules::hft::metrics::VpinState;
+use crate::modules::hft::logger::CsvLogger;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -33,6 +36,9 @@ pub struct AppState {
     // Broadcast → clientes WebSocket
     pub broadcast_tx:    broadcast::Sender<String>,
 
+    // Shutdown signal → tareas de fondo
+    pub shutdown_tx:     broadcast::Sender<()>,
+
     // Base de datos (None si DATABASE_URL no está configurada)
     pub db:              Option<PgPool>,
 
@@ -44,6 +50,16 @@ pub struct AppState {
     pub mem_snapshots:   RwLock<Vec<SessionSnapshot>>,
     pub mem_trades:      RwLock<Vec<SessionTrade>>,
 
+    // ─── HFT Module ─────────────────────────────────────────────────────────
+    /// Último snapshot del order book de Binance (top 20 niveles, actualizado cada 100ms)
+    pub binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
+
+    /// Estado acumulado de VPIN (ventana deslizante)
+    pub vpin_state:      Arc<VpinState>,
+
+    /// Logger CSV para métricas HFT (flush cada 60s)
+    pub csv_logger:      Arc<CsvLogger>,
+
     // Pattern Detector config (solo disponible con premium-patterns)
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
@@ -53,9 +69,13 @@ impl AppState {
     pub fn new(
         cmd_tx:          tokio_mpsc::UnboundedSender<CmdMsg>,
         broadcast_tx:    broadcast::Sender<String>,
+        shutdown_tx:     broadcast::Sender<()>,
         interval_arc:    Arc<Mutex<CandleInterval>>,
         db:              Option<PgPool>,
         btc_provider_tx: Arc<tokio::sync::watch::Sender<BtcPriceProvider>>,
+        binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
+        vpin_state:      Arc<VpinState>,
+        csv_logger:      Arc<CsvLogger>,
     ) -> Arc<Self> {
         Arc::new(Self {
             status:          RwLock::new("Initializing".into()),
@@ -71,15 +91,19 @@ impl AppState {
             recent_fills:    RwLock::new(vec![]),
             candles:         RwLock::new(vec![]),
             interval_arc,
-            btc_provider:    RwLock::new(BtcPriceProvider::Coinbase), // default a Coinbase (Binance bloquea US)
+            btc_provider:    RwLock::new(BtcPriceProvider::Coinbase),
             btc_provider_tx,
             cmd_tx,
             broadcast_tx,
+            shutdown_tx,
             db,
             recording_session: RwLock::new(None),
             mem_sessions:    RwLock::new(vec![]),
             mem_snapshots:   RwLock::new(vec![]),
             mem_trades:      RwLock::new(vec![]),
+            binance_depth,
+            vpin_state,
+            csv_logger,
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })
