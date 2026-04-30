@@ -1,6 +1,6 @@
 [package]
 name        = "polymarket-backend"
-version     = "0.2.0"   # bump para forzar rebuild y nuevas migraciones
+version     = "0.2.1"   # SessionManager + PaperExecutor + bulk export
 edition     = "2021"
 rust-version = "1.91"   # MSRV
 default-run = "polymarket-backend"
