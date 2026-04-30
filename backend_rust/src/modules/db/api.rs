@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::sync::Arc;
 
 use axum::{
@@ -12,6 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::warn;
+use zip::write::SimpleFileOptions;
 
 use crate::modules::core::state::AppState;
 use crate::modules::db::models::ScheduledExecution;
@@ -178,6 +180,7 @@ pub fn session_router(state: Arc<AppState>) -> Router {
         .route("/api/sessions/{id}",         delete(delete_session))
         .route("/api/sessions/{id}",         patch(update_session_tag))
         .route("/api/sessions/{id}/export",  get(export_session))
+        .route("/api/sessions/export-bulk", get(export_bulk_sessions))
         .route("/api/sessions/{id}/snapshots", get(session_snapshots))
         .route("/api/sessions/{id}/trades",  get(session_trades))
         .route("/api/sessions/{id}/children", get(session_children))
@@ -598,4 +601,105 @@ async fn export_session(
      [("Content-Type", "text/csv"),
       ("Content-Disposition", &format!("attachment; filename=\"session_{}_hft.csv\"", id))],
      csv).into_response()
+}
+
+#[derive(Deserialize)]
+struct BulkExportQuery {
+    ids: String, // comma-separated session IDs
+}
+
+async fn export_bulk_sessions(
+    State(s): State<Arc<AppState>>,
+    Query(q): Query<BulkExportQuery>,
+) -> Response {
+    let ids: Vec<i32> = q.ids.split(',')
+        .filter_map(|p| p.trim().parse::<i32>().ok())
+        .collect();
+
+    if ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, "no valid session ids").into_response();
+    }
+
+    // Build ZIP in memory
+    let mut zip_buf = Vec::new();
+    let mut zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for id in ids {
+        let session = match repository::get_session_by_id(&s, id).await {
+            Ok(Some(sess)) => sess,
+            Ok(None) => continue,
+            Err(_) => continue,
+        };
+
+        let rows = repository::query_hft_snapshots(s.db.as_ref(), id).await.unwrap_or_default();
+        let has_data = !rows.is_empty();
+        let mem_rows = if !has_data {
+            let mem = s.mem_hft.read().await;
+            mem.iter().cloned().collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+
+        let mut csv = String::new();
+        csv.push_str("# Session Metadata\n");
+        csv.push_str(&format!("# session_id={}\n", session.id));
+        csv.push_str(&format!("# name={}\n", session.name));
+        csv.push_str(&format!("# scheduled_start={}\n", session.scheduled_start.to_rfc3339()));
+        csv.push_str(&format!("# scheduled_end={}\n", session.scheduled_end.to_rfc3339()));
+        csv.push_str(&format!("# started_at={}\n", session.started_at.map_or("".into(), |t| t.to_rfc3339())));
+        csv.push_str(&format!("# stopped_at={}\n", session.stopped_at.map_or("".into(), |t| t.to_rfc3339())));
+        csv.push_str(&format!("# duration_min={}\n", session.duration_min));
+        csv.push_str(&format!("# btc_price_start={}\n", session.btc_price_start.unwrap_or(0.0)));
+        csv.push_str(&format!("# btc_price_end={}\n", session.btc_price_end.unwrap_or(0.0)));
+        csv.push_str(&format!("# final_price={}\n", session.final_price.unwrap_or(0.0)));
+        csv.push_str(&format!("# outcome_result={}\n", session.outcome_result.unwrap_or_default()));
+        csv.push_str(&format!("# status={}\n", session.status));
+        csv.push_str(&format!("# tick_count={}\n", session.tick_count));
+        csv.push_str(&format!("# trade_count={}\n", session.trade_count));
+        csv.push_str("#\n");
+        csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed\n");
+
+        if has_data {
+            for r in &rows {
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    r.ts.to_rfc3339(), "", "BOOK_UPDATE",
+                    r.binance_lag_ms.unwrap_or(0),
+                    r.btc_price_binance.unwrap_or(0.0),
+                    r.binance_micro_price_at_t.unwrap_or(0.0),
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0,
+                    r.poly_mid_price.unwrap_or(0.0),
+                    0.0, 0.0, 0.0,
+                    r.poly_imbalance.unwrap_or(0.0),
+                    "", 0.0, 0.0, 0,
+                ));
+            }
+        } else {
+            for r in &mem_rows {
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    r.ts_local, r.ts_exchange, r.event_type.as_str(),
+                    r.latencia_ms, r.binance_price, r.binance_micro_price,
+                    r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
+                    r.poly_bid, r.poly_ask, r.poly_mid, r.poly_spread,
+                    r.poly_bid_vol_all, r.poly_ask_vol_all, r.poly_imbalance,
+                    r.trade_side, r.trade_price, r.trade_size, r.is_informed,
+                ));
+            }
+        }
+
+        let filename = format!("session_{}_hft.csv", id);
+        if zip_writer.start_file(&filename, options).is_err() { continue; }
+        if zip_writer.write_all(csv.as_bytes()).is_err() { continue; }
+    }
+
+    let _ = zip_writer.finish();
+
+    (StatusCode::OK,
+     [("Content-Type", "application/zip"),
+      ("Content-Disposition", "attachment; filename=\"sessions_bulk.zip\"")],
+     zip_buf).into_response()
 }
