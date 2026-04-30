@@ -12,7 +12,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tracing::warn;
+use tracing::{info, warn};
 use zip::write::SimpleFileOptions;
 
 use crate::modules::core::state::AppState;
@@ -271,21 +271,36 @@ async fn start_session(
     }
 
     // ── Non-indefinite (existing logic) ──────────────────────────────────────
-    let (scheduled_start, scheduled_end) = if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
-        (start, end)
+    let (scheduled_start, scheduled_end, effective_dur) = if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
+        let dur = ((end - start).num_seconds() / 60).max(1) as i32;
+        (start, end, dur)
     } else if let Some(start) = body.scheduled_start {
-        let end = start + Duration::minutes(body.duration_min.max(1) as i64);
-        (start, end)
+        let dur = body.duration_min.max(1);
+        let end = start + Duration::minutes(dur as i64);
+        (start, end, dur)
     } else {
         let minute = now.minute();
-        let next_min = ((minute / 15) + 1) * 15;
+        let requested = body.duration_min.max(1);
+
+        // ── Smart grid alignment ───────────────────────────────────────────
+        // 15-min sessions only start at :00, :15, :30, :45.
+        // If we're not on a 15-min boundary, fall back to 5-min session.
+        let dur = if requested == 15 && minute % 15 != 0 {
+            info!("[SESSION ALIGN] {}min requested at :{:02} — not on 15-min grid, falling back to 5-min session", requested, minute);
+            5i32
+        } else {
+            requested
+        };
+        let grid = if dur == 5 { 5 } else { 15 };
+
+        let next_min = ((minute / grid) + 1) * grid;
         let start = if next_min >= 60 {
-            now.with_minute(0).unwrap() + Duration::hours(1)
+            now.with_minute(0).unwrap() + chrono::Duration::hours(1)
         } else {
             now.with_minute(next_min).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()
         };
-        let end = start + Duration::minutes(body.duration_min.max(1) as i64);
-        (start, end)
+        let end = start + chrono::Duration::minutes(dur as i64);
+        (start, end, dur)
     };
 
     let name = if body.name.is_empty() {
@@ -296,7 +311,7 @@ async fn start_session(
     let total_duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
 
     if total_duration > 15 {
-        let chunk_min = body.duration_min.max(1);
+        let chunk_min = effective_dur.max(1);
         match repository::create_session_batch(&s, &name, scheduled_start, total_duration, depth, chunk_min).await {
             Ok((parent_id, child_ids)) => {
                 let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
@@ -328,7 +343,12 @@ async fn start_session(
                 "indefinite": false,
                 "child_ids": [],
                 "children": [],
-                "message": format!("Sesión programada para {} → {}", scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
+                "message": format!("Sesión {}min programada para {} → {}{}",
+                    effective_dur,
+                    scheduled_start.format("%H:%M"),
+                    scheduled_end.format("%H:%M"),
+                    if effective_dur != body.duration_min { " (auto-ajustado de 15→5min: fuera de grid 15min)" } else { "" }
+                )
             })),
             Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
         }
