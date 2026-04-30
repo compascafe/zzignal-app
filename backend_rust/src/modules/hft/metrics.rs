@@ -71,6 +71,9 @@ pub struct TrackingState {
 
     // ─── Average trades/sec for vol_burst detection ───────────────────────
     pub(super) trades_ps_stats: Mutex<RunningStats>,
+
+    // ─── Session-level volatility average (for high_volatility_event) ─────
+    pub(super) session_vol_stats: Mutex<RunningStats>,
 }
 
 impl TrackingState {
@@ -90,6 +93,7 @@ impl TrackingState {
             bollinger_window:    Mutex::new(VecDeque::with_capacity(256)),
             bollinger_stats:     Mutex::new(RunningStats::new()),
             trades_ps_stats:     Mutex::new(RunningStats::new()),
+            session_vol_stats:   Mutex::new(RunningStats::new()),
         }
     }
 
@@ -165,10 +169,10 @@ impl TrackingState {
         }
     }
 
-    /// Compute price velocity: slope of Binance mid price over 500ms window (USD/s).
+    /// Compute price velocity: slope of Binance mid price over 1s window (USD/s).
     /// Uses the RingBuffer for direct look-back — no separate price history needed.
     pub fn price_velocity(&self, ring: &PriceRingBuffer, now_ms: i64, current_price: f64) -> f64 {
-        let target_ts = (now_ms as u64).saturating_sub(500);
+        let target_ts = (now_ms as u64).saturating_sub(1000);
         if let Some(past) = ring.get_closest_to(target_ts) {
             if past.timestamp > 0 && past.mid_price > 0.0 {
                 let dt_ms = ((now_ms as u64).saturating_sub(past.timestamp)).max(1) as f64;
@@ -209,16 +213,58 @@ impl TrackingState {
         self.bollinger_stats.lock().unwrap().push(price);
     }
 
-    /// Compute Bollinger Bands from the rolling window.
-    /// Returns (sma, upper, lower). Returns zeros if < 20 samples.
-    pub fn bollinger_bands(&self) -> (f64, f64, f64) {
+    /// Compute Bollinger Bands + realized volatility + position.
+    /// Returns (sma, upper, lower, std_dev, realized_volatility, position).
+    /// position: 1=above upper, -1=below lower, 0=inside.
+    pub fn bollinger_bands_full(&self, price: f64) -> (f64, f64, f64, f64, f64, i8) {
         let stats = self.bollinger_stats.lock().unwrap();
         if stats.count < 20 {
-            return (0.0, 0.0, 0.0);
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0);
         }
         let sma = stats.mean;
         let std = stats.std_dev();
-        (sma, sma + 2.0 * std, sma - 2.0 * std)
+        let upper = sma + 2.0 * std;
+        let lower = sma - 2.0 * std;
+        let position = if price > upper { 1i8 } else if price < lower { -1i8 } else { 0i8 };
+        (sma, upper, lower, std, std, position)
+    }
+
+    /// Track session-level volatility average for high_volatility_event detection.
+    pub fn push_session_volatility(&self, vol: f64) {
+        self.session_vol_stats.lock().unwrap().push(vol);
+    }
+
+    /// High volatility event: current vol > 2x session average (warmup: 5 samples).
+    pub fn is_high_volatility(&self, current_vol: f64) -> u8 {
+        let stats = self.session_vol_stats.lock().unwrap();
+        if stats.count < 5 { return 0; }
+        if current_vol > stats.mean * 2.0 { 1u8 } else { 0u8 }
+    }
+
+    /// Master signal: combines bollinger position + extreme imbalance + velocity direction.
+    /// Returns (signal: 0/1/2, label).
+    /// 1 = Buy:  touching lower band AND imbalance > 0.8 AND velocity > 0
+    /// 2 = Sell: touching upper band AND imbalance < -0.8 AND velocity < 0
+    pub fn master_signal(
+        &self, price: f64, imbalance: f32, price_vel: f64,
+    ) -> (u8, String) {
+        let stats = self.bollinger_stats.lock().unwrap();
+        if stats.count < 20 { return (0, String::new()); }
+        let sma = stats.mean;
+        let std = stats.std_dev();
+        drop(stats);
+
+        let upper = sma + 2.0 * std;
+        let lower = sma - 2.0 * std;
+        let pos: i8 = if price > upper { 1 } else if price < lower { -1 } else { 0 };
+
+        if pos == -1 && imbalance > 0.8 && price_vel > 0.0 {
+            (1, "MASTER_BUY".into())
+        } else if pos == 1 && imbalance < -0.8 && price_vel < 0.0 {
+            (2, "MASTER_SELL".into())
+        } else {
+            (0, String::new())
+        }
     }
 
     /// Record trades_per_second for average tracking (vol_burst detection).
@@ -240,7 +286,7 @@ impl TrackingState {
     /// 1 = Short: price touches upper band AND binance_imbalance < 0
     /// 2 = Long:  price touches lower band AND binance_imbalance > 0
     pub fn mean_reversion_signal(&self, price: f64, imbalance: f32) -> (u8, String) {
-        let (sma, upper, lower) = self.bollinger_bands();
+        let (sma, upper, lower, _, _, _) = self.bollinger_bands_full(price);
         if sma == 0.0 { return (0, String::new()); }
 
         if price >= upper && imbalance < -0.1 {
@@ -262,7 +308,7 @@ impl TrackingState {
     pub fn technical_confluence_signal(
         &self, price: f64, imbalance: f32, current_tps: f64, price_vel: f64,
     ) -> (u8, String) {
-        let (sma, _, _) = self.bollinger_bands();
+        let (sma, _, _, _, _, _) = self.bollinger_bands_full(price);
         if sma == 0.0 || current_tps <= 0.0 { return (0, String::new()); }
 
         // 1. Trend position
@@ -369,15 +415,21 @@ pub fn build_book_update(
     if gap_flag > 0 { check_gap_alert(gap_pct); }
 
     // ─── Bollinger Bands & Signals ────────────────────────────────────────
-    let (bb_sma, bb_upper, bb_lower) = tracking.bollinger_bands();
+    let (bb_sma, bb_upper, bb_lower, bb_std, realized_vol, bb_pos) = tracking.bollinger_bands_full(bb_mid);
+    tracking.push_session_volatility(bb_std);
+    let high_vol = tracking.is_high_volatility(bb_std);
     let (mr_signal, mut signal_label) = tracking.mean_reversion_signal(bb_mid, bb_imb);
     tracking.push_tps_sample(trades_ps);
     let (tc_signal, tc_label) = tracking.technical_confluence_signal(bb_mid, bb_imb, trades_ps, price_vel);
+    let (master_sig, master_label) = tracking.master_signal(bb_mid, bb_imb, price_vel);
     if tc_signal > 0 {
         signal_label = if signal_label.is_empty() { tc_label } else { format!("{}|{}", signal_label, tc_label) };
     }
     if mr_signal > 0 && signal_label.is_empty() {
         signal_label = match mr_signal { 1 => "BOLLINGER_SHORT".into(), 2 => "BOLLINGER_LONG".into(), _ => String::new() };
+    }
+    if master_sig > 0 {
+        signal_label = if signal_label.is_empty() { master_label } else { format!("{}|{}", signal_label, master_label) };
     }
     let trend_dir = if bb_sma > 0.0 {
         if bb_mid > bb_sma * 1.001 { 1i8 } else if bb_mid < bb_sma * 0.999 { -1i8 } else { 0i8 }
@@ -426,6 +478,10 @@ pub fn build_book_update(
         technical_confluence:  tc_signal.max(mr_signal.min(1)),
         trend_direction:     trend_dir,
         signal_label:        signal_label,
+        realized_volatility: realized_vol,
+        high_volatility_event: high_vol,
+        bollinger_position:  bb_pos,
+        master_signal:       master_sig,
         ..Default::default()
     }
 }

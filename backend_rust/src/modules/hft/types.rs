@@ -103,6 +103,11 @@ pub struct CsvRecord {
     pub technical_confluence:  u8,    // 1 = all confluence conditions met
     pub trend_direction:       i8,    // -1=below SMA, 0=at SMA, 1=above SMA
     pub signal_label:          String,// e.g. 'BOLLINGER_TOUCH', 'VOL_CONFLUENCE', 'GAP_ARBITRAGE', ''
+    // ─── Volatility & Master Signal ───────────────────────────────────────
+    pub realized_volatility:   f64,   // rolling std dev of last 200 binance prices (σ)
+    pub high_volatility_event: u8,    // 1 = current vol > 2x session average vol
+    pub bollinger_position:    i8,    // 1=above upper, -1=below lower, 0=inside bands
+    pub master_signal:         u8,    // 1=Buy (lower touch+imb>0.8+vel>0), 2=Sell (upper touch+imb<-0.8+vel<0)
 }
 
 impl Default for CsvRecord {
@@ -156,6 +161,10 @@ impl Default for CsvRecord {
             technical_confluence:  0,
             trend_direction:      0,
             signal_label:         String::new(),
+            realized_volatility:   0.0,
+            high_volatility_event: 0,
+            bollinger_position:    0,
+            master_signal:         0,
         }
     }
 }

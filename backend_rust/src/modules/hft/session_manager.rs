@@ -67,7 +67,8 @@ impl SessionManager {
              trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
              price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
              bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
-             technical_confluence,trend_direction,signal_label"
+             technical_confluence,trend_direction,signal_label,\
+             realized_volatility,high_volatility_event,bollinger_position,master_signal"
         );
 
         *self.writer.lock().unwrap() = Some(writer);
@@ -86,7 +87,7 @@ impl SessionManager {
             Some(w) => {
                 let _ = writeln!(
                     w,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     record.ts_local,
                     record.ts_exchange,
                     record.event_type.as_str(),
@@ -134,6 +135,10 @@ impl SessionManager {
                     record.technical_confluence,
                     record.trend_direction,
                     record.signal_label,
+                    record.realized_volatility,
+                    record.high_volatility_event,
+                    record.bollinger_position,
+                    record.master_signal,
                 );
                 drop(writer_guard);
 
