@@ -259,8 +259,11 @@ async fn recover_orphaned_parents(state: &AppState) {
 }
 
 async fn create_next_child(state: &AppState, parent_id: i32, depth_levels: i32, start: chrono::DateTime<Utc>, chunk_min: i32) {
+    // Belt-and-suspenders: always snap to chunk boundary regardless of caller
+    let start = snap_to_next_chunk(start, chunk_min);
     let end = start + chrono::Duration::minutes(chunk_min as i64);
     let name = api::child_session_name(start, chunk_min);
+    info!("Auto-gen child aligned → {} ({}→{})", name, start.format("%H:%M"), end.format("%H:%M"));
     match repository::create_session(state, &name, start, end, chunk_min, depth_levels, Some(parent_id)).await {
         Ok(child_id) => info!("Auto-gen child #{} for parent #{}: {}", child_id, parent_id, name),
         Err(e) => warn!("Failed to auto-gen child for parent #{}: {}", parent_id, e),

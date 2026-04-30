@@ -117,12 +117,13 @@ jobs:
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
-      - name: Build Rust Backend
+      - name: Build Rust Backend (clean)
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         env:
-          CARGO_INCREMENTAL: 1
+          CARGO_INCREMENTAL: 0
         run: |
           cd backend_rust
+          cargo clean --release
           cargo build --release -j $(nproc) --features premium-all
 
       - name: Package
