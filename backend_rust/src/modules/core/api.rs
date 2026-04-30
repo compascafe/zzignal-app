@@ -92,29 +92,63 @@ async fn get_health(State(s): State<Arc<AppState>>) -> Json<Value> {
     let git_sha       = option_env!("VERGEN_GIT_SHA").unwrap_or("dev");
     let target        = option_env!("VERGEN_CARGO_TARGET_TRIPLE").unwrap_or("unknown");
 
-    let (db_ok, db_error, tables) = match s.db.as_ref() {
+    // Minimum required tables for full functionality
+    let expected_tables: &[&str] = &[
+        "btc_ticks",
+        "candles",
+        "fills",
+        "hft_snapshots",
+        "order_book_snapshots",
+        "recording_sessions",
+        "scheduled_executions",
+        "session_snapshots",
+        "session_trades",
+    ];
+
+    let (db_ok, db_error, mut tables, mut missing_tables) = match s.db.as_ref() {
         Some(pool) => {
             match sqlx::query("SELECT 1 AS ping").fetch_one(pool).await {
                 Ok(_) => {
-                    // Listar tablas existentes (para verificar migraciones)
-                    let tables = match sqlx::query_as::<_, (String,)>(r#"
+                    match sqlx::query_as::<_, (String,)>(r#"
                         SELECT table_name FROM information_schema.tables
                         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
                         ORDER BY table_name
                     "#).fetch_all(pool).await {
-                        Ok(rows) => rows.into_iter().map(|(t,)| t).collect::<Vec<_>>(),
-                        Err(e) => vec![format!("error leyendo tablas: {}", e)],
-                    };
-                    (true, None, tables)
+                        Ok(rows) => {
+                            let existing: Vec<String> = rows.into_iter().map(|(t,)| t).collect();
+                            let missing: Vec<String> = expected_tables.iter()
+                                .filter(|t| !existing.iter().any(|e| e == **t))
+                                .map(|t| t.to_string())
+                                .collect();
+                            (true, None, existing, missing)
+                        }
+                        Err(e) => {
+                            let msg = format!("error leyendo tablas: {}", e);
+                            let missing: Vec<String> = expected_tables.iter().map(|t| t.to_string()).collect();
+                            (false, Some(msg), vec![], missing)
+                        }
+                    }
                 }
                 Err(e) => {
                     let msg = format!("ping falló: {e}");
-                    (false, Some(msg), vec![])
+                    let missing: Vec<String> = expected_tables.iter().map(|t| t.to_string()).collect();
+                    (false, Some(msg), vec![], missing)
                 }
             }
         }
-        None => (false, Some("DATABASE_URL no configurada".into()), vec![]),
+        None => {
+            let missing: Vec<String> = expected_tables.iter().map(|t| t.to_string()).collect();
+            (false, Some("DATABASE_URL no configurada".into()), vec![], missing)
+        }
     };
+
+    // Ensure tables/missing_tables are bound even if unreachable
+    if tables.is_empty() && db_ok {
+        tables = vec!["(empty)".into()];
+    }
+    if missing_tables.is_empty() && !db_ok {
+        missing_tables = expected_tables.iter().map(|t| t.to_string()).collect();
+    }
 
     Json(json!({
         "app": {
@@ -124,9 +158,12 @@ async fn get_health(State(s): State<Arc<AppState>>) -> Json<Value> {
             "target":     target,
         },
         "database": {
-            "connected": db_ok,
-            "error":     db_error,
-            "tables":    tables,
+            "connected":      db_ok,
+            "error":          db_error,
+            "tables":         tables,
+            "expected":       expected_tables,
+            "missing":        missing_tables,
+            "all_present":    missing_tables.is_empty(),
         },
         "status": *s.status.read().await,
     }))
