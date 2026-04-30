@@ -648,21 +648,12 @@ async fn build_fallback_csv(
 }
 
 /// Try to read the per-session CSV file from disk (written by SessionManager).
-/// Returns the raw file content with its data-header, or None if file doesn't exist.
+/// Returns the full file content (header + data rows), or None if file doesn't exist.
 fn read_session_csv_disk(session_manager: &crate::modules::hft::session_manager::SessionManager, id: i32) -> Option<String> {
     let path = session_manager.session_path(id);
-    match std::fs::read_to_string(&path) {
-        Ok(raw) => {
-            // SessionManager files are full 53-column CSVs with a header row.
-            // The header is always the first line; everything else is data.
-            if raw.is_empty() { return None; }
-            // Skip the existing header line — the export adds its own metadata header.
-            let data_start = raw.find('\n').map(|n| n + 1).unwrap_or(0);
-            let data = raw[data_start..].trim_end().to_string();
-            if data.is_empty() { None } else { Some(data) }
-        }
-        Err(_) => None,
-    }
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let trimmed = raw.trim_end().to_string();
+    if trimmed.is_empty() { None } else { Some(trimmed) }
 }
 
 async fn export_session(
