@@ -179,6 +179,7 @@ async fn process_sessions(state: Arc<AppState>) {
 
         // Clear ring buffer and drain tick channel to prevent residual events leaking
         state.binance_ring.clear();
+        state.tick_drain.store(true, std::sync::atomic::Ordering::Release);
 
         if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
             warn!("No se pudo iniciar sesión #{}: {}", session.id, e);

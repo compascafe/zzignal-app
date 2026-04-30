@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicBool;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use sqlx::PgPool;
 
@@ -60,6 +61,9 @@ pub struct AppState {
     /// Per-session CSV file manager (strict file isolation)
     pub session_manager: Arc<SessionManager>,
 
+    /// Flag: set by scheduler on new session start → consumer drains tick channel
+    pub tick_drain: Arc<AtomicBool>,
+
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
 }
@@ -111,6 +115,7 @@ impl AppState {
             tick_tx,
             session_manager:   Arc::new(SessionManager::new("sessions")),
             sim_executor:      Arc::new(Mutex::new(PaperExecutor::new())),
+            tick_drain:        Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })

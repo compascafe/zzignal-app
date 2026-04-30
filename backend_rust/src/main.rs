@@ -142,8 +142,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let csv3     = Arc::clone(&csv_logger);
         let sm3      = Arc::clone(&state.session_manager);
         let track3   = Arc::clone(&tracking_state);
+        let drain3   = Arc::clone(&state.tick_drain);
         tokio::spawn(async move {
             while let Some(tick) = tick_rx.recv().await {
+                // Drain residual ticks on session boundary
+                if drain3.swap(false, std::sync::atomic::Ordering::Acquire) {
+                    while tick_rx.try_recv().is_ok() {}
+                    continue; // discard this tick — it's from the old session
+                }
                 if let Some(ref bn) = *depth3.read().await {
                     tracking_state.track_price(tick.price, tick.event_time);
                     let rec = metrics::build_binance_tick(bn, &track3, tick.event_time, tick.price, tick.volume);
