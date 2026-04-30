@@ -18,6 +18,7 @@ use zip::write::SimpleFileOptions;
 use crate::modules::core::state::AppState;
 use crate::modules::db::models::ScheduledExecution;
 use crate::modules::db::repository;
+use crate::modules::db::scheduler::floor_to_chunk;
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -234,8 +235,8 @@ async fn start_session(
             warn!("No se pudo iniciar padre #{}: {}", parent_id, e);
         }
 
-        // 3. Create first child
-        let child_start = parent_start;
+        // 3. Create first child — snap to previous chunk boundary for clean labels
+        let child_start = floor_to_chunk(parent_start, chunk_min);
         let child_end = child_start + Duration::minutes(chunk_min as i64);
         let child_name = child_session_name(child_start, chunk_min);
         let child_id = match repository::create_session(&s, &child_name, child_start, child_end, chunk_min, depth, Some(parent_id)).await {

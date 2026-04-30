@@ -227,6 +227,15 @@ fn snap_to_next_chunk(ts: chrono::DateTime<Utc>, chunk_min: i32) -> chrono::Date
     }
 }
 
+/// Redondea hacia ABAJO a la frontera de chunk más cercana.
+/// Ej: 01:05 con chunk=15 → 01:00. 01:15 → 01:15 (ya alineado).
+pub(crate) fn floor_to_chunk(ts: chrono::DateTime<Utc>, chunk_min: i32) -> chrono::DateTime<Utc> {
+    let chunk_secs = (chunk_min as i64) * 60;
+    let secs = ts.timestamp();
+    let bucket = (secs / chunk_secs) * chunk_secs;
+    chrono::DateTime::from_timestamp(bucket, 0).unwrap_or(ts)
+}
+
 /// Recupera padres indefinidos huérfanos (ej. tras reinicio del backend)
 async fn recover_orphaned_parents(state: &AppState) {
     let parents = match repository::list_sessions(state, 200).await {
