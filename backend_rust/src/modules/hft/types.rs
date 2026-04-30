@@ -108,6 +108,9 @@ pub struct CsvRecord {
     pub high_volatility_event: u8,    // 1 = current vol > 2x session average vol
     pub bollinger_position:    i8,    // 1=above upper, -1=below lower, 0=inside bands
     pub master_signal:         u8,    // 1=Buy (lower touch+imb>0.8+vel>0), 2=Sell (upper touch+imb<-0.8+vel<0)
+    // ─── Conformal Prediction Risk Validation ─────────────────────────────
+    pub cp_uncertainty_range:  f64,   // width of 95% confidence interval (USD)
+    pub cp_valid_signal:       u8,    // 1 = signal passes CP validation, 0 = blocked (too erratic)
 }
 
 impl Default for CsvRecord {
@@ -165,6 +168,8 @@ impl Default for CsvRecord {
             high_volatility_event: 0,
             bollinger_position:    0,
             master_signal:         0,
+            cp_uncertainty_range:  0.0,
+            cp_valid_signal:       0,
         }
     }
 }

@@ -74,6 +74,10 @@ pub struct TrackingState {
 
     // ─── Session-level volatility average (for high_volatility_event) ─────
     pub(super) session_vol_stats: Mutex<RunningStats>,
+
+    // ─── Conformal Prediction: calibration set (N=1000) ───────────────────
+    /// Absolute residuals |binance_price - bollinger_sma| for non-conformity scores.
+    pub calibration_errors: Mutex<VecDeque<f64>>,
 }
 
 impl TrackingState {
@@ -94,6 +98,7 @@ impl TrackingState {
             bollinger_stats:     Mutex::new(RunningStats::new()),
             trades_ps_stats:     Mutex::new(RunningStats::new()),
             session_vol_stats:   Mutex::new(RunningStats::new()),
+            calibration_errors:  Mutex::new(VecDeque::with_capacity(1024)),
         }
     }
 
@@ -344,6 +349,33 @@ impl TrackingState {
         *self.last_poly_mid.lock().unwrap() = Some(price);
         *self.last_poly_mid_ts.lock().unwrap() = Some(ts_ms);
     }
+
+    // ─── Conformal Prediction (95% confidence, α=0.05) ────────────────────
+
+    /// Push absolute residual |binance_price - bollinger_sma| into calibration set (N=1000).
+    pub fn push_calibration_error(&self, error: f64) {
+        let mut w = self.calibration_errors.lock().unwrap();
+        w.push_back(error);
+        if w.len() > 1000 { w.pop_front(); }
+    }
+
+    /// Compute (1-α) quantile from calibration errors.
+    /// Returns (uncertainty_range_in_usd, cp_valid_signal).
+    /// cp_valid_signal = 1 if current_deviation <= quantile (within confidence interval).
+    pub fn conformal_validate(&self, current_deviation: f64, alpha: f64) -> (f64, u8) {
+        let errors = self.calibration_errors.lock().unwrap();
+        let n = errors.len();
+        if n < 20 { return (0.0, 0u8); }
+
+        let mut sorted: Vec<f64> = errors.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let idx = (((n as f64 + 1.0) * (1.0 - alpha)).ceil() as usize).min(n) - 1;
+        let quantile = sorted[idx];
+
+        let valid = if current_deviation <= quantile { 1u8 } else { 0u8 };
+        (quantile, valid)
+    }
 }
 
 // ─── Funciones de cálculo ─────────────────────────────────────────────────
@@ -418,10 +450,21 @@ pub fn build_book_update(
     let (bb_sma, bb_upper, bb_lower, bb_std, realized_vol, bb_pos) = tracking.bollinger_bands_full(bb_mid);
     tracking.push_session_volatility(bb_std);
     let high_vol = tracking.is_high_volatility(bb_std);
+
+    // ─── Conformal Prediction: gate signals with risk validation ──────────
+    let abs_err = (bb_mid - bb_sma).abs();
+    tracking.push_calibration_error(abs_err);
+    let (cp_range, cp_valid) = tracking.conformal_validate(abs_err, 0.05);
+
     let (mr_signal, mut signal_label) = tracking.mean_reversion_signal(bb_mid, bb_imb);
     tracking.push_tps_sample(trades_ps);
     let (tc_signal, tc_label) = tracking.technical_confluence_signal(bb_mid, bb_imb, trades_ps, price_vel);
-    let (master_sig, master_label) = tracking.master_signal(bb_mid, bb_imb, price_vel);
+    // Master signal only activates if CP validation passes
+    let (master_sig, master_label) = if cp_valid > 0 {
+        tracking.master_signal(bb_mid, bb_imb, price_vel)
+    } else {
+        (0u8, String::new())
+    };
     if tc_signal > 0 {
         signal_label = if signal_label.is_empty() { tc_label } else { format!("{}|{}", signal_label, tc_label) };
     }
@@ -482,6 +525,8 @@ pub fn build_book_update(
         high_volatility_event: high_vol,
         bollinger_position:  bb_pos,
         master_signal:       master_sig,
+        cp_uncertainty_range: cp_range,
+        cp_valid_signal:     cp_valid,
         ..Default::default()
     }
 }

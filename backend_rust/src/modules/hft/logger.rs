@@ -60,14 +60,15 @@ impl CsvLogger {
                  price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
                  bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
                  technical_confluence,trend_direction,signal_label,\
-                 realized_volatility,high_volatility_event,bollinger_position,master_signal"
+                 realized_volatility,high_volatility_event,bollinger_position,master_signal,\
+                 cp_uncertainty_range,cp_valid_signal"
             );
         }
 
         for r in &rows {
             let _ = writeln!(
                 file,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 r.ts_local,
                 r.ts_exchange,
                 r.event_type.as_str(),
@@ -119,6 +120,8 @@ impl CsvLogger {
                 r.high_volatility_event,
                 r.bollinger_position,
                 r.master_signal,
+                r.cp_uncertainty_range,
+                r.cp_valid_signal,
             );
         }
 
