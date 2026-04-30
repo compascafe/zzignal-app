@@ -52,14 +52,15 @@ impl SessionManager {
 
         let mut writer = BufWriter::with_capacity(65536, file);
 
-        // Write 26-column header
+        // Write 32-column header
         let _ = writeln!(
             writer,
             "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
              binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,\
              poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
              trade_price,trade_size,is_informed,\
-             sim_status,sim_side,sim_entry_price,sim_exit_price,sim_pnl_trade,sim_current_balance"
+             imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
+             liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance"
         );
 
         *self.writer.lock().unwrap() = Some(writer);
@@ -78,7 +79,7 @@ impl SessionManager {
             Some(w) => {
                 let _ = writeln!(
                     w,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     record.ts_local,
                     record.ts_exchange,
                     record.event_type.as_str(),
@@ -99,12 +100,18 @@ impl SessionManager {
                     record.trade_price,
                     record.trade_size,
                     record.is_informed,
-                    record.sim_status,
-                    record.sim_side,
-                    record.sim_entry_price,
-                    record.sim_exit_price,
-                    record.sim_pnl_trade,
-                    record.sim_current_balance,
+                    record.imba_status,
+                    record.imba_side,
+                    record.imba_entry_price,
+                    record.imba_exit_price,
+                    record.imba_trade_pnl,
+                    record.imba_balance,
+                    record.liqb_status,
+                    record.liqb_side,
+                    record.liqb_entry_price,
+                    record.liqb_exit_price,
+                    record.liqb_trade_pnl,
+                    record.liqb_balance,
                 );
                 drop(writer_guard);
 

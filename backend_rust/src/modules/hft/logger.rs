@@ -54,14 +54,15 @@ impl CsvLogger {
                  binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,\
                  poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
                  trade_price,trade_size,is_informed,\
-                 sim_status,sim_side,sim_entry_price,sim_exit_price,sim_pnl_trade,sim_current_balance"
+                 imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
+                 liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance"
             );
         }
 
         for r in &rows {
             let _ = writeln!(
                 file,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 r.ts_local,
                 r.ts_exchange,
                 r.event_type.as_str(),
@@ -82,39 +83,18 @@ impl CsvLogger {
                 r.trade_price,
                 r.trade_size,
                 r.is_informed,
-                r.sim_status,
-                r.sim_side,
-                r.sim_entry_price,
-                r.sim_exit_price,
-                r.sim_pnl_trade,
-                r.sim_current_balance,
-            );
-        }
-
-        for r in &rows {
-            let _ = writeln!(
-                file,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                r.ts_local,
-                r.ts_exchange,
-                r.event_type.as_str(),
-                r.latencia_ms,
-                r.binance_price,
-                r.binance_micro_price,
-                r.binance_imbalance,
-                r.binance_vol_100ms,
-                r.binance_vol_24h,
-                r.poly_bid,
-                r.poly_ask,
-                r.poly_mid,
-                r.poly_spread,
-                r.poly_bid_vol_all,
-                r.poly_ask_vol_all,
-                r.poly_imbalance,
-                r.trade_side,
-                r.trade_price,
-                r.trade_size,
-                r.is_informed,
+                r.imba_status,
+                r.imba_side,
+                r.imba_entry_price,
+                r.imba_exit_price,
+                r.imba_trade_pnl,
+                r.imba_balance,
+                r.liqb_status,
+                r.liqb_side,
+                r.liqb_entry_price,
+                r.liqb_exit_price,
+                r.liqb_trade_pnl,
+                r.liqb_balance,
             );
         }
 

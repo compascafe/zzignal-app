@@ -1,31 +1,52 @@
-// ─── Paper Trading Executor ──────────────────────────────────────────────────
-// Simula operaciones de trading con $20 USD de capital virtual.
+// ─── Strategy Manager — Multi-estrategia Paper Trading ($20 c/u) ───────────────
 //
-// Parámetros por estacionalidad (según duration_min del mercado):
+// Ejecuta DOS estrategias shadow independientes con capital virtual de $20 cada una.
+// Ambas comparten el Safety Layer (spread, data integrity, execution).
 //
-//   5-min (Sniper):
-//     - Trigger volumen: binance_vol_100ms > 0.4
-//     - Desviación micro_price: > $0.50 del binance_price
-//     - TP: $0.012 por contrato o 10 segundos
+// Trigger A — Imbalance Divergence:
+//   BUY  si binance_imbalance > 0.85 Y poly_imbalance < 0.20
+//   SELL si binance_imbalance < 0.15 Y poly_imbalance > 5.0
+//   TP $0.020/contrato, timeout 20s
 //
-//   15-min (Arbitraje):
-//     - Trigger volumen: binance_vol_100ms > 0.2
-//     - Desviación micro_price: > $0.30 del binance_price
-//     - TP: $0.025 por contrato o 30 segundos
+// Trigger B — Liquidity Grabbing (Cancelaciones):
+//   BUY  si poly_ask_vol_all ↓ >40% en 200ms sin TRADE significativo
+//   SELL si poly_bid_vol_all ↓ >40% en 200ms sin TRADE significativo
+//   TP $0.010/contrato, timeout 8s
 //
-// Proximidad al Strike:
-//   - Si |poly_mid - strike| < $1.50 → ignora filtros de volumen Y desviación
-//     Dispara solo por dirección del binance_micro_price (sniper mode).
-//
-// Ejecución realista:
-//   - Compra: poly_ask, Venta: poly_bid
-//   - Comisión: $0.001 por contrato por trade
-//   - Capital inicial: $20.00 (persiste entre eventos, no se resetea)
+// Safety Layer (ambas estrategias):
+//   – poly_spread > MAX_SPREAD → abort
+//   – poly_ask <= 0 || poly_bid <= 0 → abort
+//   – poly_ask <= poly_bid → abort
+//   – Compra al ask, venta al bid
+//   – $0.001 comisión/contrato
 
+use std::collections::VecDeque;
 use crate::modules::hft::types::CsvRecord;
+use crate::modules::hft::types::EventType;
 use tracing;
 
-/// Lado de la simulación
+// ─── Constantes ──────────────────────────────────────────────────────────────
+
+const INITIAL_CAPITAL: f64 = 20.00;
+const COMMISSION_PER_CONTRACT: f64 = 0.001;
+const MAX_SPREAD: f64 = 0.05;
+
+// Trigger A: Imbalance Divergence
+const IMB_TRIGGER_BINANCE_BUY: f32 = 0.85;
+const IMB_TRIGGER_POLY_BUY: f64 = 0.20;
+const IMB_TRIGGER_BINANCE_SELL: f32 = 0.15;
+const IMB_TRIGGER_POLY_SELL: f64 = 5.0;
+const IMB_TP_PER_CONTRACT: f64 = 0.020;
+const IMB_TIMEOUT_MS: i64 = 20_000;
+
+// Trigger B: Liquidity Grabbing
+const LIQ_WINDOW_MS: i64 = 200;
+const LIQ_DROP_PCT: f64 = 0.40;
+const LIQ_TP_PER_CONTRACT: f64 = 0.010;
+const LIQ_TIMEOUT_MS: i64 = 8_000;
+
+// ─── Tipos ───────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SimSide {
     Buy,
@@ -41,259 +62,343 @@ impl SimSide {
     }
 }
 
-/// Resultado de la evaluación por fila
-#[derive(Debug, Clone)]
-pub struct SimResult {
-    pub status:          String, // IDLE|OPEN|CLOSED
-    pub side:            String, // BUY|SELL (empty if IDLE)
-    pub entry_price:     f64,
-    pub exit_price:      f64,
-    pub pnl_trade:       f64,
-    pub current_balance: f64,
-}
-
-impl Default for SimResult {
-    fn default() -> Self {
-        Self {
-            status:          "IDLE".to_string(),
-            side:            String::new(),
-            entry_price:     0.0,
-            exit_price:      0.0,
-            pnl_trade:       0.0,
-            current_balance: 0.0,
-        }
-    }
-}
-
-/// Posición abierta del paper trader
 #[derive(Debug, Clone)]
 struct Position {
     side:            SimSide,
     entry_price:     f64,
     entry_time_ms:   i64,
     size_contracts:  f64,
-    market_duration: i32,
 }
 
-/// Parámetros por estacionalidad — ajustados para mayor sensibilidad
-struct SeasonParams {
-    /// binance_vol_100ms mínimo para disparar (se ignora en proximity)
-    vol_trigger:      f64,
-    /// Desviación mínima de micro_price vs binance_price (se ignora en proximity)
-    micro_deviation:  f64,
-    /// Take-profit USD por contrato
-    tp_per_contract:  f64,
-    /// Timeout de posición en ms
-    tp_timeout_ms:    i64,
+#[derive(Debug, Clone, Default)]
+pub struct StratState {
+    pub status:          String,
+    pub side:            String,
+    pub entry_price:     f64,
+    pub exit_price:      f64,
+    pub trade_pnl:       f64,
+    pub balance:         f64,
 }
 
-fn params_for(duration_min: i32) -> SeasonParams {
-    match duration_min {
-        5 => SeasonParams {
-            // Sniper 5-min: alta sensibilidad
-            vol_trigger:     0.4,
-            micro_deviation: 0.50,
-            tp_per_contract: 0.012,
-            tp_timeout_ms:   10_000,
-        },
-        _ => SeasonParams {
-            // Arbitraje 15-min (default): sensibilidad moderada
-            vol_trigger:     0.2,
-            micro_deviation: 0.30,
-            tp_per_contract: 0.025,
-            tp_timeout_ms:   30_000,
-        },
+#[derive(Debug, Clone, Default)]
+pub struct StrategyResult {
+    pub imba: StratState,
+    pub liqb: StratState,
+}
+
+// ─── Per-Strategy Instance (mutable state) ───────────────────────────────────
+
+struct StrategyInstance {
+    balance:  f64,
+    position: Option<Position>,
+    pnl:      f64,
+    trades:   u32,
+}
+
+impl StrategyInstance {
+    fn new() -> Self {
+        Self { balance: INITIAL_CAPITAL, position: None, pnl: 0.0, trades: 0 }
     }
 }
 
-// ─── Constantes ──────────────────────────────────────────────────────────────
+// ─── VolHistory — 200ms sliding window ──────────────────────────────────────
 
-const COMMISSION_PER_CONTRACT: f64 = 0.001;
-const INITIAL_CAPITAL: f64 = 20.00;
-/// Distancia al strike que activa el modo sniper (ignora vol + deviation)
-const STRIKE_PROXIMITY_SNIPER: f64 = 1.50;
-/// Spread máximo permitido para operar. Si poly_ask - poly_bid > MAX_SPREAD, abortar.
-const MAX_SPREAD: f64 = 0.05;
-
-/// Paper Trading Executor — evalúa cada fila del CSV y decide si abrir/cerrar posición.
-/// El balance persiste entre llamadas (no se resetea).
-pub struct PaperExecutor {
-    pub balance:         f64,
-    position:            Option<Position>,
-    pub total_pnl:       f64,
-    pub trades_closed:   u32,
+struct VolHistory {
+    window: VecDeque<(i64, f64, f64)>, // (ts_ms, ask_vol, bid_vol)
+    win_ms: i64,
 }
 
-impl PaperExecutor {
+impl VolHistory {
+    fn new(window_ms: i64) -> Self {
+        Self { window: VecDeque::with_capacity(128), win_ms: window_ms }
+    }
+
+    fn push(&mut self, now_ms: i64, ask_vol: f64, bid_vol: f64) {
+        self.window.push_back((now_ms, ask_vol, bid_vol));
+        let cutoff = now_ms - self.win_ms;
+        while self.window.front().map_or(false, |(ts, _, _)| *ts < cutoff) {
+            self.window.pop_front();
+        }
+    }
+
+    fn max_ask_vol(&self) -> (f64, f64) {
+        self.window.iter()
+            .map(|(_, a, b)| (*a, *b))
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or((0.0, 0.0))
+    }
+
+    fn max_bid_vol(&self) -> (f64, f64) {
+        self.window.iter()
+            .map(|(_, a, b)| (*b, *a))
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or((0.0, 0.0))
+    }
+
+    fn len(&self) -> usize {
+        self.window.len()
+    }
+}
+
+// ─── StrategyManager ─────────────────────────────────────────────────────────
+
+pub struct StrategyManager {
+    imba:   StrategyInstance,
+    liqb:   StrategyInstance,
+    vol_history: VolHistory,
+    last_trade_ts: i64,
+}
+
+impl StrategyManager {
     pub fn new() -> Self {
         Self {
-            balance:       INITIAL_CAPITAL,
-            position:      None,
-            total_pnl:     0.0,
-            trades_closed: 0,
+            imba:          StrategyInstance::new(),
+            liqb:          StrategyInstance::new(),
+            vol_history:   VolHistory::new(LIQ_WINDOW_MS),
+            last_trade_ts: 0,
         }
     }
 
-    /// Evalúa un CsvRecord contra la lógica de trading.
-    /// `strike_price` — precio BTC al inicio del intervalo (price_to_beat).
-    /// `market_duration_min` — 5 o 15, define los thresholds.
-    pub fn evaluate(
-        &mut self,
-        rec: &CsvRecord,
-        strike_price: Option<f64>,
-        market_duration_min: i32,
-    ) -> SimResult {
+    pub fn evaluate(&mut self, rec: &CsvRecord) -> StrategyResult {
         let now_ms = rec.ts_exchange.parse::<i64>().unwrap_or(0);
-        let params = params_for(market_duration_min);
 
-        // ─── Data integrity check (mínimo) ─────────────────────────────────
-        // Si precios no válidos, no operar. El spread se valida más abajo
-        // (después de los triggers, para poder loguear la razón del aborto).
-        if rec.poly_ask <= 0.0 || rec.poly_bid <= 0.0 {
-            return self.idle_result();
+        // Update volume history for Trigger B
+        self.vol_history.push(now_ms, rec.poly_ask_vol_all, rec.poly_bid_vol_all);
+
+        if rec.event_type == EventType::Trade {
+            self.last_trade_ts = now_ms;
         }
 
-        // ─── Posición abierta → evaluar cierre ─────────────────────────────
-        if let Some(ref pos) = self.position {
-            let exit_price = match pos.side {
-                SimSide::Buy => rec.poly_bid,  // vender al bid
-                SimSide::Sell => rec.poly_ask, // comprar al ask
-            };
-            if exit_price <= 0.0 {
-                return self.idle_result();
-            }
+        // Safety Layer — shared
+        let safe = safety_check(rec);
 
-            let pnl_per_contract = match pos.side {
-                SimSide::Buy => exit_price - pos.entry_price,
-                SimSide::Sell => pos.entry_price - exit_price,
-            };
-            let gross_pnl = pnl_per_contract * pos.size_contracts;
+        let imba_state: StratState;
+        let liqb_state: StratState;
 
-            let tp_hit = gross_pnl >= params.tp_per_contract * pos.size_contracts;
-            let timed_out = now_ms - pos.entry_time_ms >= params.tp_timeout_ms;
-
-            if tp_hit || timed_out {
-                let commission = COMMISSION_PER_CONTRACT * pos.size_contracts;
-                let net_pnl = gross_pnl - commission;
-                self.balance += net_pnl;
-                self.total_pnl += net_pnl;
-                self.trades_closed += 1;
-
-                let result = SimResult {
-                    status:          "CLOSED".to_string(),
-                    side:            pos.side.as_str().to_string(),
-                    entry_price:     pos.entry_price,
-                    exit_price,
-                    pnl_trade:       net_pnl,
-                    current_balance: self.balance,
-                };
-                self.position = None;
-                return result;
-            }
-
-            return SimResult {
-                status:          "OPEN".to_string(),
-                side:            pos.side.as_str().to_string(),
-                entry_price:     pos.entry_price,
-                exit_price:      0.0,
-                pnl_trade:       0.0,
-                current_balance: self.balance,
-            };
-        }
-
-        // ─── IDLE: evaluar trigger de entrada ─────────────────────────────
-
-        // Proximidad al strike: modo sniper
-        let mut sniper_mode = false;
-        if let Some(strike) = strike_price {
-            let distance = (rec.poly_mid - strike).abs();
-            if distance < STRIKE_PROXIMITY_SNIPER && distance >= 0.0 {
-                sniper_mode = true;
-            }
-        }
-
-        let signal_detected = if sniper_mode {
-            rec.binance_micro_price > 0.0 && rec.binance_price > 0.0
-                && (rec.binance_micro_price - rec.binance_price).abs() > 0.001
-        } else {
-            let micro_dev = (rec.binance_micro_price - rec.binance_price).abs();
-            let deviation_ok = micro_dev > params.micro_deviation;
-            let vol_ok = rec.binance_vol_100ms > params.vol_trigger;
-            deviation_ok && vol_ok
-        };
-
-        if !signal_detected {
-            return self.idle_result();
-        }
-
-        // ─── SEÑAL DETECTADA — validar viabilidad económica ────────────────
-
-        let spread = rec.poly_ask - rec.poly_bid;
-
-        // Data integrity: spread negativo o cero → WS desactualizado, ignorar
-        if spread <= 0.0 {
-            return self.idle_result();
-        }
-
-        // Max spread: si > $0.05, la ventaja estadística se destruye
-        if spread > MAX_SPREAD {
-            tracing::warn!(
-                "[STAY IDLE] Signal detected but spread too wide: {:.4} (ask={:.4} bid={:.4})",
-                spread, rec.poly_ask, rec.poly_bid
+        if safe {
+            imba_state = process_strategy(
+                &mut self.imba, rec, now_ms,
+                IMB_TP_PER_CONTRACT, IMB_TIMEOUT_MS,
+                |rec| imbalance_trigger(rec),
             );
-            return self.idle_result();
-        }
 
-        // Determinar dirección: micro_price > binance_price → bullish → BUY
-        let side = if rec.binance_micro_price > rec.binance_price {
-            SimSide::Buy
+            // Trigger B needs external state (vol_history, last_trade_ts)
+            liqb_state = if self.vol_history.len() >= 3 {
+                let trade_in_window = now_ms - self.last_trade_ts <= LIQ_WINDOW_MS;
+                let (max_ask, _) = self.vol_history.max_ask_vol();
+                let (max_bid, _) = self.vol_history.max_bid_vol();
+                process_strategy(
+                    &mut self.liqb, rec, now_ms,
+                    LIQ_TP_PER_CONTRACT, LIQ_TIMEOUT_MS,
+                    |rec| liquidity_trigger(rec, trade_in_window, max_ask, max_bid),
+                )
+            } else {
+                close_only(&mut self.liqb, rec, now_ms, LIQ_TP_PER_CONTRACT, LIQ_TIMEOUT_MS)
+            };
         } else {
-            SimSide::Sell
-        };
-
-        // Precio de entrada: comprar estrictamente al ask, vender al bid
-        let entry_price = match side {
-            SimSide::Buy => rec.poly_ask,
-            SimSide::Sell => rec.poly_bid,
-        };
-
-        // Tamaño: 50% del balance, cap 10 contratos
-        let max_contracts = (self.balance * 0.5 / entry_price).floor();
-        if max_contracts < 1.0 {
-            return self.idle_result();
+            imba_state = close_only(&mut self.imba, rec, now_ms, IMB_TP_PER_CONTRACT, IMB_TIMEOUT_MS);
+            liqb_state = close_only(&mut self.liqb, rec, now_ms, LIQ_TP_PER_CONTRACT, LIQ_TIMEOUT_MS);
         }
-        let size = max_contracts.min(10.0);
 
-        // Comisión de entrada
-        let entry_commission = COMMISSION_PER_CONTRACT * size;
-        self.balance -= entry_commission;
+        StrategyResult { imba: imba_state, liqb: liqb_state }
+    }
+}
 
-        self.position = Some(Position {
-            side,
-            entry_price,
-            entry_time_ms: now_ms,
-            size_contracts: size,
-            market_duration: market_duration_min,
-        });
+// ─── Safety Layer ────────────────────────────────────────────────────────────
 
-        SimResult {
-            status:          "OPEN".to_string(),
-            side:            side.as_str().to_string(),
-            entry_price,
-            exit_price:      0.0,
-            pnl_trade:       0.0,
-            current_balance: self.balance,
-        }
+fn safety_check(rec: &CsvRecord) -> bool {
+    if rec.poly_ask <= 0.0 || rec.poly_bid <= 0.0 {
+        return false;
+    }
+    if rec.poly_ask <= rec.poly_bid {
+        return false;
+    }
+    let spread = rec.poly_ask - rec.poly_bid;
+    spread <= MAX_SPREAD
+}
+
+// ─── Strategy processing ─────────────────────────────────────────────────────
+
+fn close_only(
+    inst: &mut StrategyInstance,
+    rec: &CsvRecord,
+    now_ms: i64,
+    tp_per_contract: f64,
+    timeout_ms: i64,
+) -> StratState {
+    evaluate_close(inst, rec, now_ms, tp_per_contract, timeout_ms)
+}
+
+fn process_strategy<F>(
+    inst: &mut StrategyInstance,
+    rec: &CsvRecord,
+    now_ms: i64,
+    tp_per_contract: f64,
+    timeout_ms: i64,
+    trigger_fn: F,
+) -> StratState
+where
+    F: Fn(&CsvRecord) -> Option<(SimSide, String)>,
+{
+    if inst.position.is_some() {
+        return evaluate_close(inst, rec, now_ms, tp_per_contract, timeout_ms);
     }
 
-    fn idle_result(&self) -> SimResult {
-        SimResult {
-            status:          "IDLE".to_string(),
-            side:            String::new(),
-            entry_price:     0.0,
-            exit_price:      0.0,
-            pnl_trade:       0.0,
-            current_balance: self.balance,
+    let (side, _reason) = match trigger_fn(rec) {
+        Some(s) => s,
+        None => return StratState {
+            status: "IDLE".into(),
+            balance: inst.balance,
+            ..Default::default()
+        },
+    };
+
+    let entry_price = match side {
+        SimSide::Buy => rec.poly_ask,
+        SimSide::Sell => rec.poly_bid,
+    };
+
+    let max_contracts = (inst.balance * 0.5 / entry_price).floor();
+    if max_contracts < 1.0 {
+        return StratState { status: "IDLE".into(), balance: inst.balance, ..Default::default() };
+    }
+    let size = max_contracts.min(10.0);
+
+    let entry_commission = COMMISSION_PER_CONTRACT * size;
+    inst.balance -= entry_commission;
+
+    inst.position = Some(Position { side, entry_price, entry_time_ms: now_ms, size_contracts: size });
+
+    StratState {
+        status:  "OPEN".into(),
+        side:    side.as_str().into(),
+        entry_price,
+        exit_price: 0.0,
+        trade_pnl:  0.0,
+        balance:    inst.balance,
+    }
+}
+
+fn evaluate_close(
+    inst: &mut StrategyInstance,
+    rec: &CsvRecord,
+    now_ms: i64,
+    tp_per_contract: f64,
+    timeout_ms: i64,
+) -> StratState {
+    let pos = match &inst.position {
+        Some(p) => p.clone(),
+        None => return StratState { status: "IDLE".into(), balance: inst.balance, ..Default::default() },
+    };
+
+    let exit_price = match pos.side {
+        SimSide::Buy => rec.poly_bid,
+        SimSide::Sell => rec.poly_ask,
+    };
+    if exit_price <= 0.0 {
+        return StratState {
+            status: "OPEN".into(),
+            side: pos.side.as_str().into(),
+            entry_price: pos.entry_price,
+            exit_price: 0.0,
+            trade_pnl: 0.0,
+            balance: inst.balance,
+        };
+    }
+
+    let pnl_per_contract = match pos.side {
+        SimSide::Buy => exit_price - pos.entry_price,
+        SimSide::Sell => pos.entry_price - exit_price,
+    };
+    let gross_pnl = pnl_per_contract * pos.size_contracts;
+
+    let tp_hit = gross_pnl >= tp_per_contract * pos.size_contracts;
+    let timed_out = now_ms - pos.entry_time_ms >= timeout_ms;
+
+    if tp_hit || timed_out {
+        let commission = COMMISSION_PER_CONTRACT * pos.size_contracts;
+        let net_pnl = gross_pnl - commission;
+        inst.balance += net_pnl;
+        inst.pnl += net_pnl;
+        inst.trades += 1;
+
+        if tp_hit {
+            tracing::debug!("[PAPER] TP hit: side={:?} pnl={:.4} bal={:.4}", pos.side, net_pnl, inst.balance);
+        } else {
+            tracing::debug!("[PAPER] Timeout: side={:?} pnl={:.4} bal={:.4}", pos.side, net_pnl, inst.balance);
+        }
+
+        let result = StratState {
+            status: "CLOSED".into(),
+            side: pos.side.as_str().into(),
+            entry_price: pos.entry_price,
+            exit_price,
+            trade_pnl: net_pnl,
+            balance: inst.balance,
+        };
+        inst.position = None;
+        return result;
+    }
+
+    StratState {
+        status: "OPEN".into(),
+        side: pos.side.as_str().into(),
+        entry_price: pos.entry_price,
+        exit_price: 0.0,
+        trade_pnl: 0.0,
+        balance: inst.balance,
+    }
+}
+
+// ─── Trigger A: Imbalance Divergence ─────────────────────────────────────────
+
+fn imbalance_trigger(rec: &CsvRecord) -> Option<(SimSide, String)> {
+    let bin_imb = rec.binance_imbalance;
+    let poly_imb = rec.poly_imbalance;
+
+    if bin_imb > IMB_TRIGGER_BINANCE_BUY && poly_imb < IMB_TRIGGER_POLY_BUY {
+        tracing::info!("[IMBALANCE] BUY signal: bin_imb={:.3} poly_imb={:.4}", bin_imb, poly_imb);
+        return Some((SimSide::Buy, "imbalance_buy".into()));
+    }
+    if bin_imb < IMB_TRIGGER_BINANCE_SELL && poly_imb > IMB_TRIGGER_POLY_SELL {
+        tracing::info!("[IMBALANCE] SELL signal: bin_imb={:.3} poly_imb={:.4}", bin_imb, poly_imb);
+        return Some((SimSide::Sell, "imbalance_sell".into()));
+    }
+    None
+}
+
+// ─── Trigger B: Liquidity Grabbing ───────────────────────────────────────────
+
+fn liquidity_trigger(
+    rec: &CsvRecord,
+    trade_in_window: bool,
+    max_ask: f64,
+    max_bid: f64,
+) -> Option<(SimSide, String)> {
+    let current_ask = rec.poly_ask_vol_all;
+    let current_bid = rec.poly_bid_vol_all;
+
+    if !trade_in_window {
+        if max_ask > 0.0 {
+            let drop_pct = (max_ask - current_ask) / max_ask;
+            if drop_pct > LIQ_DROP_PCT {
+                tracing::info!(
+                    "[LIQUIDITY] BUY: ask_vol drop {:.1}% ({}→{})",
+                    drop_pct * 100.0, max_ask, current_ask
+                );
+                return Some((SimSide::Buy, "liquidity_buy".into()));
+            }
+        }
+        if max_bid > 0.0 {
+            let drop_pct = (max_bid - current_bid) / max_bid;
+            if drop_pct > LIQ_DROP_PCT {
+                tracing::info!(
+                    "[LIQUIDITY] SELL: bid_vol drop {:.1}% ({}→{})",
+                    drop_pct * 100.0, max_bid, current_bid
+                );
+                return Some((SimSide::Sell, "liquidity_sell".into()));
+            }
         }
     }
+    None
 }

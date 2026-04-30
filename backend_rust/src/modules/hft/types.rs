@@ -72,13 +72,20 @@ pub struct CsvRecord {
     pub is_informed:         u8,
     /// Session ID — para filtrar mem_hft y evitar fuga de datos entre sesiones.
     pub session_id:          i32,
-    // ─── Paper Trading Sim (executor) ────────────────────────────────────
-    pub sim_status:          String,  // IDLE|OPEN|CLOSED
-    pub sim_side:            String,  // BUY|SELL (empty if IDLE)
-    pub sim_entry_price:     f64,
-    pub sim_exit_price:      f64,
-    pub sim_pnl_trade:       f64,
-    pub sim_current_balance: f64,
+    // ─── Strategy A: Imbalance Divergence ────────────────────────────────
+    pub imba_status:          String,  // IDLE|OPEN|CLOSED
+    pub imba_side:            String,  // BUY|SELL
+    pub imba_entry_price:     f64,
+    pub imba_exit_price:      f64,
+    pub imba_trade_pnl:       f64,
+    pub imba_balance:         f64,
+    // ─── Strategy B: Liquidity Grabbing ──────────────────────────────────
+    pub liqb_status:          String,  // IDLE|OPEN|CLOSED
+    pub liqb_side:            String,  // BUY|SELL
+    pub liqb_entry_price:     f64,
+    pub liqb_exit_price:      f64,
+    pub liqb_trade_pnl:       f64,
+    pub liqb_balance:         f64,
 }
 
 impl Default for CsvRecord {
@@ -105,12 +112,18 @@ impl Default for CsvRecord {
             trade_size:          0.0,
             is_informed:         0,
             session_id:          0,
-            sim_status:          "IDLE".to_string(),
-            sim_side:            String::new(),
-            sim_entry_price:     0.0,
-            sim_exit_price:      0.0,
-            sim_pnl_trade:       0.0,
-            sim_current_balance: 0.0,
+            imba_status:         "IDLE".to_string(),
+            imba_side:           String::new(),
+            imba_entry_price:    0.0,
+            imba_exit_price:     0.0,
+            imba_trade_pnl:      0.0,
+            imba_balance:        0.0,
+            liqb_status:         "IDLE".to_string(),
+            liqb_side:           String::new(),
+            liqb_entry_price:    0.0,
+            liqb_exit_price:     0.0,
+            liqb_trade_pnl:      0.0,
+            liqb_balance:        0.0,
         }
     }
 }

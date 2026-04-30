@@ -427,24 +427,26 @@ async fn capture_combined(
     // Per-session CSV file (strict isolation — only writes if session is active)
     state.session_manager.push(&rec);
 
-    // Paper Trading Executor: evaluate trade logic, attach sim_* fields
-    let strike = state.market.read().await.as_ref()
-        .and_then(|m| m.price_to_beat);
-    let duration = state.market.read().await.as_ref()
-        .map(|m| m.duration_min).unwrap_or(15);
-    let sim = state.sim_executor.lock().unwrap().evaluate(&rec, strike, duration);
-    let closed = sim.status == "CLOSED";
+    // Strategy Manager: evaluate both shadow strategies (A: Imbalance, B: Liquidity)
+    let result = state.strategy_manager.lock().unwrap().evaluate(&rec);
+    let closed = result.imba.status == "CLOSED" || result.liqb.status == "CLOSED";
 
-    // Update the in-memory record with sim fields
+    // Update the in-memory record with strategy fields
     {
         let mut mem = state.mem_hft.write().await;
         if let Some(last) = mem.last_mut() {
-            last.sim_status = sim.status;
-            last.sim_side = sim.side;
-            last.sim_entry_price = sim.entry_price;
-            last.sim_exit_price = sim.exit_price;
-            last.sim_pnl_trade = sim.pnl_trade;
-            last.sim_current_balance = sim.current_balance;
+            last.imba_status = result.imba.status;
+            last.imba_side = result.imba.side;
+            last.imba_entry_price = result.imba.entry_price;
+            last.imba_exit_price = result.imba.exit_price;
+            last.imba_trade_pnl = result.imba.trade_pnl;
+            last.imba_balance = result.imba.balance;
+            last.liqb_status = result.liqb.status;
+            last.liqb_side = result.liqb.side;
+            last.liqb_entry_price = result.liqb.entry_price;
+            last.liqb_exit_price = result.liqb.exit_price;
+            last.liqb_trade_pnl = result.liqb.trade_pnl;
+            last.liqb_balance = result.liqb.balance;
         }
     }
     // If a trade just closed, flush the CSV immediately
