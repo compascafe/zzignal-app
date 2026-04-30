@@ -171,6 +171,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let recovered = session_repo::list_recording_session_ids(state3.db.as_ref()).await;
         if !recovered.is_empty() {
             info!("Recovered {} recording sessions from DB", recovered.len());
+            for &sid in &recovered {
+                if let Err(e) = state3.session_manager.recover_session(sid) {
+                    warn!("Failed to recover session #{}: {}", sid, e);
+                }
+            }
             state3.recording_sessions.write().await.extend(&recovered);
         }
         tokio::spawn(async move {
@@ -206,7 +211,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (bridge_tx, mut bridge_rx) = tokio_mpsc::unbounded_channel::<AppMsg>();
         std::thread::spawn(move || {
             while let Ok(msg) = rx.recv() {
-                let _ = bridge_tx.send(msg);
+                if bridge_tx.send(msg).is_err() {
+                    warn!("[CHANNEL] bridge_tx closed — exiting bridge thread");
+                    break;
+                }
             }
         });
         tokio::spawn(async move {

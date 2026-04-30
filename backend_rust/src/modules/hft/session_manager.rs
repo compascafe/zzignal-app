@@ -79,6 +79,52 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Recover a session after crash — opens in APPEND mode, preserves existing data.
+    /// Only writes header if the file is empty.
+    pub fn recover_session(&self, session_id: i32) -> Result<(), String> {
+        let path = format!("{}/session_{:04}_hft.csv", self.data_dir, session_id);
+        let file_exists = std::path::Path::new(&path).exists();
+
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)  // preserve existing data from before crash
+            .open(&path)
+            .map_err(|e| format!("SessionManager: cannot recover {}: {}", path, e))?;
+
+        let mut writer = BufWriter::with_capacity(65536, file);
+
+        // Write header only if file is new or empty
+        if !file_exists {
+            let _ = writeln!(
+                writer,
+                "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
+                 binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,\
+                 poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
+                 trade_price,trade_size,is_informed,\
+                 imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
+                 liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,\
+                 trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
+                 price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
+                 bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
+                 technical_confluence,trend_direction,signal_label,\
+                 realized_volatility,high_volatility_event,bollinger_position,master_signal"
+            );
+        }
+
+        let mut writers = self.writers.lock().unwrap();
+        writers.insert(session_id, SessionWriter {
+            writer,
+            path: path.clone(),
+            tick_count: 0,
+            trade_count: 0,
+            row_count: 0,
+        });
+
+        info!("SessionManager: RECOVERED session #{} (append mode) → {}", session_id, path);
+        Ok(())
+    }
+
     /// Push a CsvRecord to the session specified by record.session_id.
     pub fn push(&self, record: &CsvRecord) -> bool {
         let sid = record.session_id;

@@ -138,7 +138,13 @@ async fn process_sessions(state: Arc<AppState>) {
     for session in to_stop {
         let btc_price = *state.btc_price.read().await;
         let parent_id = session.parent_id;
-        info!("[SESSION STOP] Duration: {}min | Deteniendo sesión #{} (programada hasta {})", session.duration_min, session.id, session.scheduled_end.format("%H:%M:%S"));
+        info!("[DEBUG] Shutdown signal for session #{} at {} | duration={}min | scheduled_end={} | now={}",
+            session.id,
+            Utc::now().format("%H:%M:%S"),
+            session.duration_min,
+            session.scheduled_end.format("%H:%M:%S"),
+            Utc::now().format("%H:%M:%S"),
+        );
 
         // Flush session CSV before marking completed
         if let Err(e) = state.session_manager.flush(session.id) {
@@ -181,7 +187,7 @@ async fn process_sessions(state: Arc<AppState>) {
         state.tracking_state.reset_session_baselines();
         state.recording_sessions.write().await.push(session.id);
 
-        // Strict file isolation: create new per-session CSV, close previous if any
+        // New session: truncate and write fresh header
         if let Err(e) = state.session_manager.start_session(session.id) {
             warn!("SessionManager start #{}: {}", session.id, e);
         }
