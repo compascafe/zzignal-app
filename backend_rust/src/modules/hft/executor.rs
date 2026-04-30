@@ -4,20 +4,23 @@
 // Parámetros por estacionalidad (según duration_min del mercado):
 //
 //   5-min (Sniper):
-//     - Trigger volumen: binance_vol_100ms > 2.0
+//     - Trigger volumen: binance_vol_100ms > 0.4
+//     - Desviación micro_price: > $0.50 del binance_price
 //     - TP: $0.012 por contrato o 10 segundos
-//     - Compra: poly_ask, Venta: poly_bid
 //
 //   15-min (Arbitraje):
-//     - Trigger volumen: binance_vol_100ms > 1.2
+//     - Trigger volumen: binance_vol_100ms > 0.2
+//     - Desviación micro_price: > $0.30 del binance_price
 //     - TP: $0.025 por contrato o 30 segundos
-//     - Compra: poly_ask, Venta: poly_bid
 //
-// Común:
+// Proximidad al Strike:
+//   - Si |poly_mid - strike| < $1.50 → ignora filtros de volumen Y desviación
+//     Dispara solo por dirección del binance_micro_price (sniper mode).
+//
+// Ejecución realista:
+//   - Compra: poly_ask, Venta: poly_bid
 //   - Comisión: $0.001 por contrato por trade
-//   - Si micro_price se desvía >$1.50 de binance_price → disparar
-//   - Si distancia a Strike < $1.00 → ignorar filtro de volumen (agresividad máxima)
-//   - Capital inicial: $20.00
+//   - Capital inicial: $20.00 (persiste entre eventos, no se resetea)
 
 use crate::modules::hft::types::CsvRecord;
 
@@ -68,40 +71,49 @@ struct Position {
     entry_price:     f64,
     entry_time_ms:   i64,
     size_contracts:  f64,
-    market_duration: i32, // 5 o 15
+    market_duration: i32,
 }
 
-/// Parámetros por estacionalidad
+/// Parámetros por estacionalidad — ajustados para mayor sensibilidad
 struct SeasonParams {
-    vol_trigger:      f64, // binance_vol_100ms threshold
-    tp_per_contract:  f64, // take-profit USD por contrato
-    tp_timeout_ms:    i64, // take-profit timeout en ms
+    /// binance_vol_100ms mínimo para disparar (se ignora en proximity)
+    vol_trigger:      f64,
+    /// Desviación mínima de micro_price vs binance_price (se ignora en proximity)
+    micro_deviation:  f64,
+    /// Take-profit USD por contrato
+    tp_per_contract:  f64,
+    /// Timeout de posición en ms
+    tp_timeout_ms:    i64,
 }
 
 fn params_for(duration_min: i32) -> SeasonParams {
     match duration_min {
         5 => SeasonParams {
-            // Sniper: agresivo, volumen alto, TP rápido
-            vol_trigger:     2.0,
+            // Sniper 5-min: alta sensibilidad
+            vol_trigger:     0.4,
+            micro_deviation: 0.50,
             tp_per_contract: 0.012,
             tp_timeout_ms:   10_000,
         },
         _ => SeasonParams {
-            // Arbitraje (15-min default): moderado
-            vol_trigger:     1.2,
+            // Arbitraje 15-min (default): sensibilidad moderada
+            vol_trigger:     0.2,
+            micro_deviation: 0.30,
             tp_per_contract: 0.025,
             tp_timeout_ms:   30_000,
         },
     }
 }
 
-// Constantes comunes
+// ─── Constantes ──────────────────────────────────────────────────────────────
+
 const COMMISSION_PER_CONTRACT: f64 = 0.001;
 const INITIAL_CAPITAL: f64 = 20.00;
-const MICRO_DEVIATION_THRESHOLD: f64 = 1.50;
-const STRIKE_PROXIMITY_THRESHOLD: f64 = 1.00;
+/// Distancia al strike que activa el modo sniper (ignora vol + deviation)
+const STRIKE_PROXIMITY_SNIPER: f64 = 1.50;
 
 /// Paper Trading Executor — evalúa cada fila del CSV y decide si abrir/cerrar posición.
+/// El balance persiste entre llamadas (no se resetea).
 pub struct PaperExecutor {
     pub balance:         f64,
     position:            Option<Position>,
@@ -120,8 +132,8 @@ impl PaperExecutor {
     }
 
     /// Evalúa un CsvRecord contra la lógica de trading.
-    /// Devuelve los campos `sim_*` que deben adjuntarse al registro.
-    /// El caller debe mutar el CsvRecord con estos valores.
+    /// `strike_price` — precio BTC al inicio del intervalo (price_to_beat).
+    /// `market_duration_min` — 5 o 15, define los thresholds.
     pub fn evaluate(
         &mut self,
         rec: &CsvRecord,
@@ -131,11 +143,18 @@ impl PaperExecutor {
         let now_ms = rec.ts_exchange.parse::<i64>().unwrap_or(0);
         let params = params_for(market_duration_min);
 
-        // Si hay posición abierta → evaluar cierre
+        // ─── Validación de spread ──────────────────────────────────────────
+        // Si el spread es negativo o cero (datos corruptos), no operar.
+        let spread = rec.poly_ask - rec.poly_bid;
+        if rec.poly_ask <= 0.0 || rec.poly_bid <= 0.0 || spread <= 0.0 {
+            return self.idle_result();
+        }
+
+        // ─── Posición abierta → evaluar cierre ─────────────────────────────
         if let Some(ref pos) = self.position {
             let exit_price = match pos.side {
                 SimSide::Buy => rec.poly_bid,  // vender al bid
-                SimSide::Sell => rec.poly_ask, // comprar al ask (cerrar short)
+                SimSide::Sell => rec.poly_ask, // comprar al ask
             };
             if exit_price <= 0.0 {
                 return self.idle_result();
@@ -147,14 +166,12 @@ impl PaperExecutor {
             };
             let gross_pnl = pnl_per_contract * pos.size_contracts;
 
-            // Comisión de salida
-            let commission = COMMISSION_PER_CONTRACT * pos.size_contracts;
-
             // Condiciones de cierre (TP o timeout)
             let tp_hit = gross_pnl >= params.tp_per_contract * pos.size_contracts;
             let timed_out = now_ms - pos.entry_time_ms >= params.tp_timeout_ms;
 
             if tp_hit || timed_out {
+                let commission = COMMISSION_PER_CONTRACT * pos.size_contracts;
                 let net_pnl = gross_pnl - commission;
                 self.balance += net_pnl;
                 self.total_pnl += net_pnl;
@@ -168,12 +185,11 @@ impl PaperExecutor {
                     pnl_trade:       net_pnl,
                     current_balance: self.balance,
                 };
-
                 self.position = None;
                 return result;
             }
 
-            // Posición sigue abierta
+            // Posición sigue abierta — reportar estado actual
             return SimResult {
                 status:          "OPEN".to_string(),
                 side:            pos.side.as_str().to_string(),
@@ -186,52 +202,52 @@ impl PaperExecutor {
 
         // ─── IDLE: evaluar trigger de entrada ─────────────────────────────
 
-        // Necesitamos poly_bid y poly_ask para operar
-        if rec.poly_bid <= 0.0 || rec.poly_ask <= 0.0 {
-            return self.idle_result();
-        }
-
-        // 1. Proximidad al strike: agresividad máxima (ignora filtro de volumen)
-        let mut proximity_override = false;
+        // Proximidad al strike: modo sniper
+        // Si |poly_mid - strike| < $1.50 → ignora volumen Y desviación,
+        // dispara solo por dirección del micro_price.
+        let mut sniper_mode = false;
         if let Some(strike) = strike_price {
-            let distance_to_strike = (rec.poly_mid - strike).abs();
-            if distance_to_strike < STRIKE_PROXIMITY_THRESHOLD {
-                proximity_override = true;
+            let distance = (rec.poly_mid - strike).abs();
+            if distance < STRIKE_PROXIMITY_SNIPER && distance >= 0.0 {
+                sniper_mode = true;
             }
         }
 
-        // 2. Desviación del micro_price
-        let micro_deviation = (rec.binance_micro_price - rec.binance_price).abs();
-        let deviation_trigger = micro_deviation > MICRO_DEVIATION_THRESHOLD;
+        let entry_allowed = if sniper_mode {
+            // Sniper: solo necesita dirección definida del micro_price
+            rec.binance_micro_price > 0.0 && rec.binance_price > 0.0
+                && (rec.binance_micro_price - rec.binance_price).abs() > 0.001
+        } else {
+            // Normal: necesita desviación mínima + trigger de volumen
+            let micro_dev = (rec.binance_micro_price - rec.binance_price).abs();
+            let deviation_ok = micro_dev > params.micro_deviation;
+            let vol_ok = rec.binance_vol_100ms > params.vol_trigger;
+            deviation_ok && vol_ok
+        };
 
-        // 3. Trigger de volumen (se salta si proximity_override)
-        let vol_trigger = proximity_override || rec.binance_vol_100ms > params.vol_trigger;
-
-        // Decisión: entrar si hay desviación + (volumen o proximity)
-        if !deviation_trigger || !vol_trigger {
+        if !entry_allowed {
             return self.idle_result();
         }
 
-        // Determinar dirección: si micro_price > binance_price → bullish → BUY (UP)
-        //                       si micro_price < binance_price → bearish → SELL (DOWN)
+        // Determinar dirección: micro_price > binance_price → bullish → BUY
         let side = if rec.binance_micro_price > rec.binance_price {
             SimSide::Buy
         } else {
             SimSide::Sell
         };
 
-        // Precio de entrada: comprar al ask, vender al bid
+        // Precio de entrada: comprar estrictamente al ask, vender al bid
         let entry_price = match side {
             SimSide::Buy => rec.poly_ask,
             SimSide::Sell => rec.poly_bid,
         };
 
-        // Tamaño: usar 50% del balance
+        // Tamaño: 50% del balance, cap 10 contratos
         let max_contracts = (self.balance * 0.5 / entry_price).floor();
         if max_contracts < 1.0 {
             return self.idle_result();
         }
-        let size = max_contracts.min(10.0); // cap 10 contratos
+        let size = max_contracts.min(10.0);
 
         // Comisión de entrada
         let entry_commission = COMMISSION_PER_CONTRACT * size;
