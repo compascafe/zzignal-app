@@ -163,6 +163,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // DB Scheduler
     {
         let state3 = Arc::clone(&state);
+        // Recover recording sessions from DB after restart
+        let recovered = session_repo::list_recording_session_ids(state3.db.as_ref()).await;
+        if !recovered.is_empty() {
+            info!("Recovered {} recording sessions from DB", recovered.len());
+            state3.recording_sessions.write().await.extend(&recovered);
+        }
         tokio::spawn(async move {
             crate::modules::db::scheduler::run_scheduler(state3).await;
         });

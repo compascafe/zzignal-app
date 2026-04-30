@@ -12,7 +12,9 @@ use crate::modules::db::models::{ScheduledExecution, RecordingSession, SessionSn
 const SESS_COLS: &str = "SELECT id, parent_id, name, scheduled_start, scheduled_end, started_at, stopped_at,\
     duration_min, market_id, market_title, capture_mode, depth_levels,\
     strike_price, final_price, outcome_result, btc_price_start, btc_price_end,\
-    status, tick_count, trade_count, tag, tag_color, created_at FROM recording_sessions";
+    status, tick_count, trade_count, \
+    COALESCE(tag, '') as tag, COALESCE(tag_color, '#3b82f6') as tag_color, \
+    created_at FROM recording_sessions";
 
 // ─── Order Book Snapshots ────────────────────────────────────────────────────
 
@@ -346,11 +348,21 @@ pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSess
         .await?;
         return Ok(row);
     }
+    Ok(None)
+}
 
-    let sessions = state.mem_sessions.read().await;
-    Ok(sessions.iter()
-        .find(|s| s.status == "recording")
-        .cloned())
+/// Recovers all session IDs with status='recording' (on server restart).
+pub async fn list_recording_session_ids(pool: Option<&PgPool>) -> Vec<i32> {
+    match pool {
+        Some(p) => {
+            sqlx::query_as::<_, (i32,)>("SELECT id FROM recording_sessions WHERE status = 'recording'")
+                .fetch_all(p)
+                .await
+                .map(|rows| rows.into_iter().map(|(id,)| id).collect())
+                .unwrap_or_default()
+        }
+        None => vec![],
+    }
 }
 
 pub async fn get_session_by_id(state: &AppState, session_id: i32) -> Result<Option<RecordingSession>> {

@@ -238,12 +238,16 @@ async fn recover_orphaned_parents(state: &AppState) {
             continue;
         }
         let last_end = children.iter().map(|c| c.scheduled_end).max().unwrap_or_else(Utc::now);
-        // Redondear al siguiente bloque según chunk_min
-        let slot_secs = (chunk_min as i64) * 60;
-        let secs = last_end.timestamp();
-        let bucket = ((secs / slot_secs) + 1) * slot_secs;
-        let next_start = chrono::DateTime::from_timestamp(bucket, 0)
-            .unwrap_or(last_end + chrono::Duration::minutes(chunk_min as i64));
+        // Only round to next bucket for first child (same logic as auto_generate_child)
+        let next_start = if children.is_empty() {
+            let slot_secs = (chunk_min as i64) * 60;
+            let secs = last_end.timestamp();
+            let bucket = ((secs / slot_secs) + 1) * slot_secs;
+            chrono::DateTime::from_timestamp(bucket, 0)
+                .unwrap_or(last_end + chrono::Duration::minutes(chunk_min as i64))
+        } else {
+            last_end
+        };
         create_next_child(state, parent.id, parent.depth_levels, next_start, chunk_min).await;
     }
 }
