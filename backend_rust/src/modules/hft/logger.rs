@@ -57,14 +57,16 @@ impl CsvLogger {
                  imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
                  liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,\
                  trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
-                 price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag"
+                 price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
+                 bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
+                 technical_confluence,trend_direction,signal_label"
             );
         }
 
         for r in &rows {
             let _ = writeln!(
                 file,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 r.ts_local,
                 r.ts_exchange,
                 r.event_type.as_str(),
@@ -105,6 +107,13 @@ impl CsvLogger {
                 r.spoofing_flag,
                 r.tape_speed_flag,
                 r.gap_alert_flag,
+                r.bollinger_sma,
+                r.bollinger_upper,
+                r.bollinger_lower,
+                r.mean_reversion_signal,
+                r.technical_confluence,
+                r.trend_direction,
+                r.signal_label,
             );
         }
 

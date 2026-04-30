@@ -63,6 +63,14 @@ pub struct TrackingState {
     pub session_btc_start:     Mutex<Option<f64>>,
     /// Poly mid price at session start (set on first poly event of session).
     pub session_poly_mid_start: Mutex<Option<f64>>,
+
+    // ─── Bollinger Bands: rolling window of last 200 Binance mid prices ───
+    pub bollinger_window:      Mutex<VecDeque<f64>>,
+    /// Running stats for bollinger window (Welford's).
+    pub(super) bollinger_stats: Mutex<RunningStats>,
+
+    // ─── Average trades/sec for vol_burst detection ───────────────────────
+    pub(super) trades_ps_stats: Mutex<RunningStats>,
 }
 
 impl TrackingState {
@@ -79,6 +87,9 @@ impl TrackingState {
             last_poly_mid_ts:    Mutex::new(None),
             session_btc_start:      Mutex::new(None),
             session_poly_mid_start: Mutex::new(None),
+            bollinger_window:    Mutex::new(VecDeque::with_capacity(256)),
+            bollinger_stats:     Mutex::new(RunningStats::new()),
+            trades_ps_stats:     Mutex::new(RunningStats::new()),
         }
     }
 
@@ -186,6 +197,92 @@ impl TrackingState {
         *self.session_poly_mid_start.lock().unwrap() = None;
     }
 
+    // ─── Bollinger Bands (200-tick rolling window) ────────────────────────
+
+    /// Push a Binance mid price into the bollinger rolling window (max 200).
+    pub fn push_bollinger_price(&self, price: f64) {
+        if price <= 0.0 { return; }
+        let mut w = self.bollinger_window.lock().unwrap();
+        w.push_back(price);
+        if w.len() > 200 { w.pop_front(); }
+        // Recompute running stats — Welford's is incremental, so just push
+        self.bollinger_stats.lock().unwrap().push(price);
+    }
+
+    /// Compute Bollinger Bands from the rolling window.
+    /// Returns (sma, upper, lower). Returns zeros if < 20 samples.
+    pub fn bollinger_bands(&self) -> (f64, f64, f64) {
+        let stats = self.bollinger_stats.lock().unwrap();
+        if stats.count < 20 {
+            return (0.0, 0.0, 0.0);
+        }
+        let sma = stats.mean;
+        let std = stats.std_dev();
+        (sma, sma + 2.0 * std, sma - 2.0 * std)
+    }
+
+    /// Record trades_per_second for average tracking (vol_burst detection).
+    pub fn push_tps_sample(&self, tps: f64) {
+        self.trades_ps_stats.lock().unwrap().push(tps);
+    }
+
+    /// Average trades_per_second over recorded samples.
+    pub fn avg_tps(&self) -> f64 {
+        let stats = self.trades_ps_stats.lock().unwrap();
+        if stats.count < 5 { return 0.0; }
+        stats.mean
+    }
+
+    // ─── Signal computation ───────────────────────────────────────────────
+
+    /// Compute mean reversion signal from Bollinger bands.
+    /// Returns (signal: 0/1/2, label).
+    /// 1 = Short: price touches upper band AND binance_imbalance < 0
+    /// 2 = Long:  price touches lower band AND binance_imbalance > 0
+    pub fn mean_reversion_signal(&self, price: f64, imbalance: f32) -> (u8, String) {
+        let (sma, upper, lower) = self.bollinger_bands();
+        if sma == 0.0 { return (0, String::new()); }
+
+        if price >= upper && imbalance < -0.1 {
+            return (1, "BOLLINGER_SHORT".into());
+        }
+        if price <= lower && imbalance > 0.1 {
+            return (2, "BOLLINGER_LONG".into());
+        }
+        (0, String::new())
+    }
+
+    /// Compute technical confluence signal.
+    /// Returns (signal: 0/1, label).
+    /// All conditions must align:
+    ///   1. Trend: price above SMA (trend_dir=1) or below SMA (trend_dir=-1)
+    ///   2. Vol burst: current_tps > 2x avg_tps
+    ///   3. Extreme imbalance: |imbalance| > 0.8
+    ///   4. Momentum confirms: price_velocity direction matches trend
+    pub fn technical_confluence_signal(
+        &self, price: f64, imbalance: f32, current_tps: f64, price_vel: f64,
+    ) -> (u8, String) {
+        let (sma, _, _) = self.bollinger_bands();
+        if sma == 0.0 || current_tps <= 0.0 { return (0, String::new()); }
+
+        // 1. Trend position
+        let trend_dir: i8 = if price > sma * 1.001 { 1 } else if price < sma * 0.999 { -1 } else { 0 };
+        if trend_dir == 0 { return (0, String::new()); }
+
+        // 2. Vol burst: tps > 2x average
+        let avg = self.avg_tps();
+        if avg <= 0.0 || current_tps <= avg * 2.0 { return (0, String::new()); }
+
+        // 3. Extreme imbalance
+        if imbalance.abs() <= 0.8 { return (0, String::new()); }
+
+        // 4. Momentum confirms direction
+        let vel_ok = (trend_dir > 0 && price_vel > 0.0) || (trend_dir < 0 && price_vel < 0.0);
+        if !vel_ok { return (0, String::new()); }
+
+        (1, "TECH_CONFLUENCE".into())
+    }
+
     /// Store current poly ask volume for next-tick liquidity delta computation.
     pub fn set_last_poly_ask_vol(&self, vol: f64) {
         *self.last_poly_ask_vol.lock().unwrap() = Some(vol);
@@ -271,6 +368,21 @@ pub fn build_book_update(
     let tape_flag    = check_volume_spike(bn_vol_100, tracking, pb_sprd);
     if gap_flag > 0 { check_gap_alert(gap_pct); }
 
+    // ─── Bollinger Bands & Signals ────────────────────────────────────────
+    let (bb_sma, bb_upper, bb_lower) = tracking.bollinger_bands();
+    let (mr_signal, mut signal_label) = tracking.mean_reversion_signal(bb_mid, bb_imb);
+    tracking.push_tps_sample(trades_ps);
+    let (tc_signal, tc_label) = tracking.technical_confluence_signal(bb_mid, bb_imb, trades_ps, price_vel);
+    if tc_signal > 0 {
+        signal_label = if signal_label.is_empty() { tc_label } else { format!("{}|{}", signal_label, tc_label) };
+    }
+    if mr_signal > 0 && signal_label.is_empty() {
+        signal_label = match mr_signal { 1 => "BOLLINGER_SHORT".into(), 2 => "BOLLINGER_LONG".into(), _ => String::new() };
+    }
+    let trend_dir = if bb_sma > 0.0 {
+        if bb_mid > bb_sma * 1.001 { 1i8 } else if bb_mid < bb_sma * 0.999 { -1i8 } else { 0i8 }
+    } else { 0i8 };
+
     // Lazy-init session baselines on first poly event
     tracking.init_session_baselines(bb_mid, pb_mid);
 
@@ -302,11 +414,18 @@ pub fn build_book_update(
         trades_per_second:   trades_ps,
         price_velocity:      price_vel,
         poly_liquidity_delta: liq_delta,
-        absorption_ratio:    0.0, // No trade volume in book update
+        absorption_ratio:    0.0,
         price_gap_ratio:     gap_pct,
         spoofing_flag:       spoof_flag,
         tape_speed_flag:     tape_flag,
         gap_alert_flag:      gap_flag,
+        bollinger_sma:       bb_sma,
+        bollinger_upper:     bb_upper,
+        bollinger_lower:     bb_lower,
+        mean_reversion_signal: mr_signal,
+        technical_confluence:  tc_signal.max(mr_signal.min(1)),
+        trend_direction:     trend_dir,
+        signal_label:        signal_label,
         ..Default::default()
     }
 }

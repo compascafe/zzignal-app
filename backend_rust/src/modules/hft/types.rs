@@ -95,6 +95,14 @@ pub struct CsvRecord {
     pub spoofing_flag:        u8,   // 1 = >30% vol drop with no poly trade
     pub tape_speed_flag:      u8,   // 1 = high volume spike detected
     pub gap_alert_flag:       u8,   // 1 = price gap > 0.05%
+    // ─── HFT Bollinger Bands & Confluence ─────────────────────────────────
+    pub bollinger_sma:         f64,   // SMA(200) of Binance mid prices
+    pub bollinger_upper:       f64,   // SMA + 2σ
+    pub bollinger_lower:       f64,   // SMA - 2σ
+    pub mean_reversion_signal: u8,    // 0=none, 1=Short (touch upper+neg imb), 2=Long (touch lower+pos imb)
+    pub technical_confluence:  u8,    // 1 = all confluence conditions met
+    pub trend_direction:       i8,    // -1=below SMA, 0=at SMA, 1=above SMA
+    pub signal_label:          String,// e.g. 'BOLLINGER_TOUCH', 'VOL_CONFLUENCE', 'GAP_ARBITRAGE', ''
 }
 
 impl Default for CsvRecord {
@@ -141,6 +149,13 @@ impl Default for CsvRecord {
             spoofing_flag:        0,
             tape_speed_flag:      0,
             gap_alert_flag:       0,
+            bollinger_sma:        0.0,
+            bollinger_upper:      0.0,
+            bollinger_lower:      0.0,
+            mean_reversion_signal: 0,
+            technical_confluence:  0,
+            trend_direction:      0,
+            signal_label:         String::new(),
         }
     }
 }

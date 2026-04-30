@@ -55,7 +55,7 @@ impl SessionManager {
 
         let mut writer = BufWriter::with_capacity(65536, file);
 
-        // Write 40-column header
+        // Write 47-column header
         let _ = writeln!(
             writer,
             "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
@@ -65,7 +65,9 @@ impl SessionManager {
              imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
              liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,\
              trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
-             price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag"
+             price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
+             bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
+             technical_confluence,trend_direction,signal_label"
         );
 
         *self.writer.lock().unwrap() = Some(writer);
@@ -84,7 +86,7 @@ impl SessionManager {
             Some(w) => {
                 let _ = writeln!(
                     w,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     record.ts_local,
                     record.ts_exchange,
                     record.event_type.as_str(),
@@ -125,6 +127,13 @@ impl SessionManager {
                     record.spoofing_flag,
                     record.tape_speed_flag,
                     record.gap_alert_flag,
+                    record.bollinger_sma,
+                    record.bollinger_upper,
+                    record.bollinger_lower,
+                    record.mean_reversion_signal,
+                    record.technical_confluence,
+                    record.trend_direction,
+                    record.signal_label,
                 );
                 drop(writer_guard);
 
