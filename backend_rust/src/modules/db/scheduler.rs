@@ -208,17 +208,23 @@ async fn auto_generate_child(state: &AppState, parent_id: i32) {
         return;
     }
     let last_end = children.iter().map(|c| c.scheduled_end).max().unwrap_or_else(Utc::now);
-    // Round first child to next chunk boundary to keep sessions aligned
-    let start = if children.is_empty() {
-        let chunk_secs = (chunk_min as i64) * 60;
-        let secs = last_end.timestamp();
+    // Always align to chunk boundaries (15-min blocks: :00 :15 :30 :45)
+    let start = snap_to_next_chunk(last_end, chunk_min);
+    create_next_child(state, parent_id, parent.depth_levels, start, chunk_min).await;
+}
+
+/// Redondea a la siguiente frontera de chunk si no está ya alineado.
+/// Ej: 12:55 con chunk=15 → 13:00. 13:15 con chunk=15 → 13:15 (ya alineado).
+fn snap_to_next_chunk(ts: chrono::DateTime<Utc>, chunk_min: i32) -> chrono::DateTime<Utc> {
+    let chunk_secs = (chunk_min as i64) * 60;
+    let secs = ts.timestamp();
+    if secs % chunk_secs == 0 {
+        ts
+    } else {
         let bucket = ((secs / chunk_secs) + 1) * chunk_secs;
         chrono::DateTime::from_timestamp(bucket, 0)
-            .unwrap_or(last_end + chrono::Duration::minutes(chunk_min as i64))
-    } else {
-        last_end
-    };
-    create_next_child(state, parent_id, parent.depth_levels, start, chunk_min).await;
+            .unwrap_or(ts + chrono::Duration::minutes(chunk_min as i64))
+    }
 }
 
 /// Recupera padres indefinidos huérfanos (ej. tras reinicio del backend)
@@ -238,16 +244,7 @@ async fn recover_orphaned_parents(state: &AppState) {
             continue;
         }
         let last_end = children.iter().map(|c| c.scheduled_end).max().unwrap_or_else(Utc::now);
-        // Only round to next bucket for first child (same logic as auto_generate_child)
-        let next_start = if children.is_empty() {
-            let slot_secs = (chunk_min as i64) * 60;
-            let secs = last_end.timestamp();
-            let bucket = ((secs / slot_secs) + 1) * slot_secs;
-            chrono::DateTime::from_timestamp(bucket, 0)
-                .unwrap_or(last_end + chrono::Duration::minutes(chunk_min as i64))
-        } else {
-            last_end
-        };
+        let next_start = snap_to_next_chunk(last_end, chunk_min);
         create_next_child(state, parent.id, parent.depth_levels, next_start, chunk_min).await;
     }
 }
