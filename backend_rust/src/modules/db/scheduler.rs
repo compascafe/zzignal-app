@@ -208,7 +208,17 @@ async fn auto_generate_child(state: &AppState, parent_id: i32) {
         return;
     }
     let last_end = children.iter().map(|c| c.scheduled_end).max().unwrap_or_else(Utc::now);
-    create_next_child(state, parent_id, parent.depth_levels, last_end, chunk_min).await;
+    // Round first child to next chunk boundary to keep sessions aligned
+    let start = if children.is_empty() {
+        let chunk_secs = (chunk_min as i64) * 60;
+        let secs = last_end.timestamp();
+        let bucket = ((secs / chunk_secs) + 1) * chunk_secs;
+        chrono::DateTime::from_timestamp(bucket, 0)
+            .unwrap_or(last_end + chrono::Duration::minutes(chunk_min as i64))
+    } else {
+        last_end
+    };
+    create_next_child(state, parent_id, parent.depth_levels, start, chunk_min).await;
 }
 
 /// Recupera padres indefinidos huérfanos (ej. tras reinicio del backend)
