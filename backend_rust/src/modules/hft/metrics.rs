@@ -593,22 +593,34 @@ pub fn compute_liquidity_delta(
 ///
 /// Formula: ((binance_price / btc_start) - (poly_mid / poly_mid_start)) * 100
 ///
-/// Positive = Poly is lagging behind Binance movement.
+/// Positive = Poly is leading (up more) or Binance is lagging.
+/// Negative = Binance is leading (up more) or Poly is lagging.
 /// Returns (gap_pct, gap_alert_flag).
 pub fn compute_price_gap(
     binance_price: f64,
     poly_mid: f64,
     tracking: &TrackingState,
 ) -> (f64, u8) {
-    let btc_start = tracking.session_btc_start.lock().unwrap().unwrap_or(binance_price);
-    let poly_start = tracking.session_poly_mid_start.lock().unwrap().unwrap_or(poly_mid);
-
-    if btc_start <= 0.0 || poly_start <= 0.0 || poly_mid <= 0.0 {
+    // Use last known poly_mid if current is 0 or invalid
+    let effective_poly = if poly_mid <= 0.0 {
+        tracking.last_poly_mid.lock().unwrap().unwrap_or(0.0)
+    } else {
+        poly_mid
+    };
+    if effective_poly <= 0.0 {
         return (0.0, 0u8);
     }
 
-    let btc_pct_move  = (binance_price - btc_start) / btc_start; // fractional move
-    let poly_pct_move = (poly_mid - poly_start) / poly_start;
+    let btc_start = tracking.session_btc_start.lock().unwrap().unwrap_or(binance_price);
+    let poly_start = tracking.session_poly_mid_start.lock().unwrap().unwrap_or(effective_poly);
+
+    if btc_start <= 0.0 || poly_start <= 0.0 {
+        return (0.0, 0u8);
+    }
+
+    // Use a minimum denominator of 1e-10 to avoid division-by-zero on flat markets
+    let btc_pct_move  = (binance_price - btc_start) / btc_start.max(1e-10);
+    let poly_pct_move = (effective_poly - poly_start) / poly_start.max(1e-10);
     let gap_pct = (poly_pct_move - btc_pct_move) * 100.0;
 
     let alert = if gap_pct.abs() > 0.05 { 1u8 } else { 0u8 };

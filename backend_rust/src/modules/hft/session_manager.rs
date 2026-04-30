@@ -148,10 +148,10 @@ impl SessionManager {
                     _ => *self.tick_count.lock().unwrap() += 1,
                 }
 
-                // Auto-flush every 50 rows to prevent data loss on crash
+                // Auto-flush every 10 rows to prevent data loss on crash
                 let mut rc = self.row_count.lock().unwrap();
                 *rc += 1;
-                if *rc % 50 == 0 {
+                if *rc % 10 == 0 {
                     drop(rc);
                     let _ = self.flush();
                 }
