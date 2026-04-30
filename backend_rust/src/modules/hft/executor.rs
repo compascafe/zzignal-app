@@ -23,6 +23,7 @@
 //   - Capital inicial: $20.00 (persiste entre eventos, no se resetea)
 
 use crate::modules::hft::types::CsvRecord;
+use tracing;
 
 /// Lado de la simulación
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -111,6 +112,8 @@ const COMMISSION_PER_CONTRACT: f64 = 0.001;
 const INITIAL_CAPITAL: f64 = 20.00;
 /// Distancia al strike que activa el modo sniper (ignora vol + deviation)
 const STRIKE_PROXIMITY_SNIPER: f64 = 1.50;
+/// Spread máximo permitido para operar. Si poly_ask - poly_bid > MAX_SPREAD, abortar.
+const MAX_SPREAD: f64 = 0.05;
 
 /// Paper Trading Executor — evalúa cada fila del CSV y decide si abrir/cerrar posición.
 /// El balance persiste entre llamadas (no se resetea).
@@ -143,10 +146,10 @@ impl PaperExecutor {
         let now_ms = rec.ts_exchange.parse::<i64>().unwrap_or(0);
         let params = params_for(market_duration_min);
 
-        // ─── Validación de spread ──────────────────────────────────────────
-        // Si el spread es negativo o cero (datos corruptos), no operar.
-        let spread = rec.poly_ask - rec.poly_bid;
-        if rec.poly_ask <= 0.0 || rec.poly_bid <= 0.0 || spread <= 0.0 {
+        // ─── Data integrity check (mínimo) ─────────────────────────────────
+        // Si precios no válidos, no operar. El spread se valida más abajo
+        // (después de los triggers, para poder loguear la razón del aborto).
+        if rec.poly_ask <= 0.0 || rec.poly_bid <= 0.0 {
             return self.idle_result();
         }
 
@@ -166,7 +169,6 @@ impl PaperExecutor {
             };
             let gross_pnl = pnl_per_contract * pos.size_contracts;
 
-            // Condiciones de cierre (TP o timeout)
             let tp_hit = gross_pnl >= params.tp_per_contract * pos.size_contracts;
             let timed_out = now_ms - pos.entry_time_ms >= params.tp_timeout_ms;
 
@@ -189,7 +191,6 @@ impl PaperExecutor {
                 return result;
             }
 
-            // Posición sigue abierta — reportar estado actual
             return SimResult {
                 status:          "OPEN".to_string(),
                 side:            pos.side.as_str().to_string(),
@@ -203,8 +204,6 @@ impl PaperExecutor {
         // ─── IDLE: evaluar trigger de entrada ─────────────────────────────
 
         // Proximidad al strike: modo sniper
-        // Si |poly_mid - strike| < $1.50 → ignora volumen Y desviación,
-        // dispara solo por dirección del micro_price.
         let mut sniper_mode = false;
         if let Some(strike) = strike_price {
             let distance = (rec.poly_mid - strike).abs();
@@ -213,19 +212,35 @@ impl PaperExecutor {
             }
         }
 
-        let entry_allowed = if sniper_mode {
-            // Sniper: solo necesita dirección definida del micro_price
+        let signal_detected = if sniper_mode {
             rec.binance_micro_price > 0.0 && rec.binance_price > 0.0
                 && (rec.binance_micro_price - rec.binance_price).abs() > 0.001
         } else {
-            // Normal: necesita desviación mínima + trigger de volumen
             let micro_dev = (rec.binance_micro_price - rec.binance_price).abs();
             let deviation_ok = micro_dev > params.micro_deviation;
             let vol_ok = rec.binance_vol_100ms > params.vol_trigger;
             deviation_ok && vol_ok
         };
 
-        if !entry_allowed {
+        if !signal_detected {
+            return self.idle_result();
+        }
+
+        // ─── SEÑAL DETECTADA — validar viabilidad económica ────────────────
+
+        let spread = rec.poly_ask - rec.poly_bid;
+
+        // Data integrity: spread negativo o cero → WS desactualizado, ignorar
+        if spread <= 0.0 {
+            return self.idle_result();
+        }
+
+        // Max spread: si > $0.05, la ventaja estadística se destruye
+        if spread > MAX_SPREAD {
+            tracing::warn!(
+                "[STAY IDLE] Signal detected but spread too wide: {:.4} (ask={:.4} bid={:.4})",
+                spread, rec.poly_ask, rec.poly_bid
+            );
             return self.idle_result();
         }
 
