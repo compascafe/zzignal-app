@@ -284,7 +284,7 @@ async fn start_session(
         } else {
             now.with_minute(next_min).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()
         };
-        let end = start + Duration::minutes(body.duration_min.max(15) as i64);
+        let end = start + Duration::minutes(body.duration_min.max(1) as i64);
         (start, end)
     };
 
@@ -296,7 +296,8 @@ async fn start_session(
     let total_duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
 
     if total_duration > 15 {
-        match repository::create_session_batch(&s, &name, scheduled_start, total_duration, depth, 15).await {
+        let chunk_min = body.duration_min.max(1);
+        match repository::create_session_batch(&s, &name, scheduled_start, total_duration, depth, chunk_min).await {
             Ok((parent_id, child_ids)) => {
                 let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
                 Json(json!({
@@ -308,9 +309,9 @@ async fn start_session(
                     "child_ids": child_ids,
                     "children": children,
                     "total_duration_min": total_duration,
-                    "chunk_duration_min": 15,
-                    "message": format!("Sesión de {}min creada con {} bloques de 15min cada uno. Programada para {} → {}",
-                        total_duration, child_ids.len(), scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
+                    "chunk_duration_min": chunk_min,
+                    "message": format!("Sesión de {}min creada con {} bloques de {}min cada uno. Programada para {} → {}",
+                        total_duration, child_ids.len(), chunk_min, scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
                 }))
             }
             Err(e) => Json(json!({"ok": false, "error": e.to_string() })),

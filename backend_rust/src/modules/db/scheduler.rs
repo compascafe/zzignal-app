@@ -138,7 +138,14 @@ async fn process_sessions(state: Arc<AppState>) {
     for session in to_stop {
         let btc_price = *state.btc_price.read().await;
         let parent_id = session.parent_id;
-        info!("Deteniendo sesión #{} (programada hasta {})", session.id, session.scheduled_end.format("%H:%M:%S"));
+        info!("[SESSION STOP] Duration: {}min | Deteniendo sesión #{} (programada hasta {})", session.duration_min, session.id, session.scheduled_end.format("%H:%M:%S"));
+
+        // Flush + close the per-session CSV file BEFORE marking completed in DB.
+        // This ensures the last ticks are written before the file is closed.
+        if let Err(e) = state.session_manager.flush() {
+            warn!("SessionManager flush #{}: {}", session.id, e);
+        }
+
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("No se pudo detener sesión #{}: {}", session.id, e);
         } else {
@@ -169,7 +176,7 @@ async fn process_sessions(state: Arc<AppState>) {
     };
     for session in to_start {
         let btc_price = *state.btc_price.read().await;
-        info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
+        info!("[SESSION START] Duration set to: {} minutes | Iniciando grabación sesión #{} (programada para {})", session.duration_min, session.id, session.scheduled_start.format("%H:%M:%S"));
         state.recording_sessions.write().await.push(session.id);
 
         // Strict file isolation: create new per-session CSV, close previous if any
