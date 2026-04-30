@@ -86,6 +86,15 @@ pub struct CsvRecord {
     pub liqb_exit_price:      f64,
     pub liqb_trade_pnl:       f64,
     pub liqb_balance:         f64,
+    // ─── Advanced HFT Metrics ────────────────────────────────────────────
+    pub trades_per_second:    f64,  // Binance TRADE count in last rolling 1s
+    pub price_velocity:       f64,  // Δprice/Δtime over 500ms window (USD/s)
+    pub poly_liquidity_delta: f64,  // Δpoly_ask_vol_all vs previous tick
+    pub absorption_ratio:     f64,  // trade_vol / |Δprice| — high = absorption
+    pub price_gap_ratio:      f64,  // (binance_micro - poly_mid) / binance_micro * 100
+    pub spoofing_flag:        u8,   // 1 = >30% vol drop with no poly trade
+    pub tape_speed_flag:      u8,   // 1 = high volume spike detected
+    pub gap_alert_flag:       u8,   // 1 = price gap > 0.05%
 }
 
 impl Default for CsvRecord {
@@ -124,6 +133,14 @@ impl Default for CsvRecord {
             liqb_exit_price:     0.0,
             liqb_trade_pnl:      0.0,
             liqb_balance:        0.0,
+            trades_per_second:    0.0,
+            price_velocity:       0.0,
+            poly_liquidity_delta: 0.0,
+            absorption_ratio:     0.0,
+            price_gap_ratio:      0.0,
+            spoofing_flag:        0,
+            tape_speed_flag:      0,
+            gap_alert_flag:       0,
         }
     }
 }

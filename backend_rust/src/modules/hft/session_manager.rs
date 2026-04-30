@@ -52,7 +52,7 @@ impl SessionManager {
 
         let mut writer = BufWriter::with_capacity(65536, file);
 
-        // Write 32-column header
+        // Write 40-column header
         let _ = writeln!(
             writer,
             "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
@@ -60,7 +60,9 @@ impl SessionManager {
              poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
              trade_price,trade_size,is_informed,\
              imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
-             liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance"
+             liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,\
+             trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
+             price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag"
         );
 
         *self.writer.lock().unwrap() = Some(writer);
@@ -79,7 +81,7 @@ impl SessionManager {
             Some(w) => {
                 let _ = writeln!(
                     w,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     record.ts_local,
                     record.ts_exchange,
                     record.event_type.as_str(),
@@ -112,6 +114,14 @@ impl SessionManager {
                     record.liqb_exit_price,
                     record.liqb_trade_pnl,
                     record.liqb_balance,
+                    record.trades_per_second,
+                    record.price_velocity,
+                    record.poly_liquidity_delta,
+                    record.absorption_ratio,
+                    record.price_gap_ratio,
+                    record.spoofing_flag,
+                    record.tape_speed_flag,
+                    record.gap_alert_flag,
                 );
                 drop(writer_guard);
 

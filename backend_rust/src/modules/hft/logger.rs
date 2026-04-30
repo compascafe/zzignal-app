@@ -55,14 +55,16 @@ impl CsvLogger {
                  poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
                  trade_price,trade_size,is_informed,\
                  imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
-                 liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance"
+                 liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,\
+                 trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
+                 price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag"
             );
         }
 
         for r in &rows {
             let _ = writeln!(
                 file,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 r.ts_local,
                 r.ts_exchange,
                 r.event_type.as_str(),
@@ -95,6 +97,14 @@ impl CsvLogger {
                 r.liqb_exit_price,
                 r.liqb_trade_pnl,
                 r.liqb_balance,
+                r.trades_per_second,
+                r.price_velocity,
+                r.poly_liquidity_delta,
+                r.absorption_ratio,
+                r.price_gap_ratio,
+                r.spoofing_flag,
+                r.tape_speed_flag,
+                r.gap_alert_flag,
             );
         }
 

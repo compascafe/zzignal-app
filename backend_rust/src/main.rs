@@ -152,6 +152,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(ref bn) = *depth3.read().await {
                     tracking_state.track_price(tick.price, tick.event_time);
+                    tracking_state.record_binance_trade(tick.event_time);
+                    tracking_state.record_price_sample(tick.event_time, tick.price);
                     let rec = metrics::build_binance_tick(bn, &track3, tick.event_time, tick.price, tick.volume);
                     csv3.push(rec.clone());
                     sm3.push(&rec);

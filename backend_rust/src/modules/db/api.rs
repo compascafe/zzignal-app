@@ -569,13 +569,13 @@ async fn export_session(
     csv.push_str(&format!("# tick_count={}\n", session.tick_count));
     csv.push_str(&format!("# trade_count={}\n", session.trade_count));
     csv.push_str(&format!("#\n"));
-    // Unified 32-column header
-    csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance\n");
+    // Unified 40-column header
+    csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag\n");
 
     if has_data {
         for r in &rows {
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 r.ts.to_rfc3339(), "", "BOOK_UPDATE",
                 r.binance_lag_ms.unwrap_or(0),
                 r.btc_price_binance.unwrap_or(0.0),
@@ -588,12 +588,13 @@ async fn export_session(
                 "", 0.0, 0.0, 0,
                 "IDLE", "", 0.0, 0.0, 0.0, 0.0,
                 "IDLE", "", 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0,
             ));
         }
     } else {
         for r in &mem_rows {
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 r.ts_local, r.ts_exchange, r.event_type.as_str(),
                 r.latencia_ms, r.binance_price, r.binance_micro_price,
                 r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
@@ -604,6 +605,10 @@ async fn export_session(
                 r.imba_exit_price, r.imba_trade_pnl, r.imba_balance,
                 r.liqb_status, r.liqb_side, r.liqb_entry_price,
                 r.liqb_exit_price, r.liqb_trade_pnl, r.liqb_balance,
+                r.trades_per_second, r.price_velocity,
+                r.poly_liquidity_delta, r.absorption_ratio,
+                r.price_gap_ratio, r.spoofing_flag,
+                r.tape_speed_flag, r.gap_alert_flag,
             ));
         }
     }
@@ -673,12 +678,12 @@ async fn export_bulk_sessions(
         csv.push_str(&format!("# tick_count={}\n", session.tick_count));
         csv.push_str(&format!("# trade_count={}\n", session.trade_count));
         csv.push_str("#\n");
-        csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance\n");
+        csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag\n");
 
         if has_data {
             for r in &rows {
                 csv.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                     r.ts.to_rfc3339(), "", "BOOK_UPDATE",
                     r.binance_lag_ms.unwrap_or(0),
                     r.btc_price_binance.unwrap_or(0.0),
@@ -691,12 +696,13 @@ async fn export_bulk_sessions(
                     "", 0.0, 0.0, 0,
                     "IDLE", "", 0.0, 0.0, 0.0, 0.0,
                     "IDLE", "", 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0,
                 ));
             }
         } else {
             for r in &mem_rows {
                 csv.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                     r.ts_local, r.ts_exchange, r.event_type.as_str(),
                     r.latencia_ms, r.binance_price, r.binance_micro_price,
                     r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
@@ -707,6 +713,10 @@ async fn export_bulk_sessions(
                     r.imba_exit_price, r.imba_trade_pnl, r.imba_balance,
                     r.liqb_status, r.liqb_side, r.liqb_entry_price,
                     r.liqb_exit_price, r.liqb_trade_pnl, r.liqb_balance,
+                    r.trades_per_second, r.price_velocity,
+                    r.poly_liquidity_delta, r.absorption_ratio,
+                    r.price_gap_ratio, r.spoofing_flag,
+                    r.tape_speed_flag, r.gap_alert_flag,
                 ));
             }
         }
