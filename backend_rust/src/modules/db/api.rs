@@ -548,32 +548,8 @@ async fn session_children(
 
 // ─── Export Session (CSV / JSON / Parquet) ────────────────────────────────────
 
-async fn export_session(
-    State(s): State<Arc<AppState>>,
-    Path(id): Path<i32>,
-) -> Response {
-    let session = match repository::get_session_by_id(&s, id).await {
-        Ok(Some(session)) => session,
-        Ok(None) => return (StatusCode::NOT_FOUND, "session not found").into_response(),
-        Err(e) => return Json(json!({"error": e.to_string()})).into_response(),
-    };
-
-    let rows = repository::query_hft_snapshots(s.db.as_ref(), id).await.unwrap_or_default();
-
-    // Fallback to in-memory buffer if DB is empty — FILTER by session_id
-    let has_data = !rows.is_empty();
-    let mem_rows = if !has_data {
-        let mem = s.mem_hft.read().await;
-        mem.iter()
-            .filter(|r| r.session_id == id)
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
-
+fn build_csv_body(session: &crate::modules::db::models::RecordingSession, raw_data: &str) -> String {
     let mut csv = String::new();
-    // Metadata header
     csv.push_str("# Session Metadata\n");
     csv.push_str(&format!("# session_id={}\n", session.id));
     csv.push_str(&format!("# name={}\n", session.name));
@@ -585,18 +561,42 @@ async fn export_session(
     csv.push_str(&format!("# btc_price_start={}\n", session.btc_price_start.unwrap_or(0.0)));
     csv.push_str(&format!("# btc_price_end={}\n", session.btc_price_end.unwrap_or(0.0)));
     csv.push_str(&format!("# final_price={}\n", session.final_price.unwrap_or(0.0)));
-    csv.push_str(&format!("# outcome_result={}\n", session.outcome_result.unwrap_or_default()));
+    csv.push_str(&format!("# outcome_result={}\n", session.outcome_result.clone().unwrap_or_default()));
     csv.push_str(&format!("# status={}\n", session.status));
     csv.push_str(&format!("# tick_count={}\n", session.tick_count));
     csv.push_str(&format!("# trade_count={}\n", session.trade_count));
-    csv.push_str(&format!("#\n\n"));
-    // 53-column data header (keep \n at end of each format! line below)
-    csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal\n");
+    csv.push_str("\n");
+    csv.push_str(raw_data);
+    csv
+}
+
+async fn build_fallback_csv(
+    session: &crate::modules::db::models::RecordingSession,
+    s: &Arc<AppState>,
+    id: i32,
+) -> String {
+    let db_rows = repository::query_hft_snapshots(s.db.as_ref(), id).await.unwrap_or_default();
+    let has_data = !db_rows.is_empty();
+    let mem_rows = if !has_data {
+        let mem = s.mem_hft.read().await;
+        mem.iter()
+            .filter(|r| r.session_id == id)
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
+
+    let mut data = String::new();
+    // 53-column data header
+    data.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal\n");
 
     if has_data {
-        for r in &rows {
-            csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+        for r in &db_rows {
+            use std::fmt::Write;
+            let _ = writeln!(
+                data,
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 r.ts.to_rfc3339(), "", "BOOK_UPDATE",
                 r.binance_lag_ms.unwrap_or(0),
                 r.btc_price_binance.unwrap_or(0.0),
@@ -612,12 +612,14 @@ async fn export_session(
                 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0,
                 0.0, 0.0, 0.0, 0, 0, 0, "",
                 0.0, 0, 0, 0, 0.0, 0,
-            ));
+            );
         }
     } else {
         for r in &mem_rows {
-            csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            use std::fmt::Write;
+            let _ = writeln!(
+                data,
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 r.ts_local, r.ts_exchange, r.event_type.as_str(),
                 r.latencia_ms, r.binance_price, r.binance_micro_price,
                 r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
@@ -639,9 +641,46 @@ async fn export_session(
                 r.realized_volatility, r.high_volatility_event,
                 r.bollinger_position, r.master_signal,
                 r.cp_uncertainty_range, r.cp_valid_signal,
-            ));
+            );
         }
     }
+    build_csv_body(session, &data)
+}
+
+/// Try to read the per-session CSV file from disk (written by SessionManager).
+/// Returns the raw file content with its data-header, or None if file doesn't exist.
+fn read_session_csv_disk(session_manager: &crate::modules::hft::session_manager::SessionManager, id: i32) -> Option<String> {
+    let path = session_manager.session_path(id);
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => {
+            // SessionManager files are full 53-column CSVs with a header row.
+            // The header is always the first line; everything else is data.
+            if raw.is_empty() { return None; }
+            // Skip the existing header line — the export adds its own metadata header.
+            let data_start = raw.find('\n').map(|n| n + 1).unwrap_or(0);
+            let data = raw[data_start..].trim_end().to_string();
+            if data.is_empty() { None } else { Some(data) }
+        }
+        Err(_) => None,
+    }
+}
+
+async fn export_session(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i32>,
+) -> Response {
+    let session = match repository::get_session_by_id(&s, id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return (StatusCode::NOT_FOUND, "session not found").into_response(),
+        Err(e) => return Json(json!({"error": e.to_string()})).into_response(),
+    };
+
+    // Prefer the rich per-session CSV file on disk (written during recording)
+    let csv = if let Some(raw_data) = read_session_csv_disk(&s.session_manager, id) {
+        build_csv_body(&session, &raw_data)
+    } else {
+        build_fallback_csv(&session, &s, id).await
+    };
 
     (StatusCode::OK,
      [("Content-Type", "text/csv"),
@@ -679,86 +718,12 @@ async fn export_bulk_sessions(
             Err(_) => continue,
         };
 
-        let rows = repository::query_hft_snapshots(s.db.as_ref(), id).await.unwrap_or_default();
-        let has_data = !rows.is_empty();
-        let mem_rows = if !has_data {
-            let mem = s.mem_hft.read().await;
-            mem.iter()
-                .filter(|r| r.session_id == id)
-                .cloned()
-                .collect::<Vec<_>>()
+        // Prefer the rich per-session CSV file on disk
+        let csv = if let Some(raw_data) = read_session_csv_disk(&s.session_manager, id) {
+            build_csv_body(&session, &raw_data)
         } else {
-            vec![]
+            build_fallback_csv(&session, &s, id).await
         };
-
-        let mut csv = String::new();
-        csv.push_str("# Session Metadata\n");
-        csv.push_str(&format!("# session_id={}\n", session.id));
-        csv.push_str(&format!("# name={}\n", session.name));
-        csv.push_str(&format!("# scheduled_start={}\n", session.scheduled_start.to_rfc3339()));
-        csv.push_str(&format!("# scheduled_end={}\n", session.scheduled_end.to_rfc3339()));
-        csv.push_str(&format!("# started_at={}\n", session.started_at.map_or("".into(), |t| t.to_rfc3339())));
-        csv.push_str(&format!("# stopped_at={}\n", session.stopped_at.map_or("".into(), |t| t.to_rfc3339())));
-        csv.push_str(&format!("# duration_min={}\n", session.duration_min));
-        csv.push_str(&format!("# btc_price_start={}\n", session.btc_price_start.unwrap_or(0.0)));
-        csv.push_str(&format!("# btc_price_end={}\n", session.btc_price_end.unwrap_or(0.0)));
-        csv.push_str(&format!("# final_price={}\n", session.final_price.unwrap_or(0.0)));
-        csv.push_str(&format!("# outcome_result={}\n", session.outcome_result.unwrap_or_default()));
-        csv.push_str(&format!("# status={}\n", session.status));
-        csv.push_str(&format!("# tick_count={}\n", session.tick_count));
-        csv.push_str(&format!("# trade_count={}\n", session.trade_count));
-        csv.push_str("#\n");
-        csv.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal\n");
-
-        if has_data {
-            for r in &rows {
-                csv.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-                    r.ts.to_rfc3339(), "", "BOOK_UPDATE",
-                    r.binance_lag_ms.unwrap_or(0),
-                    r.btc_price_binance.unwrap_or(0.0),
-                    r.binance_micro_price_at_t.unwrap_or(0.0),
-                    0.0, 0.0, 0.0,
-                    0.0, 0.0,
-                    r.poly_mid_price.unwrap_or(0.0),
-                    0.0, 0.0, 0.0,
-                    r.poly_imbalance.unwrap_or(0.0),
-                    "", 0.0, 0.0, 0,
-                    "IDLE", "", 0.0, 0.0, 0.0, 0.0,
-                    "IDLE", "", 0.0, 0.0, 0.0, 0.0,
-                    0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0,
-                    0.0, 0.0, 0.0, 0, 0, 0, "",
-                    0.0, 0, 0, 0, 0.0, 0,
-                ));
-            }
-        } else {
-            for r in &mem_rows {
-                csv.push_str(&format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-                    r.ts_local, r.ts_exchange, r.event_type.as_str(),
-                    r.latencia_ms, r.binance_price, r.binance_micro_price,
-                    r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
-                    r.poly_bid, r.poly_ask, r.poly_mid, r.poly_spread,
-                    r.poly_bid_vol_all, r.poly_ask_vol_all, r.poly_imbalance,
-                    r.trade_side, r.trade_price, r.trade_size, r.is_informed,
-                    r.imba_status, r.imba_side, r.imba_entry_price,
-                    r.imba_exit_price, r.imba_trade_pnl, r.imba_balance,
-                    r.liqb_status, r.liqb_side, r.liqb_entry_price,
-                    r.liqb_exit_price, r.liqb_trade_pnl, r.liqb_balance,
-                    r.trades_per_second, r.price_velocity,
-                    r.poly_liquidity_delta, r.absorption_ratio,
-                    r.price_gap_ratio, r.spoofing_flag,
-                    r.tape_speed_flag, r.gap_alert_flag,
-                    r.bollinger_sma, r.bollinger_upper,
-                    r.bollinger_lower, r.mean_reversion_signal,
-                    r.technical_confluence, r.trend_direction,
-                    r.signal_label,
-                    r.realized_volatility, r.high_volatility_event,
-                    r.bollinger_position, r.master_signal,
-                    r.cp_uncertainty_range, r.cp_valid_signal,
-                ));
-            }
-        }
 
         let filename = format!("session_{}_hft.csv", id);
         if zip_writer.start_file(&filename, options).is_err() { continue; }
