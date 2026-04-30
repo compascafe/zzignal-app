@@ -57,20 +57,28 @@ pub struct TrackingState {
     pub last_poly_mid:       Mutex<Option<f64>>,
     /// Last poly_mid timestamp (ms) for absorption ratio denominator.
     pub last_poly_mid_ts:    Mutex<Option<i64>>,
+
+    // ─── Session baselines for normalized price_gap_ratio ─────────────────
+    /// BTC price at session start (set on first poly event of session).
+    pub session_btc_start:     Mutex<Option<f64>>,
+    /// Poly mid price at session start (set on first poly event of session).
+    pub session_poly_mid_start: Mutex<Option<f64>>,
 }
 
 impl TrackingState {
     pub fn new() -> Self {
         Self {
-            vol_window:         Mutex::new(Vec::with_capacity(64)),
-            last_big_move:      Mutex::new(None),
-            last_binance_price: Mutex::new(None),
-            vol_stats:          Mutex::new(RunningStats::new()),
-            trade_ts_window:    Mutex::new(VecDeque::with_capacity(256)),
-            price_history:      Mutex::new(VecDeque::with_capacity(128)),
-            last_poly_ask_vol:  Mutex::new(None),
-            last_poly_mid:      Mutex::new(None),
-            last_poly_mid_ts:   Mutex::new(None),
+            vol_window:          Mutex::new(Vec::with_capacity(64)),
+            last_big_move:       Mutex::new(None),
+            last_binance_price:  Mutex::new(None),
+            vol_stats:           Mutex::new(RunningStats::new()),
+            trade_ts_window:     Mutex::new(VecDeque::with_capacity(256)),
+            price_history:       Mutex::new(VecDeque::with_capacity(128)),
+            last_poly_ask_vol:   Mutex::new(None),
+            last_poly_mid:       Mutex::new(None),
+            last_poly_mid_ts:    Mutex::new(None),
+            session_btc_start:      Mutex::new(None),
+            session_poly_mid_start: Mutex::new(None),
         }
     }
 
@@ -146,22 +154,36 @@ impl TrackingState {
         }
     }
 
-    /// Compute price velocity: slope of price over the last 500ms window (USD/s).
-    /// Uses simple Δprice / Δtime between oldest and newest sample.
-    pub fn price_velocity(&self, now_ms: i64) -> f64 {
-        let mut w = self.price_history.lock().unwrap();
-        let cutoff = now_ms - 500;
-        while w.front().map_or(false, |&(t, _)| t < cutoff) {
-            w.pop_front();
+    /// Compute price velocity: slope of Binance mid price over 500ms window (USD/s).
+    /// Uses the RingBuffer for direct look-back — no separate price history needed.
+    pub fn price_velocity(&self, ring: &PriceRingBuffer, now_ms: i64, current_price: f64) -> f64 {
+        let target_ts = (now_ms as u64).saturating_sub(500);
+        if let Some(past) = ring.get_closest_to(target_ts) {
+            if past.timestamp > 0 && past.mid_price > 0.0 {
+                let dt_ms = ((now_ms as u64).saturating_sub(past.timestamp)).max(1) as f64;
+                let dp = current_price - past.mid_price;
+                return dp / (dt_ms / 1000.0); // USD per second
+            }
         }
-        if w.len() < 2 {
-            return 0.0;
+        0.0
+    }
+
+    /// Lazy-init session baselines for normalized price_gap_ratio.
+    /// Called on the first poly event of a new recording session.
+    pub fn init_session_baselines(&self, btc_price: f64, poly_mid: f64) {
+        let mut btc = self.session_btc_start.lock().unwrap();
+        let mut poly = self.session_poly_mid_start.lock().unwrap();
+        if btc.is_none() {
+            *btc = Some(btc_price);
+            *poly = Some(poly_mid);
+            info!("[SESSION BASELINE] BTC start: {:.2} | Poly mid start: {:.6}", btc_price, poly_mid);
         }
-        let first = w.front().unwrap();
-        let last = w.back().unwrap();
-        let dt_ms = (last.0 - first.0).max(1) as f64;
-        let dp = last.1 - first.1;
-        dp / (dt_ms / 1000.0) // Convert to USD/sec
+    }
+
+    /// Reset session baselines (called when all sessions stop).
+    pub fn reset_session_baselines(&self) {
+        *self.session_btc_start.lock().unwrap() = None;
+        *self.session_poly_mid_start.lock().unwrap() = None;
     }
 
     /// Store current poly ask volume for next-tick liquidity delta computation.
@@ -243,11 +265,14 @@ pub fn build_book_update(
 
     // ─── Advanced HFT Metrics (computed before struct to allow state storage) ─
     let trades_ps    = tracking.trades_per_second(now.timestamp_millis());
-    let price_vel    = tracking.price_velocity(now.timestamp_millis());
+    let price_vel    = tracking.price_velocity(ring, now.timestamp_millis(), bb_mid);
     let (liq_delta, spoof_flag) = compute_liquidity_delta(pb_ask_vol, tracking, false);
-    let (gap_pct, gap_flag)     = compute_price_gap(mic_at_t, pb_mid);
+    let (gap_pct, gap_flag)     = compute_price_gap(bb_mid, pb_mid, tracking);
     let tape_flag    = check_volume_spike(bn_vol_100, tracking, pb_sprd);
     if gap_flag > 0 { check_gap_alert(gap_pct); }
+
+    // Lazy-init session baselines on first poly event
+    tracking.init_session_baselines(bb_mid, pb_mid);
 
     // Store current poly state for next-tick delta computations
     tracking.set_last_poly_ask_vol(pb_ask_vol);
@@ -324,6 +349,7 @@ pub fn build_trade_record(
 /// Construye un CsvRecord de tipo BINANCE_TICK (solo datos del CEX).
 pub fn build_binance_tick(
     binance:       &BinanceDepth,
+    ring:          &PriceRingBuffer,
     tracking:      &TrackingState,
     tick_ts:       i64,
     tick_price:    f64,
@@ -356,7 +382,7 @@ pub fn build_binance_tick(
         binance_vol_100ms:   bb_vol_100,
         binance_vol_24h:     binance.btc_volume_24h,
         trades_per_second:   tracking.trades_per_second(now.timestamp_millis()),
-        price_velocity:      tracking.price_velocity(now.timestamp_millis()),
+        price_velocity:      tracking.price_velocity(ring, now.timestamp_millis(), bb_mid),
         tape_speed_flag:     check_volume_spike(bb_vol_100, tracking, 0.0),
         ..Default::default()
     }
@@ -387,21 +413,36 @@ pub fn compute_liquidity_delta(
     (delta, spoofing)
 }
 
-/// Compute price gap ratio: (binance_micro_price - poly_mid_price) / binance_micro_price * 100.
-/// Positive = Polymarket is below Binance (lagging behind).
+/// Compute normalized price gap ratio: percentage divergence between Binance and Poly
+/// since session start. Uses session-start baselines to normalize across different scales.
+///
+/// Formula: ((binance_price / btc_start) - (poly_mid / poly_mid_start)) * 100
+///
+/// Positive = Poly is lagging behind Binance movement.
 /// Returns (gap_pct, gap_alert_flag).
-pub fn compute_price_gap(binance_micro: f64, poly_mid: f64) -> (f64, u8) {
-    if binance_micro <= 0.0 || poly_mid <= 0.0 {
+pub fn compute_price_gap(
+    binance_price: f64,
+    poly_mid: f64,
+    tracking: &TrackingState,
+) -> (f64, u8) {
+    let btc_start = tracking.session_btc_start.lock().unwrap().unwrap_or(binance_price);
+    let poly_start = tracking.session_poly_mid_start.lock().unwrap().unwrap_or(poly_mid);
+
+    if btc_start <= 0.0 || poly_start <= 0.0 || poly_mid <= 0.0 {
         return (0.0, 0u8);
     }
-    let gap_pct = ((binance_micro - poly_mid) / binance_micro) * 100.0;
+
+    let btc_pct_move  = (binance_price - btc_start) / btc_start; // fractional move
+    let poly_pct_move = (poly_mid - poly_start) / poly_start;
+    let gap_pct = (poly_pct_move - btc_pct_move) * 100.0;
+
     let alert = if gap_pct.abs() > 0.05 { 1u8 } else { 0u8 };
     (gap_pct, alert)
 }
 
 /// Compute absorption ratio: poly_trade_volume / |Δpoly_mid|.
 /// High ratio = lots of volume traded but price barely moved (absorption).
-/// Returns 0.0 when delta price is zero (infinite absorption).
+/// When delta price is zero, returns the trade volume directly (not inflated).
 pub fn compute_absorption_ratio(
     trade_vol: f64,
     poly_mid: f64,
@@ -409,11 +450,11 @@ pub fn compute_absorption_ratio(
 ) -> f64 {
     let prev = match previous_mid {
         Some(p) if p > 0.0 => p,
-        _ => return 0.0,
+        _ => return trade_vol,
     };
     let dp = (poly_mid - prev).abs();
     if dp < f64::EPSILON {
-        return if trade_vol > 0.0 { trade_vol / 0.0001 } else { 0.0 };
+        return trade_vol;
     }
     trade_vol / dp
 }

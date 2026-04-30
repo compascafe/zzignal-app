@@ -15,6 +15,7 @@ pub struct SessionManager {
     file_path:         Mutex<Option<String>>,
     tick_count:        Mutex<u64>,
     trade_count:       Mutex<u64>,
+    row_count:         Mutex<u64>,  // rows written in current session (flush at 50)
     data_dir:          String,
 }
 
@@ -27,6 +28,7 @@ impl SessionManager {
             file_path:         Mutex::new(None),
             tick_count:        Mutex::new(0),
             trade_count:       Mutex::new(0),
+            row_count:         Mutex::new(0),
             data_dir:          data_dir.to_string(),
         }
     }
@@ -40,6 +42,7 @@ impl SessionManager {
         // 2. Reset counters to zero — no metadata carry-over
         *self.tick_count.lock().unwrap() = 0;
         *self.trade_count.lock().unwrap() = 0;
+        *self.row_count.lock().unwrap() = 0;
 
         // 3. Create new file — truncate ensures it's empty
         let path = format!("{}/session_{:04}_hft.csv", self.data_dir, session_id);
@@ -129,6 +132,14 @@ impl SessionManager {
                 match record.event_type {
                     EventType::Trade => *self.trade_count.lock().unwrap() += 1,
                     _ => *self.tick_count.lock().unwrap() += 1,
+                }
+
+                // Auto-flush every 50 rows to prevent data loss on crash
+                let mut rc = self.row_count.lock().unwrap();
+                *rc += 1;
+                if *rc % 50 == 0 {
+                    drop(rc);
+                    let _ = self.flush();
                 }
                 true
             }

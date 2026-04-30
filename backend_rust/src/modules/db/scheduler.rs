@@ -177,6 +177,9 @@ async fn process_sessions(state: Arc<AppState>) {
     for session in to_start {
         let btc_price = *state.btc_price.read().await;
         info!("[SESSION START] Duration set to: {} minutes | Iniciando grabación sesión #{} (programada para {})", session.duration_min, session.id, session.scheduled_start.format("%H:%M:%S"));
+
+        // Reset session baselines so normalize price_gap_ratio starts fresh
+        state.tracking_state.reset_session_baselines();
         state.recording_sessions.write().await.push(session.id);
 
         // Strict file isolation: create new per-session CSV, close previous if any

@@ -438,6 +438,7 @@ async fn stop_all_sessions(
     }
 
     s.recording_sessions.write().await.clear();
+    s.tracking_state.reset_session_baselines();
 
     Json(json!({
         "ok": true,

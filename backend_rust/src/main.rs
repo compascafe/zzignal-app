@@ -139,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ─── HFT tick consumer: BINANCE_TICK events from depth stream ──────────
     {
         let depth3   = Arc::clone(&binance_depth);
+        let ring3    = Arc::clone(&binance_ring);
         let csv3     = Arc::clone(&csv_logger);
         let sm3      = Arc::clone(&state.session_manager);
         let track3   = Arc::clone(&tracking_state);
@@ -154,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracking_state.track_price(tick.price, tick.event_time);
                     tracking_state.record_binance_trade(tick.event_time);
                     tracking_state.record_price_sample(tick.event_time, tick.price);
-                    let rec = metrics::build_binance_tick(bn, &track3, tick.event_time, tick.price, tick.volume);
+                    let rec = metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume);
                     csv3.push(rec.clone());
                     sm3.push(&rec);
                 }
