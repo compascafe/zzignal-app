@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
@@ -6,45 +7,33 @@ use tracing::{info, warn};
 
 use crate::modules::hft::types::{CsvRecord, EventType};
 
-/// Manages per-session CSV file isolation.
+struct SessionWriter {
+    writer:    BufWriter<File>,
+    path:      String,
+    tick_count: u64,
+    trade_count: u64,
+    row_count: u64,
+}
+
+/// Manages per-session CSV file isolation with MULTIPLE concurrent writers.
 /// Each session gets its own file: `{data_dir}/session_{id:04}_hft.csv`.
-/// Between sessions the writer is None (IDLE state).
+/// Sessions are fully isolated — writing to one never closes another.
 pub struct SessionManager {
-    active_session_id: Mutex<Option<i32>>,
-    writer:            Mutex<Option<BufWriter<File>>>,
-    file_path:         Mutex<Option<String>>,
-    tick_count:        Mutex<u64>,
-    trade_count:       Mutex<u64>,
-    row_count:         Mutex<u64>,  // rows written in current session (flush at 50)
-    data_dir:          String,
+    writers:  Mutex<HashMap<i32, SessionWriter>>,
+    data_dir: String,
 }
 
 impl SessionManager {
     pub fn new(data_dir: &str) -> Self {
         std::fs::create_dir_all(data_dir).ok();
         Self {
-            active_session_id: Mutex::new(None),
-            writer:            Mutex::new(None),
-            file_path:         Mutex::new(None),
-            tick_count:        Mutex::new(0),
-            trade_count:       Mutex::new(0),
-            row_count:         Mutex::new(0),
-            data_dir:          data_dir.to_string(),
+            writers:  Mutex::new(HashMap::new()),
+            data_dir: data_dir.to_string(),
         }
     }
 
-    /// Start a new session. Closes any previous writer, creates a new empty CSV file.
-    /// The file is created with `truncate(true)` — no residual data from prior sessions.
+    /// Start a new session writer. Does NOT close other sessions' writers.
     pub fn start_session(&self, session_id: i32) -> Result<(), String> {
-        // 1. Close previous session (flush + close file)
-        self.close_writer("start_session")?;
-
-        // 2. Reset counters to zero — no metadata carry-over
-        *self.tick_count.lock().unwrap() = 0;
-        *self.trade_count.lock().unwrap() = 0;
-        *self.row_count.lock().unwrap() = 0;
-
-        // 3. Create new file — truncate ensures it's empty
         let path = format!("{}/session_{:04}_hft.csv", self.data_dir, session_id);
         let file = OpenOptions::new()
             .create(true)
@@ -55,7 +44,7 @@ impl SessionManager {
 
         let mut writer = BufWriter::with_capacity(65536, file);
 
-        // Write 47-column header
+        // Write 51-column header
         let _ = writeln!(
             writer,
             "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
@@ -71,155 +60,181 @@ impl SessionManager {
              realized_volatility,high_volatility_event,bollinger_position,master_signal"
         );
 
-        *self.writer.lock().unwrap() = Some(writer);
-        *self.file_path.lock().unwrap() = Some(path.clone());
-        *self.active_session_id.lock().unwrap() = Some(session_id);
+        let mut writers = self.writers.lock().unwrap();
+        // If a writer already exists for this session_id, flush+close the old one first
+        if let Some(old) = writers.remove(&session_id) {
+            info!("SessionManager: replacing existing writer for session #{}", session_id);
+            drop(old); // triggers BufWriter flush + file close
+        }
+
+        writers.insert(session_id, SessionWriter {
+            writer,
+            path: path.clone(),
+            tick_count: 0,
+            trade_count: 0,
+            row_count: 0,
+        });
 
         info!("SessionManager: started session #{} → {}", session_id, path);
         Ok(())
     }
 
-    /// Push a CsvRecord to the current session's file.
-    /// Returns true if the record was written, false if no session is active (IDLE).
+    /// Push a CsvRecord to the session specified by record.session_id.
     pub fn push(&self, record: &CsvRecord) -> bool {
-        let mut writer_guard = self.writer.lock().unwrap();
-        match writer_guard.as_mut() {
-            Some(w) => {
-                let _ = writeln!(
-                    w,
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                    record.ts_local,
-                    record.ts_exchange,
-                    record.event_type.as_str(),
-                    record.latencia_ms,
-                    record.binance_price,
-                    record.binance_micro_price,
-                    record.binance_imbalance,
-                    record.binance_vol_100ms,
-                    record.binance_vol_24h,
-                    record.poly_bid,
-                    record.poly_ask,
-                    record.poly_mid,
-                    record.poly_spread,
-                    record.poly_bid_vol_all,
-                    record.poly_ask_vol_all,
-                    record.poly_imbalance,
-                    record.trade_side,
-                    record.trade_price,
-                    record.trade_size,
-                    record.is_informed,
-                    record.imba_status,
-                    record.imba_side,
-                    record.imba_entry_price,
-                    record.imba_exit_price,
-                    record.imba_trade_pnl,
-                    record.imba_balance,
-                    record.liqb_status,
-                    record.liqb_side,
-                    record.liqb_entry_price,
-                    record.liqb_exit_price,
-                    record.liqb_trade_pnl,
-                    record.liqb_balance,
-                    record.trades_per_second,
-                    record.price_velocity,
-                    record.poly_liquidity_delta,
-                    record.absorption_ratio,
-                    record.price_gap_ratio,
-                    record.spoofing_flag,
-                    record.tape_speed_flag,
-                    record.gap_alert_flag,
-                    record.bollinger_sma,
-                    record.bollinger_upper,
-                    record.bollinger_lower,
-                    record.mean_reversion_signal,
-                    record.technical_confluence,
-                    record.trend_direction,
-                    record.signal_label,
-                    record.realized_volatility,
-                    record.high_volatility_event,
-                    record.bollinger_position,
-                    record.master_signal,
-                );
-                drop(writer_guard);
+        let sid = record.session_id;
+        if sid == 0 { return false; }
 
-                // Increment per-session counters
-                match record.event_type {
-                    EventType::Trade => *self.trade_count.lock().unwrap() += 1,
-                    _ => *self.tick_count.lock().unwrap() += 1,
-                }
+        let mut writers = self.writers.lock().unwrap();
+        let sw = match writers.get_mut(&sid) {
+            Some(w) => w,
+            None => return false,
+        };
 
-                // Auto-flush every 10 rows to prevent data loss on crash
-                let mut rc = self.row_count.lock().unwrap();
-                *rc += 1;
-                if *rc % 10 == 0 {
-                    drop(rc);
-                    let _ = self.flush();
-                }
-                true
+        let _ = writeln!(
+            sw.writer,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            record.ts_local,
+            record.ts_exchange,
+            record.event_type.as_str(),
+            record.latencia_ms,
+            record.binance_price,
+            record.binance_micro_price,
+            record.binance_imbalance,
+            record.binance_vol_100ms,
+            record.binance_vol_24h,
+            record.poly_bid,
+            record.poly_ask,
+            record.poly_mid,
+            record.poly_spread,
+            record.poly_bid_vol_all,
+            record.poly_ask_vol_all,
+            record.poly_imbalance,
+            record.trade_side,
+            record.trade_price,
+            record.trade_size,
+            record.is_informed,
+            record.imba_status,
+            record.imba_side,
+            record.imba_entry_price,
+            record.imba_exit_price,
+            record.imba_trade_pnl,
+            record.imba_balance,
+            record.liqb_status,
+            record.liqb_side,
+            record.liqb_entry_price,
+            record.liqb_exit_price,
+            record.liqb_trade_pnl,
+            record.liqb_balance,
+            record.trades_per_second,
+            record.price_velocity,
+            record.poly_liquidity_delta,
+            record.absorption_ratio,
+            record.price_gap_ratio,
+            record.spoofing_flag,
+            record.tape_speed_flag,
+            record.gap_alert_flag,
+            record.bollinger_sma,
+            record.bollinger_upper,
+            record.bollinger_lower,
+            record.mean_reversion_signal,
+            record.technical_confluence,
+            record.trend_direction,
+            record.signal_label,
+            record.realized_volatility,
+            record.high_volatility_event,
+            record.bollinger_position,
+            record.master_signal,
+        );
+
+        match record.event_type {
+            EventType::Trade => sw.trade_count += 1,
+            _ => sw.tick_count += 1,
+        }
+
+        sw.row_count += 1;
+        if sw.row_count % 10 == 0 {
+            let _ = sw.writer.flush();
+        }
+        true
+    }
+
+    /// Flush and close a specific session's writer.
+    pub fn stop_session(&self, session_id: i32) -> Result<(), String> {
+        let mut writers = self.writers.lock().unwrap();
+        if let Some(sw) = writers.remove(&session_id) {
+            info!("SessionManager: stopped session #{} ({} ticks, {} trades, {} rows)",
+                session_id, sw.tick_count, sw.trade_count, sw.row_count);
+            // Explicit flush via drop
+            drop(sw);
+            Ok(())
+        } else {
+            warn!("SessionManager: stop_session #{} — no writer found", session_id);
+            Ok(())
+        }
+    }
+
+    /// Flush a specific session's writer without closing.
+    pub fn flush(&self, session_id: i32) -> Result<(), String> {
+        let mut writers = self.writers.lock().unwrap();
+        if let Some(sw) = writers.get_mut(&session_id) {
+            sw.writer.flush()
+                .map_err(|e| format!("SessionManager flush #{}: {}", session_id, e))?;
+        }
+        Ok(())
+    }
+
+    /// Flush all active writers (called periodically).
+    pub fn flush_all(&self) {
+        let mut writers = self.writers.lock().unwrap();
+        for (&sid, sw) in writers.iter_mut() {
+            if let Err(e) = sw.writer.flush() {
+                warn!("SessionManager flush_all #{}: {}", sid, e);
             }
-            None => false,
         }
     }
 
-    /// Flush and close the current session file. Called on session stop.
-    /// This is the strict stop: file is flushed, closed, handle dropped.
-    pub fn stop_session(&self) -> Result<(), String> {
-        let id = self.active_id();
-        self.close_writer("stop_session")?;
-        if let Some(sid) = id {
-            info!("SessionManager: stopped session #{}", sid);
-        }
-        Ok(())
-    }
-
-    /// Flush the current writer without closing (periodic safety flush).
-    pub fn flush(&self) -> Result<(), String> {
-        let mut w = self.writer.lock().unwrap();
-        if let Some(ref mut writer) = *w {
-            writer
-                .flush()
-                .map_err(|e| format!("SessionManager flush error: {}", e))?;
-        }
-        Ok(())
-    }
-
-    pub fn active_id(&self) -> Option<i32> {
-        *self.active_session_id.lock().unwrap()
+    /// List of currently active session IDs.
+    pub fn active_ids(&self) -> Vec<i32> {
+        self.writers.lock().unwrap().keys().copied().collect()
     }
 
     pub fn is_idle(&self) -> bool {
-        self.active_id().is_none()
+        self.writers.lock().unwrap().is_empty()
     }
 
-    pub fn get_tick_count(&self) -> u64 {
-        *self.tick_count.lock().unwrap()
-    }
-    pub fn get_trade_count(&self) -> u64 {
-        *self.trade_count.lock().unwrap()
-    }
-
-    /// Path to the current session file (for export fallback).
-    pub fn current_path(&self) -> Option<String> {
-        self.file_path.lock().unwrap().clone()
+    pub fn tick_count(&self, session_id: i32) -> u64 {
+        self.writers.lock().unwrap()
+            .get(&session_id)
+            .map(|sw| sw.tick_count)
+            .unwrap_or(0)
     }
 
-    /// Path to a specific session's file (may not exist if not yet created or already cleaned).
+    pub fn trade_count(&self, session_id: i32) -> u64 {
+        self.writers.lock().unwrap()
+            .get(&session_id)
+            .map(|sw| sw.trade_count)
+            .unwrap_or(0)
+    }
+
     pub fn session_path(&self, session_id: i32) -> String {
         format!("{}/session_{:04}_hft.csv", self.data_dir, session_id)
     }
 
-    // ─── Internal ────────────────────────────────────────────────────────────
+    pub fn current_path(&self, session_id: i32) -> Option<String> {
+        self.writers.lock().unwrap()
+            .get(&session_id)
+            .map(|sw| sw.path.clone())
+    }
+}
 
-    fn close_writer(&self, caller: &str) -> Result<(), String> {
-        let mut writer_guard = self.writer.lock().unwrap();
-        if let Some(ref mut w) = *writer_guard {
-            if let Err(e) = w.flush() {
-                warn!("SessionManager::{} flush error: {}", caller, e);
+/// Guaranteed flush on drop — prevents data loss on process termination.
+impl Drop for SessionManager {
+    fn drop(&mut self) {
+        if let Ok(mut writers) = self.writers.lock() {
+            for (&sid, sw) in writers.iter_mut() {
+                let _ = sw.writer.flush();
+                info!("SessionManager::drop flushed session #{}", sid);
             }
         }
-        *writer_guard = None; // drop BufWriter → close file
-        *self.file_path.lock().unwrap() = None;
-        *self.active_session_id.lock().unwrap() = None;
-        Ok(())
     }
 }

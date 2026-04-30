@@ -129,8 +129,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
                 tokio::select! {
-                    _ = interval.tick() => { let _ = sm.flush(); }
-                    _ = shutdown4.recv() => { let _ = sm.flush(); return; }
+                    _ = interval.tick() => { sm.flush_all(); }
+                    _ = shutdown4.recv() => { sm.flush_all(); return; }
                 }
             }
         });
@@ -432,9 +432,16 @@ async fn capture_combined(
         }
         rec
     };
+    // Tag with session_id BEFORE pushing to per-session CSV + in-memory buffer
+    let session_ids = state.recording_sessions.read().await.clone();
+    let active_sid = state.session_manager.active_ids().first().copied()
+        .or_else(|| session_ids.first().copied())
+        .unwrap_or(0);
+    rec.session_id = active_sid;
+
     state.csv_logger.push(rec.clone());
 
-    // Per-session CSV file (strict isolation — only writes if session is active)
+    // Per-session CSV file (multi-writer: each session gets its own file)
     state.session_manager.push(&rec);
 
     // Strategy Manager: evaluate both shadow strategies (A: Imbalance, B: Liquidity)
@@ -461,15 +468,10 @@ async fn capture_combined(
     }
     // If a trade just closed, flush the CSV immediately
     if closed {
-        let _ = state.session_manager.flush();
+        let _ = state.session_manager.flush(active_sid);
     }
 
-    // In-memory buffer — tag with session_id for filtering
-    let session_ids = state.recording_sessions.read().await.clone();
-    let active_sid = state.session_manager.active_id()
-        .or_else(|| session_ids.first().copied())
-        .unwrap_or(0);
-    rec.session_id = active_sid;
+    // In-memory buffer
     state.mem_hft.write().await.push(rec.clone());
 
     // DB insert (only if PostgreSQL is available) — write to all recording sessions
