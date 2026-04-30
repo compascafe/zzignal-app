@@ -121,17 +121,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Session manager flush loop — every 30s while recording
+    {
+        let sm = Arc::clone(&state.session_manager);
+        let mut shutdown4 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => { let _ = sm.flush(); }
+                    _ = shutdown4.recv() => { let _ = sm.flush(); return; }
+                }
+            }
+        });
+    }
+
     // ─── HFT tick consumer: BINANCE_TICK events from depth stream ──────────
     {
         let depth3   = Arc::clone(&binance_depth);
         let csv3     = Arc::clone(&csv_logger);
+        let sm3      = Arc::clone(&state.session_manager);
         let track3   = Arc::clone(&tracking_state);
         tokio::spawn(async move {
             while let Some(tick) = tick_rx.recv().await {
                 if let Some(ref bn) = *depth3.read().await {
                     tracking_state.track_price(tick.price, tick.event_time);
                     let rec = metrics::build_binance_tick(bn, &track3, tick.event_time, tick.price, tick.volume);
-                    csv3.push(rec);
+                    csv3.push(rec.clone());
+                    sm3.push(&rec);
                 }
             }
         });
@@ -360,7 +377,7 @@ async fn capture_combined(
     let binance_opt = state.binance_depth.read().await.clone();
 
     // Always build record — use defaults if Binance is unavailable
-    let rec = if let Some(ref binance) = binance_opt {
+    let mut rec = if let Some(ref binance) = binance_opt {
         match evt_type {
             EventType::BookUpdate => metrics::build_book_update(
                 binance, &state.binance_ring, poly_bids, poly_asks, &state.tracking_state, poly_ts,
@@ -401,11 +418,43 @@ async fn capture_combined(
     };
     state.csv_logger.push(rec.clone());
 
-    // In-memory buffer (always — works without PostgreSQL)
+    // Per-session CSV file (strict isolation — only writes if session is active)
+    state.session_manager.push(&rec);
+
+    // Paper Trading Executor: evaluate trade logic, attach sim_* fields
+    let strike = state.market.read().await.as_ref()
+        .and_then(|m| m.price_to_beat);
+    let duration = state.market.read().await.as_ref()
+        .map(|m| m.duration_min).unwrap_or(15);
+    let sim = state.sim_executor.lock().unwrap().evaluate(&rec, strike, duration);
+    let closed = sim.status == "CLOSED";
+
+    // Update the in-memory record with sim fields
+    {
+        let mut mem = state.mem_hft.write().await;
+        if let Some(last) = mem.last_mut() {
+            last.sim_status = sim.status;
+            last.sim_side = sim.side;
+            last.sim_entry_price = sim.entry_price;
+            last.sim_exit_price = sim.exit_price;
+            last.sim_pnl_trade = sim.pnl_trade;
+            last.sim_current_balance = sim.current_balance;
+        }
+    }
+    // If a trade just closed, flush the CSV immediately
+    if closed {
+        let _ = state.session_manager.flush();
+    }
+
+    // In-memory buffer — tag with session_id for filtering
+    let session_ids = state.recording_sessions.read().await.clone();
+    let active_sid = state.session_manager.active_id()
+        .or_else(|| session_ids.first().copied())
+        .unwrap_or(0);
+    rec.session_id = active_sid;
     state.mem_hft.write().await.push(rec.clone());
 
     // DB insert (only if PostgreSQL is available) — write to all recording sessions
-    let session_ids = state.recording_sessions.read().await.clone();
     if let Some(pool) = state.db.as_ref() {
         for &sid in &session_ids {
             let _ = sqlx::query(

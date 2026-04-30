@@ -174,6 +174,7 @@ pub fn build_book_update(
         trade_price:         0.0,
         trade_size:          0.0,
         is_informed:         tracking.is_informed(now.timestamp_millis()),
+        ..Default::default()
     }
 }
 

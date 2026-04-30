@@ -145,6 +145,10 @@ async fn process_sessions(state: Arc<AppState>) {
             state.recording_sessions.write().await.retain(|&sid| sid != session.id);
             info!("Sesión #{} completada. Final price (BTC): {:?}", session.id, btc_price);
         }
+        // Strict file isolation: close session CSV file
+        if let Err(e) = state.session_manager.stop_session() {
+            warn!("SessionManager stop #{}: {}", session.id, e);
+        }
         if let Some(pid) = parent_id {
             parents_to_replenish.push(pid);
         }
@@ -167,9 +171,19 @@ async fn process_sessions(state: Arc<AppState>) {
         let btc_price = *state.btc_price.read().await;
         info!("Iniciando grabación sesión #{} (programada para {})", session.id, session.scheduled_start.format("%H:%M:%S"));
         state.recording_sessions.write().await.push(session.id);
+
+        // Strict file isolation: create new per-session CSV, close previous if any
+        if let Err(e) = state.session_manager.start_session(session.id) {
+            warn!("SessionManager start #{}: {}", session.id, e);
+        }
+
+        // Clear ring buffer and drain tick channel to prevent residual events leaking
+        state.binance_ring.clear();
+
         if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
             warn!("No se pudo iniciar sesión #{}: {}", session.id, e);
             state.recording_sessions.write().await.retain(|&sid| sid != session.id);
+            let _ = state.session_manager.stop_session();
         } else {
             info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
         }

@@ -53,7 +53,41 @@ impl CsvLogger {
                 "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
                  binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,\
                  poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
-                 trade_price,trade_size,is_informed"
+                 trade_price,trade_size,is_informed,\
+                 sim_status,sim_side,sim_entry_price,sim_exit_price,sim_pnl_trade,sim_current_balance"
+            );
+        }
+
+        for r in &rows {
+            let _ = writeln!(
+                file,
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                r.ts_local,
+                r.ts_exchange,
+                r.event_type.as_str(),
+                r.latencia_ms,
+                r.binance_price,
+                r.binance_micro_price,
+                r.binance_imbalance,
+                r.binance_vol_100ms,
+                r.binance_vol_24h,
+                r.poly_bid,
+                r.poly_ask,
+                r.poly_mid,
+                r.poly_spread,
+                r.poly_bid_vol_all,
+                r.poly_ask_vol_all,
+                r.poly_imbalance,
+                r.trade_side,
+                r.trade_price,
+                r.trade_size,
+                r.is_informed,
+                r.sim_status,
+                r.sim_side,
+                r.sim_entry_price,
+                r.sim_exit_price,
+                r.sim_pnl_trade,
+                r.sim_current_balance,
             );
         }
 

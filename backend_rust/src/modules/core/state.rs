@@ -10,6 +10,8 @@ use crate::modules::hft::metrics::TrackingState;
 use crate::modules::hft::binance_depth::BinanceTickEvent;
 use crate::modules::hft::logger::CsvLogger;
 use crate::modules::hft::types::CsvRecord;
+use crate::modules::hft::executor::PaperExecutor;
+use crate::modules::hft::session_manager::SessionManager;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -51,6 +53,12 @@ pub struct AppState {
     pub csv_logger:      Arc<CsvLogger>,
     /// Canal para ticks de Binance (HFT → consumer)
     pub tick_tx:         mpsc::UnboundedSender<BinanceTickEvent>,
+
+    /// Paper Trading executor compartido
+    pub sim_executor:    Arc<Mutex<PaperExecutor>>,
+
+    /// Per-session CSV file manager (strict file isolation)
+    pub session_manager: Arc<SessionManager>,
 
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
@@ -101,6 +109,8 @@ impl AppState {
             tracking_state,
             csv_logger,
             tick_tx,
+            session_manager:   Arc::new(SessionManager::new("sessions")),
+            sim_executor:      Arc::new(Mutex::new(PaperExecutor::new())),
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })

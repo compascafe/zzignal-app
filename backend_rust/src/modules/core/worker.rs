@@ -45,6 +45,8 @@ pub struct MarketInfo {
     /// Precio BTC al inicio del intervalo — proviene del campo groupItemThreshold
     /// del mercado en la Gamma API (el mismo valor que muestra Polymarket).
     pub price_to_beat:  Option<f64>,
+    /// Duración del mercado en minutos (5 o 15) — define el modo del executor.
+    pub duration_min:   i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1349,18 +1351,34 @@ async fn discover_btc_market(gamma: &gamma::Client) -> Result<MarketInfo> {
             end_date:      next_15min_boundary(),
             active:        true,
             price_to_beat: None,
+            duration_min:  15,
         });
     }
 
-    // Nivel 2: slug determinista
+    // Nivel 2: slug determinista (prueba 15m y 5m)
     let now_ts  = Utc::now().timestamp();
-    let current = (now_ts / 900) * 900;
-    for start_ts in [current, current + 900, current - 900] {
-        let slug = format!("btc-updown-15m-{start_ts}");
-        info!("Probando slug: {slug}");
-        match fetch_from_event(gamma, &slug).await {
-            Ok(info) => { info!("Encontrado via slug: {slug}"); return Ok(info); }
-            Err(e)   => warn!("Slug {slug}: {:#}", e),
+    // 15-min mercados
+    {
+        let current = (now_ts / 900) * 900;
+        for start_ts in [current, current + 900, current - 900] {
+            let slug = format!("btc-updown-15m-{start_ts}");
+            info!("Probando slug: {slug}");
+            match fetch_from_event(gamma, &slug, 15).await {
+                Ok(info) => { info!("Encontrado via slug: {slug}"); return Ok(info); }
+                Err(e)   => warn!("Slug {slug}: {:#}", e),
+            }
+        }
+    }
+    // 5-min mercados (fallback)
+    {
+        let current = (now_ts / 300) * 300;
+        for start_ts in [current, current + 300, current - 300] {
+            let slug = format!("btc-updown-5m-{start_ts}");
+            info!("Probando slug: {slug}");
+            match fetch_from_event(gamma, &slug, 5).await {
+                Ok(info) => { info!("Encontrado via slug: {slug}"); return Ok(info); }
+                Err(e)   => warn!("Slug {slug}: {:#}", e),
+            }
         }
     }
 
@@ -1369,7 +1387,7 @@ async fn discover_btc_market(gamma: &gamma::Client) -> Result<MarketInfo> {
     fetch_from_markets(gamma).await
 }
 
-async fn fetch_from_event(gamma: &gamma::Client, slug: &str) -> Result<MarketInfo> {
+async fn fetch_from_event(gamma: &gamma::Client, slug: &str, duration_min: i32) -> Result<MarketInfo> {
     let event = gamma
         .event_by_slug(&EventBySlugRequest::builder().slug(slug).build())
         .await
@@ -1415,6 +1433,7 @@ async fn fetch_from_event(gamma: &gamma::Client, slug: &str) -> Result<MarketInf
                 end_date,
                 active: !event.closed.unwrap_or(false),
                 price_to_beat,
+                duration_min,
             });
         }
     }
@@ -1471,6 +1490,7 @@ async fn fetch_from_markets(gamma: &gamma::Client) -> Result<MarketInfo> {
         end_date:      market.end_date.ok_or_else(|| anyhow!("Sin end_date"))?,
         active:        market.active.unwrap_or(true),
         price_to_beat,
+        duration_min:  15, // fallback: 15-min por defecto
     })
 }
 

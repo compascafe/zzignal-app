@@ -19,6 +19,17 @@ pub struct BinanceState {
     pub imbalance:         f32,  // VBS
 }
 
+impl BinanceState {
+    pub const EMPTY: Self = Self {
+        timestamp:         0,
+        mid_price:         0.0,
+        micro_price:       0.0,
+        total_liquidity:   0.0,
+        binance_vol_100ms: 0.0,
+        imbalance:         0.0,
+    };
+}
+
 impl Default for BinanceState {
     fn default() -> Self {
         Self {
@@ -180,6 +191,16 @@ impl PriceRingBuffer {
     pub fn len(&self) -> usize {
         let seq = self.write_seq.load(Ordering::Acquire) as usize;
         seq.min(RING_CAP)
+    }
+
+    /// Reset the ring buffer — clears all slots and write counter.
+    /// Called when a new session starts to prevent residual events from leaking.
+    pub fn clear(&self) {
+        for i in 0..RING_CAP {
+            let slot = unsafe { &mut *self.slots[i].get() };
+            *slot = BinanceState::EMPTY;
+        }
+        self.write_seq.store(0, Ordering::Release);
     }
 }
 

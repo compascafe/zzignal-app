@@ -70,6 +70,15 @@ pub struct CsvRecord {
     pub trade_price:         f64,
     pub trade_size:          f64,
     pub is_informed:         u8,
+    /// Session ID — para filtrar mem_hft y evitar fuga de datos entre sesiones.
+    pub session_id:          i32,
+    // ─── Paper Trading Sim (executor) ────────────────────────────────────
+    pub sim_status:          String,  // IDLE|OPEN|CLOSED
+    pub sim_side:            String,  // BUY|SELL (empty if IDLE)
+    pub sim_entry_price:     f64,
+    pub sim_exit_price:      f64,
+    pub sim_pnl_trade:       f64,
+    pub sim_current_balance: f64,
 }
 
 impl Default for CsvRecord {
@@ -95,6 +104,13 @@ impl Default for CsvRecord {
             trade_price:         0.0,
             trade_size:          0.0,
             is_informed:         0,
+            session_id:          0,
+            sim_status:          "IDLE".to_string(),
+            sim_side:            String::new(),
+            sim_entry_price:     0.0,
+            sim_exit_price:      0.0,
+            sim_pnl_trade:       0.0,
+            sim_current_balance: 0.0,
         }
     }
 }
