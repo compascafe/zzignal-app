@@ -144,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sm3      = Arc::clone(&state.session_manager);
         let track3   = Arc::clone(&tracking_state);
         let drain3   = Arc::clone(&state.tick_drain);
+        let tick_state = Arc::clone(&state);
         tokio::spawn(async move {
             while let Some(tick) = tick_rx.recv().await {
                 // Drain residual ticks on session boundary
@@ -156,7 +157,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tracking_state.record_binance_trade(tick.event_time);
                     tracking_state.record_price_sample(tick.event_time, tick.price);
                     tracking_state.push_bollinger_price(tick.price);
-                    let rec = metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume);
+                    let mut rec = metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume);
+                    // Tag with session_id so per-session CSV files receive tick data
+                    rec.session_id = tick_state.recording_sessions.read().await.first().copied().unwrap_or(0);
                     csv3.push(rec.clone());
                     sm3.push(&rec);
                 }

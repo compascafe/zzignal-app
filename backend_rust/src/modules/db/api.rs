@@ -575,76 +575,188 @@ async fn build_fallback_csv(
     s: &Arc<AppState>,
     id: i32,
 ) -> String {
-    let db_rows = repository::query_hft_snapshots(s.db.as_ref(), id).await.unwrap_or_default();
-    let has_data = !db_rows.is_empty();
-    let mem_rows = if !has_data {
-        let mem = s.mem_hft.read().await;
-        mem.iter()
-            .filter(|r| r.session_id == id)
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
+    use std::fmt::Write;
+
+    let mut rows: Vec<CsvFallbackRow> = Vec::new();
+
+    // 1) Rich session_snapshots (best_bid, best_ask, mid, spread, imbalance, btc_price, etc.)
+    if let Ok(snaps) = repository::list_session_snapshots(s, id).await {
+        for snap in &snaps {
+            let poly_bid = snap.best_bid.unwrap_or(0.0);
+            let poly_ask = snap.best_ask.unwrap_or(0.0);
+            let poly_mid = snap.mid_price.unwrap_or(0.0);
+            let poly_spread = snap.spread.unwrap_or(0.0);
+            let poly_bid_vol = snap.bid_volume.unwrap_or(0.0);
+            let poly_ask_vol = snap.ask_volume.unwrap_or(0.0);
+            let poly_imb = snap.imbalance_ratio.unwrap_or(0.0);
+            let binance_price = snap.btc_price.unwrap_or(0.0);
+
+            rows.push(CsvFallbackRow {
+                ts: snap.ts,
+                event_type: "BOOK_UPDATE",
+                binance_price,
+                binance_micro_price: 0.0,
+                binance_imbalance: 0.0,
+                binance_vol_100ms: 0.0,
+                binance_vol_24h: 0.0,
+                poly_bid,
+                poly_ask,
+                poly_mid,
+                poly_spread,
+                poly_bid_vol_all: poly_bid_vol,
+                poly_ask_vol_all: poly_ask_vol,
+                poly_imbalance: poly_imb,
+                trade_side: String::new(),
+                trade_price: 0.0,
+                trade_size: 0.0,
+                is_informed: 0u8,
+                latencia_ms: 0,
+            });
+        }
+    }
+
+    // 2) Session trades (price, size, side)
+    if let Ok(trades) = repository::list_session_trades(s, id).await {
+        for t in &trades {
+            rows.push(CsvFallbackRow {
+                ts: t.ts,
+                event_type: "TRADE",
+                binance_price: t.btc_price.unwrap_or(0.0),
+                binance_micro_price: 0.0,
+                binance_imbalance: 0.0,
+                binance_vol_100ms: 0.0,
+                binance_vol_24h: 0.0,
+                poly_bid: 0.0,
+                poly_ask: 0.0,
+                poly_mid: 0.0,
+                poly_spread: 0.0,
+                poly_bid_vol_all: 0.0,
+                poly_ask_vol_all: 0.0,
+                poly_imbalance: 0.0,
+                trade_side: t.trade_side.clone(),
+                trade_price: t.price,
+                trade_size: t.size,
+                is_informed: 0u8,
+                latencia_ms: 0,
+            });
+        }
+    }
+
+    // 3) If both session_snapshots and session_trades are empty, try legacy hft_snapshots / mem_hft
+    if rows.is_empty() {
+        let db_rows = repository::query_hft_snapshots(s.db.as_ref(), id).await.unwrap_or_default();
+        let has_data = !db_rows.is_empty();
+        let mem_rows = if !has_data {
+            let mem = s.mem_hft.read().await;
+            mem.iter()
+                .filter(|r| r.session_id == id)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+
+        if has_data {
+            for r in &db_rows {
+                rows.push(CsvFallbackRow {
+                    ts: r.ts,
+                    event_type: "BOOK_UPDATE",
+                    binance_price: r.btc_price_binance.unwrap_or(0.0),
+                    binance_micro_price: r.binance_micro_price_at_t.unwrap_or(0.0),
+                    binance_imbalance: 0.0,
+                    binance_vol_100ms: 0.0,
+                    binance_vol_24h: 0.0,
+                    poly_bid: 0.0,
+                    poly_ask: 0.0,
+                    poly_mid: r.poly_mid_price.unwrap_or(0.0),
+                    poly_spread: 0.0,
+                    poly_bid_vol_all: 0.0,
+                    poly_ask_vol_all: 0.0,
+                    poly_imbalance: r.poly_imbalance.unwrap_or(0.0),
+                    trade_side: String::new(),
+                    trade_price: 0.0,
+                    trade_size: 0.0,
+                    is_informed: 0u8,
+                    latencia_ms: r.binance_lag_ms.unwrap_or(0),
+                });
+            }
+        } else {
+            for r in &mem_rows {
+                rows.push(CsvFallbackRow {
+                    ts: chrono::DateTime::parse_from_rfc3339(&r.ts_local)
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                    event_type: r.event_type.as_str(),
+                    binance_price: r.binance_price,
+                    binance_micro_price: r.binance_micro_price,
+                    binance_imbalance: r.binance_imbalance as f64,
+                    binance_vol_100ms: r.binance_vol_100ms,
+                    binance_vol_24h: r.binance_vol_24h,
+                    poly_bid: r.poly_bid,
+                    poly_ask: r.poly_ask,
+                    poly_mid: r.poly_mid,
+                    poly_spread: r.poly_spread,
+                    poly_bid_vol_all: r.poly_bid_vol_all,
+                    poly_ask_vol_all: r.poly_ask_vol_all,
+                    poly_imbalance: r.poly_imbalance,
+                    trade_side: r.trade_side.clone(),
+                    trade_price: r.trade_price,
+                    trade_size: r.trade_size,
+                    is_informed: r.is_informed,
+                    latencia_ms: r.latencia_ms,
+                });
+            }
+        }
+    }
+
+    // Sort by timestamp
+    rows.sort_by_key(|r| r.ts);
 
     let mut data = String::new();
     // 53-column data header
     data.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal\n");
 
-    if has_data {
-        for r in &db_rows {
-            use std::fmt::Write;
-            let _ = writeln!(
-                data,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                r.ts.to_rfc3339(), "", "BOOK_UPDATE",
-                r.binance_lag_ms.unwrap_or(0),
-                r.btc_price_binance.unwrap_or(0.0),
-                r.binance_micro_price_at_t.unwrap_or(0.0),
-                0.0, 0.0, 0.0,
-                0.0, 0.0,
-                r.poly_mid_price.unwrap_or(0.0),
-                0.0, 0.0, 0.0,
-                r.poly_imbalance.unwrap_or(0.0),
-                "", 0.0, 0.0, 0,
-                "IDLE", "", 0.0, 0.0, 0.0, 0.0,
-                "IDLE", "", 0.0, 0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0,
-                0.0, 0.0, 0.0, 0, 0, 0, "",
-                0.0, 0, 0, 0, 0.0, 0,
-            );
-        }
-    } else {
-        for r in &mem_rows {
-            use std::fmt::Write;
-            let _ = writeln!(
-                data,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                r.ts_local, r.ts_exchange, r.event_type.as_str(),
-                r.latencia_ms, r.binance_price, r.binance_micro_price,
-                r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
-                r.poly_bid, r.poly_ask, r.poly_mid, r.poly_spread,
-                r.poly_bid_vol_all, r.poly_ask_vol_all, r.poly_imbalance,
-                r.trade_side, r.trade_price, r.trade_size, r.is_informed,
-                r.imba_status, r.imba_side, r.imba_entry_price,
-                r.imba_exit_price, r.imba_trade_pnl, r.imba_balance,
-                r.liqb_status, r.liqb_side, r.liqb_entry_price,
-                r.liqb_exit_price, r.liqb_trade_pnl, r.liqb_balance,
-                r.trades_per_second, r.price_velocity,
-                r.poly_liquidity_delta, r.absorption_ratio,
-                r.price_gap_ratio, r.spoofing_flag,
-                r.tape_speed_flag, r.gap_alert_flag,
-                r.bollinger_sma, r.bollinger_upper,
-                r.bollinger_lower, r.mean_reversion_signal,
-                r.technical_confluence, r.trend_direction,
-                r.signal_label,
-                r.realized_volatility, r.high_volatility_event,
-                r.bollinger_position, r.master_signal,
-                r.cp_uncertainty_range, r.cp_valid_signal,
-            );
-        }
+    for r in &rows {
+        let _ = writeln!(
+            data,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            r.ts.to_rfc3339(), "", r.event_type,
+            r.latencia_ms, r.binance_price, r.binance_micro_price,
+            r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
+            r.poly_bid, r.poly_ask, r.poly_mid, r.poly_spread,
+            r.poly_bid_vol_all, r.poly_ask_vol_all, r.poly_imbalance,
+            r.trade_side, r.trade_price, r.trade_size, r.is_informed,
+            "N/A", "", 0.0, 0.0, 0.0, 0.0,
+            "N/A", "", 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0,
+            0.0, 0.0, 0.0, 0, 0, 0, "",
+            0.0, 0, 0, 0, 0.0, 0,
+        );
     }
+
     build_csv_body(session, &data)
+}
+
+struct CsvFallbackRow {
+    ts: chrono::DateTime<chrono::Utc>,
+    event_type: &'static str,
+    binance_price: f64,
+    binance_micro_price: f64,
+    binance_imbalance: f64,
+    binance_vol_100ms: f64,
+    binance_vol_24h: f64,
+    poly_bid: f64,
+    poly_ask: f64,
+    poly_mid: f64,
+    poly_spread: f64,
+    poly_bid_vol_all: f64,
+    poly_ask_vol_all: f64,
+    poly_imbalance: f64,
+    trade_side: String,
+    trade_price: f64,
+    trade_size: f64,
+    is_informed: u8,
+    latencia_ms: i64,
 }
 
 /// Try to read the per-session CSV file from disk (written by SessionManager).
