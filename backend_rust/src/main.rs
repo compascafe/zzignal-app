@@ -257,7 +257,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match session_repo::create_session(&state3, &name, parent_start, parent_end, chunk_min, 50, None).await {
                 Ok(parent_id) => {
                     let btc_price = *state3.btc_price.read().await;
-                    session_repo::start_session_recording(&state3, parent_id, btc_price).await.ok();
+                    // Parent is a container — do NOT start recording, just keep as 'scheduled'
+                    // The scheduler will auto-generate children and only children record data
                     // Create first child aligned to next boundary
                     let child_start = crate::modules::db::scheduler::snap_to_next_chunk(parent_start, chunk_min);
                     let child_end = child_start + chrono::Duration::minutes(chunk_min as i64);

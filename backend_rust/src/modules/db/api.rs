@@ -230,11 +230,8 @@ async fn start_session(
             Err(e) => return Json(json!({"ok": false, "error": format!("Parent: {}", e)})),
         };
 
-        // 2. Start parent immediately (parent is a container — no CSV file, no recording_sessions)
+        // 2. Parent is a container — do NOT start recording, only children record
         let btc_price = *s.btc_price.read().await;
-        if let Err(e) = repository::start_session_recording(&s, parent_id, btc_price).await {
-            warn!("No se pudo iniciar padre #{}: {}", parent_id, e);
-        }
 
         // 3. Create first child — snap to NEXT chunk boundary (9:27 → 9:30)
         let child_start = snap_to_next_chunk(parent_start, chunk_min);
