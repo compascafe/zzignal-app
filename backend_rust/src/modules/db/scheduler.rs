@@ -149,81 +149,60 @@ async fn process_sessions(state: Arc<AppState>) {
     for session in to_stop {
         let btc_price = *state.btc_price.read().await;
         let parent_id = session.parent_id;
-        info!("[DEBUG] Shutdown signal for session #{} at {} | duration={}min | scheduled_end={} | now={}",
-            session.id,
-            Utc::now().format("%H:%M:%S"),
-            session.duration_min,
-            session.scheduled_end.format("%H:%M:%S"),
-            Utc::now().format("%H:%M:%S"),
-        );
+        info!("[SESSION STOP] #{} | dur={}min | end={}",
+            session.id, session.duration_min,
+            session.scheduled_end.format("%H:%M:%S"));
 
-        // Flush session CSV before marking completed
-        if let Err(e) = state.session_manager.flush(session.id) {
-            warn!("SessionManager flush #{}: {}", session.id, e);
+        // Flush then close session CSV file
+        let _ = state.session_manager.flush(session.id);
+        let _ = state.session_manager.stop_session(session.id);
+
+        // ─── STOP in DB (always, before any other writes) ────────────────────
+        if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
+            warn!("stop_session #{} FAILED: {}", session.id, e);
+        } else {
+            state.recording_sessions.write().await.retain(|&sid| sid != session.id);
+            info!("[SESSION STOPPED] #{} → completed", session.id);
+        }
+        if let Some(pid) = parent_id {
+            parents_to_replenish.push(pid);
         }
 
-        // ─── Adaptive Risk Engine: write session log + feedback loop ────────
-        let predicted_bias;
-        let actual_outcome: String;
-        let accuracy: bool;
-        {
-            let eng = state.adaptive_engine.lock().await;
-            predicted_bias = eng.predicted_bias().to_string();
-            // Compare predicted bias vs actual outcome
-            actual_outcome = session.outcome_result.clone().unwrap_or_else(|| "tie".into());
-            accuracy = (predicted_bias == "UP" && actual_outcome == "up")
+        // ─── Feedback (best-effort, never blocks the stop) ───────────────────
+        let predicted_bias = if let Ok(eng) = state.adaptive_engine.try_lock() {
+            eng.predicted_bias().to_string()
+        } else { continue }; // skip feedback if engine busy
+        if predicted_bias == "IDLE" { continue; }
+
+        let actual_outcome = session.outcome_result.clone().unwrap_or_else(|| "tie".into());
+        let accuracy = (predicted_bias == "UP" && actual_outcome == "up")
                     || (predicted_bias == "DOWN" && actual_outcome == "down");
-        }
-        // Insert session log at start (we write completion now)
-        if predicted_bias != "IDLE" {
-            let start_price = session.btc_price_start;
-            let eng = state.adaptive_engine.lock().await;
+
+        // Insert/complete session log
+        let start_price = session.btc_price_start;
+        if let Ok(eng) = state.adaptive_engine.try_lock() {
             let ctx = state.macro_ctx.read().await;
-            if let Err(e) = repository::insert_session_log(
-                state.db.as_ref(), session.id,
-                &predicted_bias,
+            let _ = repository::insert_session_log(
+                state.db.as_ref(), session.id, &predicted_bias,
                 Some(eng.macd_hist()), Some(eng.rsi_value()), Some(eng.vfi_value()),
                 Some(eng.macro_slope()), start_price,
                 Some(eng.cp_quantile()), Some(eng.cp_alpha()),
                 Some(ctx.vfi_confidence), Some(ctx.db_accuracy_factor), Some(ctx.dynamic_rsi),
-            ).await {
-                warn!("insert_session_log #{}: {}", session.id, e);
-            }
-            if let Err(e) = repository::complete_session_log(
+            ).await;
+            let _ = repository::complete_session_log(
                 state.db.as_ref(), session.id, &actual_outcome, accuracy,
-            ).await {
-                warn!("complete_session_log #{}: {}", session.id, e);
-            }
-            // Feedback loop: record accuracy + auto‑widen if needed
-            {
-                let mut eng = state.adaptive_engine.lock().await;
-                eng.cp_mut().record_accuracy(accuracy);
-                if !accuracy {
-                    eng.cp_mut().robbins_monro_update(0.5);
-                }
-                if eng.cp_mut().should_auto_widen() {
-                    eng.cp_mut().auto_widen();
-                }
-                // Reinforced learning: adjust indicator weights
-                let vfi_sign = if eng.vfi_value() > 0.1 { 1.0 } else if eng.vfi_value() < -0.1 { -1.0 } else { 0.0 };
-                let sma_sign = if eng.macro_slope() > 0.0001 { 1.0 } else if eng.macro_slope() < -0.0001 { -1.0 } else { 0.0 };
-                eng.cp_mut().reinforce_weights(accuracy, vfi_sign, sma_sign);
-                eng.cp_mut().adjust_confidence_level();
-            }
+            ).await;
+            // Feedback loop
+            drop(eng);
         }
-
-        if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
-            warn!("No se pudo detener sesión #{}: {}", session.id, e);
-        } else {
-            state.recording_sessions.write().await.retain(|&sid| sid != session.id);
-            info!("Sesión #{} completada. Final price (BTC): {:?}", session.id, btc_price);
-        }
-        // Strict file isolation: close session CSV file
-        if let Err(e) = state.session_manager.stop_session(session.id) {
-            warn!("SessionManager stop #{}: {}", session.id, e);
-        }
-        if let Some(pid) = parent_id {
-            parents_to_replenish.push(pid);
+        if let Ok(mut eng) = state.adaptive_engine.try_lock() {
+            eng.cp_mut().record_accuracy(accuracy);
+            if !accuracy { eng.cp_mut().robbins_monro_update(0.5); }
+            if eng.cp_mut().should_auto_widen() { eng.cp_mut().auto_widen(); }
+            let vfi_sign = if eng.vfi_value() > 0.1 { 1.0 } else if eng.vfi_value() < -0.1 { -1.0 } else { 0.0 };
+            let sma_sign = if eng.macro_slope() > 0.0001 { 1.0 } else if eng.macro_slope() < -0.0001 { -1.0 } else { 0.0 };
+            eng.cp_mut().reinforce_weights(accuracy, vfi_sign, sma_sign);
+            eng.cp_mut().adjust_confidence_level();
         }
     }
 
