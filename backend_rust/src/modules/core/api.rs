@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::{Path, Query, State, WebSocketUpgrade},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json,
 };
@@ -33,6 +33,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/btc/provider",    post(set_btc_provider))
         // Macro indicators (Adaptive Risk Engine)
         .route("/api/macro",           get(get_macro))
+        // Wisdom & RL state
+        .route("/api/wisdom",          get(get_wisdom))
+        .route("/api/wisdom/export",   get(export_wisdom))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -257,6 +260,69 @@ async fn get_macro(State(s): State<Arc<AppState>>) -> Json<Value> {
         "auto_widened":     eng.cp.auto_widened,
         "feedback_count":   eng.cp.feedback_count,
     }))
+}
+
+// ─── Wisdom & Reinforcement Learning State ─────────────────────────────────────
+
+async fn get_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let eng = s.adaptive_engine.lock().await;
+    let ctx = s.macro_ctx.read().await;
+    let accuracy_24h = if eng.cp.accuracy_window.is_empty() { 0.5 }
+        else { eng.cp.accuracy_window.iter().filter(|&&b| b).count() as f64 / eng.cp.accuracy_window.len() as f64 };
+
+    let mode = if accuracy_24h < 0.4 { "OBSERVATION" }
+        else if eng.cp.auto_widened { "CALIBRATING" }
+        else { "ACTIVE" };
+
+    Json(json!({
+        "mode":               mode,
+        "accuracy_24h":       accuracy_24h,
+        "cp_confidence":      eng.cp.confidence_level,
+        "cp_quantile":        eng.cp.quantile_price,
+        "cp_alpha":           eng.cp.alpha,
+        "weight_sma":         eng.cp.weight_sma,
+        "weight_vfi":         eng.cp.weight_vfi,
+        "weight_macd":        eng.cp.weight_macd,
+        "weight_rsi":         eng.cp.weight_rsi,
+        "feedback_count":     eng.cp.feedback_count,
+        "auto_widened":       eng.cp.auto_widened,
+        "dynamic_rsi":        ctx.dynamic_rsi,
+        "vfi_confidence":     ctx.vfi_confidence,
+        "db_accuracy_factor": ctx.db_accuracy_factor,
+    }))
+}
+
+async fn export_wisdom(State(s): State<Arc<AppState>>) -> Response {
+    let eng = s.adaptive_engine.lock().await;
+    let ctx = s.macro_ctx.read().await;
+    let wisdom = json!({
+        "version":           "1.0",
+        "exported_at":       chrono::Utc::now().to_rfc3339(),
+        "cp": {
+            "confidence_level":  eng.cp.confidence_level,
+            "quantile_macd":     eng.cp.quantile_macd,
+            "quantile_rsi":      eng.cp.quantile_rsi,
+            "quantile_price":    eng.cp.quantile_price,
+            "alpha":             eng.cp.alpha,
+            "feedback_count":    eng.cp.feedback_count,
+        },
+        "weights": {
+            "sma":  eng.cp.weight_sma,
+            "vfi":  eng.cp.weight_vfi,
+            "macd": eng.cp.weight_macd,
+            "rsi":  eng.cp.weight_rsi,
+        },
+        "context": {
+            "dynamic_rsi":        ctx.dynamic_rsi,
+            "vfi_confidence":     ctx.vfi_confidence,
+            "db_accuracy_factor": ctx.db_accuracy_factor,
+        },
+    });
+    let body = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
+    (axum::http::StatusCode::OK,
+     [("Content-Type", "application/json"),
+      ("Content-Disposition", "attachment; filename=\"wisdom_state.json\"")],
+     body).into_response()
 }
 
 // ─── Order Book ───────────────────────────────────────────────────────────────
