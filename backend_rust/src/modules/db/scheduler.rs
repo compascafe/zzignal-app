@@ -184,8 +184,7 @@ async fn process_sessions(state: Arc<AppState>) {
         let predicted_bias = eng.predicted_bias().to_string();
         if predicted_bias.is_empty() || predicted_bias == "IDLE" { continue; }
 
-        let accuracy = (predicted_bias == "UP" && actual_outcome == "up")
-                    || (predicted_bias == "DOWN" && actual_outcome == "down");
+        let accuracy = predicted_bias.eq_ignore_ascii_case(&actual_outcome);
 
         // Insert/complete session log
         let start_price = session.btc_price_start;
