@@ -25,6 +25,7 @@ use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::{self, TrackingState};
 use crate::modules::hft::logger::CsvLogger;
 use crate::modules::hft::binance_depth::BinanceTickEvent;
+use crate::modules::hft::adaptive_risk_engine::warmup_fetch_and_compute;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -111,10 +112,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let warm_engine = Arc::clone(&state.adaptive_engine);
         tokio::spawn(async move {
-            if let Err(e) = warm_engine.lock().await.warmup().await {
-                warn!("AdaptiveRiskEngine warm‑up failed: {e} — continuing without macro bias");
-            } else {
-                info!("AdaptiveRiskEngine warm‑up OK");
+            // Fetch outside lock, then briefly lock to apply
+            match warmup_fetch_and_compute().await {
+                Ok(result) => {
+                    warm_engine.lock().await.apply_warmup_result(result);
+                    info!("AdaptiveRiskEngine warm‑up OK");
+                }
+                Err(e) => warn!("AdaptiveRiskEngine warm‑up failed: {e} — continuing without macro bias"),
             }
         });
     }
