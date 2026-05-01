@@ -226,30 +226,25 @@ fn vfi(candles: &[Candle1m], period: usize, coef: f64) -> f64 {
 
 #[derive(Debug, Clone)]
 pub struct ConformalPredictor {
-    /// Residuals for each indicator (stored as VecDeque, trimmed to 1440 max).
     pub residuals_macd:  VecDeque<f64>,
     pub residuals_rsi:   VecDeque<f64>,
     pub residuals_price: VecDeque<f64>,  // |close - SMA200| / SMA200
-    /// Current 95% quantile thresholds.
     pub quantile_macd:   f64,
     pub quantile_rsi:    f64,
     pub quantile_price:  f64,
-    /// Robbins-Monro learning rate.
+    /// Base (original) quantiles from warmup calibration — never widened.
+    pub base_quantile_macd:  f64,
+    pub base_quantile_rsi:   f64,
+    pub base_quantile_price: f64,
     pub alpha:           f64,
-    /// Number of feedback updates applied.
     pub feedback_count:  u64,
-    /// Recent accuracy window (last N sessions).
     pub accuracy_window: VecDeque<bool>,
-    /// Whether intervals have been auto-widened due to low accuracy.
     pub auto_widened:    bool,
-    /// Per-indicator weights (SMA slope, VFI, MACD, RSI) — reinforced/punished per session.
     pub weight_sma:      f64,
     pub weight_vfi:      f64,
     pub weight_macd:     f64,
     pub weight_rsi:      f64,
-    /// Bollinger Band mean-reversion weight.
     pub weight_bb:       f64,
-    /// Current CP confidence level (0.95 or 0.99).
     pub confidence_level: f64,
 }
 
@@ -262,6 +257,9 @@ impl ConformalPredictor {
             quantile_macd:   0.05,
             quantile_rsi:    0.05,
             quantile_price:  0.005, // 0.5% of price
+            base_quantile_macd:  0.05,
+            base_quantile_rsi:   0.05,
+            base_quantile_price: 0.005,
             alpha:           0.1,
             feedback_count:  0,
             accuracy_window: VecDeque::with_capacity(16),
@@ -295,6 +293,10 @@ impl ConformalPredictor {
         if self.quantile_macd < 0.001 { self.quantile_macd = 0.001; }
         if self.quantile_rsi < 0.5 { self.quantile_rsi = 0.5; }
         if self.quantile_price < 0.0001 { self.quantile_price = 0.0001; }
+        // Save base values for cap reference
+        self.base_quantile_macd  = self.quantile_macd;
+        self.base_quantile_rsi   = self.quantile_rsi;
+        self.base_quantile_price = self.quantile_price;
     }
 
     /// Check if a MACD value is "abnormal" (p-value < 0.05) = signal is valid.
@@ -329,10 +331,10 @@ impl ConformalPredictor {
         self.feedback_count += 1;
         let n = self.feedback_count as f64;
         self.alpha = 0.1 / (1.0 + beta * n);
-        // Widening: reduce quantile demands (higher quantile = wider acceptance)
-        self.quantile_macd  *= 1.0 + self.alpha;
-        self.quantile_rsi   *= 1.0 + self.alpha;
-        self.quantile_price *= 1.0 + self.alpha;
+        let factor = (1.0 + self.alpha).min(2.0);
+        self.quantile_macd  = (self.base_quantile_macd  * factor).min(self.quantile_macd * factor);
+        self.quantile_rsi   = (self.base_quantile_rsi   * factor).min(self.quantile_rsi * factor);
+        self.quantile_price = (self.base_quantile_price * factor).min(self.quantile_price * factor);
         info!("CP Robbins‑Monro update: α={:.6} n={}", self.alpha, self.feedback_count);
     }
 
@@ -395,11 +397,12 @@ impl ConformalPredictor {
 
     /// Auto-widen CP intervals by 20%.
     pub fn auto_widen(&mut self) {
-        self.quantile_macd  *= 1.2;
-        self.quantile_rsi   *= 1.2;
-        self.quantile_price *= 1.2;
+        let factor = 1.2;
+        self.quantile_macd  = (self.base_quantile_macd  * factor).min(self.quantile_macd * factor);
+        self.quantile_rsi   = (self.base_quantile_rsi   * factor).min(self.quantile_rsi * factor);
+        self.quantile_price = (self.base_quantile_price * factor).min(self.quantile_price * factor);
         self.auto_widened = true;
-        info!("CP auto-widened: macd_q={:.4} rsi_q={:.2} price_q={:.6}",
+        info!("CP auto-widened (capped 2x): macd_q={:.4} rsi_q={:.2} price_q={:.6}",
             self.quantile_macd, self.quantile_rsi, self.quantile_price);
     }
 }
@@ -862,15 +865,25 @@ impl AdaptiveRiskEngine {
         let accuracy = hits as f64 / n as f64;
 
         if accuracy < 0.65 {
-            // Penalty: widen CP by up to 2x depending on how bad accuracy is
-            let penalty = 1.0 + (0.65 - accuracy) * 3.0; // 0% acc → 2.95x, 40% acc → 1.75x
+            // Penalty: widen CP, capped at 2x base
+            let penalty = (1.0 + (0.65 - accuracy) * 3.0).min(2.0);
             ctx.db_accuracy_factor = penalty;
+            // Reset to base before applying penalty (prevent compound widening)
+            self.cp.quantile_macd  = self.cp.base_quantile_macd;
+            self.cp.quantile_rsi   = self.cp.base_quantile_rsi;
+            self.cp.quantile_price = self.cp.base_quantile_price;
             self.cp.quantile_macd  *= penalty;
             self.cp.quantile_rsi   *= penalty;
             self.cp.quantile_price *= penalty;
-            info!("Pre-trade calibration: accuracy={:.0}% < 65% → CP widened by {:.2}x", accuracy * 100.0, penalty);
+            info!("Pre-trade calibration: accuracy={:.0}% < 65% → CP widened by {:.2}x (capped)",
+                accuracy * 100.0, penalty);
         } else {
             ctx.db_accuracy_factor = 1.0;
+            // Accuracy good → reset to base
+            self.cp.quantile_macd  = self.cp.base_quantile_macd;
+            self.cp.quantile_rsi   = self.cp.base_quantile_rsi;
+            self.cp.quantile_price = self.cp.base_quantile_price;
+            self.cp.auto_widened = false;
         }
     }
 
