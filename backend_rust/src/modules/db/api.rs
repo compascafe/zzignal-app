@@ -760,8 +760,11 @@ struct CsvFallbackRow {
 }
 
 /// Try to read the per-session CSV file from disk (written by SessionManager).
-/// Returns the full file content (header + data rows), or None if file doesn't exist.
+/// Flushes the writer first to ensure buffered data is on disk, then returns the full file content.
+/// Returns None if file doesn't exist or is empty after trim.
 fn read_session_csv_disk(session_manager: &crate::modules::hft::session_manager::SessionManager, id: i32) -> Option<String> {
+    // Flush BufWriter to disk before reading — data may be buffered in RAM
+    let _ = session_manager.flush(id);
     let path = session_manager.session_path(id);
     let raw = std::fs::read_to_string(&path).ok()?;
     let trimmed = raw.trim_end().to_string();
