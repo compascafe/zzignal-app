@@ -72,6 +72,10 @@ pub struct AppState {
     /// Shared dynamic macro context (RSI, VFI confidence, accuracy factor) — updated each minute
     pub macro_ctx: Arc<RwLock<MacroContext>>,
 
+    /// Latency tracking (ms) for health endpoint
+    pub latency_binance: RwLock<u64>,
+    pub latency_poly:    RwLock<u64>,
+
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
 }
@@ -126,6 +130,8 @@ impl AppState {
             tick_drain:        Arc::new(AtomicBool::new(false)),
             adaptive_engine:   Arc::new(tokio::sync::Mutex::new(AdaptiveRiskEngine::new())),
             macro_ctx:         Arc::new(RwLock::new(MacroContext::default())),
+            latency_binance:   RwLock::new(0),
+            latency_poly:      RwLock::new(0),
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })

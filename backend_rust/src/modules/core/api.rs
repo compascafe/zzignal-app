@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
+use sysinfo::System;
 
 use crate::modules::core::persistence as db;
 use crate::modules::core::state::AppState;
@@ -174,8 +175,38 @@ async fn get_health(State(s): State<Arc<AppState>>) -> Json<Value> {
             "missing":        missing_tables,
             "all_present":    missing_tables.is_empty(),
         },
+        "system": system_metrics(),
+        "latency": {
+            "binance_ms": *s.latency_binance.read().await,
+            "polymarket_ms": *s.latency_poly.read().await,
+        },
         "status": *s.status.read().await,
     }))
+}
+
+fn system_metrics() -> Value {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let cpu = sys.cpus().first().map(|c| c.cpu_usage()).unwrap_or(0.0);
+    let ram_used = sys.used_memory() / 1024 / 1024;
+    let ram_total = sys.total_memory() / 1024 / 1024;
+    // Use simple df command for disk (cross-platform approach)
+    let disk_free = std::process::Command::new("df")
+        .args(["-k", "."])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.lines().nth(1).map(|l| l.to_string()))
+        .and_then(|l| l.split_whitespace().nth(3).map(|s| s.to_string()))
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|kb| kb / 1_048_576.0)
+        .unwrap_or(0.0);
+    json!({
+        "cpu_percent":   (cpu as f64 * 10.0).round() / 10.0,
+        "ram_mb_used":   ram_used,
+        "ram_mb_total":  ram_total,
+        "disk_gb_free":  (disk_free * 10.0).round() / 10.0,
+    })
 }
 
 // ─── Status & Mercado ─────────────────────────────────────────────────────────
@@ -261,6 +292,10 @@ async fn get_macro(State(s): State<Arc<AppState>>) -> Json<Value> {
         "cp_alpha":         ctx.cp_alpha,
         "auto_widened":     ctx.auto_widened,
         "feedback_count":   ctx.feedback_count,
+        "hunting_mode":     ctx.hunting_mode,
+        "hunting_z_score":  ctx.hunting_z_score,
+        "volatility_1h":    ctx.volatility_1h,
+        "signal_priority":  ctx.signal_priority,
     }))
 }
 
@@ -282,6 +317,10 @@ async fn get_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
         "dynamic_rsi":        ctx.dynamic_rsi,
         "vfi_confidence":     ctx.vfi_confidence,
         "db_accuracy_factor": ctx.db_accuracy_factor,
+        "hunting_mode":       ctx.hunting_mode,
+        "hunting_z_score":    ctx.hunting_z_score,
+        "volatility_1h":      ctx.volatility_1h,
+        "signal_priority":    ctx.signal_priority,
     }))
 }
 

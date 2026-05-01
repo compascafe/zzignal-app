@@ -61,6 +61,9 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "chrono"] }
 # ZIP export (bulk session download)
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# System metrics for health endpoint
+sysinfo = "0.33"
+
 # Allocator optimizado para 2GB Lightsail
 mimalloc = "0.1"
 

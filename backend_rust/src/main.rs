@@ -207,11 +207,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rec.macd_hist = eng.macd_hist();
                         rec.predicted_bias = eng.predicted_bias().to_string();
                         rec.is_feedback_adjusted = eng.feedback_adjusted();
+                        let is_fb = rec.is_feedback_adjusted > 0;
                         let (master, cp_range, cp_valid) = eng.evaluate_master_signal(
                             rec.binance_price, rec.poly_mid, rec.poly_spread,
                             rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
                             rec.poly_imbalance, rec.price_velocity,
-                            eng.feedback_adjusted() > 0,
+                            is_fb,
+                            tick.volume, tick.event_time,
                         );
                         rec.master_signal = master;
                         rec.cp_uncertainty_range = cp_range;
@@ -327,11 +329,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "0.0.0.0:8080";
     let app  = crate::modules::core::api::router(Arc::clone(&state));
 
+    // ─── Wisdom Checkpoint — save wisdom_state.json every hour ───────────────
+    {
+        let wis_state = Arc::clone(&state);
+        let mut shutdown_wis = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let eng = wis_state.adaptive_engine.lock().await;
+                        let wisdom = eng.export_wisdom();
+                        let json = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
+                        if let Err(e) = std::fs::write("wisdom_state.json", &json) {
+                            warn!("Wisdom checkpoint save failed: {}", e);
+                        } else {
+                            info!("Wisdom checkpoint saved → wisdom_state.json");
+                        }
+                    }
+                    _ = shutdown_wis.recv() => {
+                        // Emergency wisdom save on shutdown
+                        let eng = wis_state.adaptive_engine.lock().await;
+                        let wisdom = eng.export_wisdom();
+                        let json = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
+                        let _ = std::fs::write("wisdom_state.json", &json);
+                        info!("Emergency wisdom saved on shutdown");
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    // ─── Auto-purge CSVs older than 1 hour — every 5 minutes ────────────────
+    {
+        let _purge_state = Arc::clone(&state);
+        let mut shutdown_purge = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(60);
+                        if let Ok(entries) = std::fs::read_dir("sessions") {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                if path.extension().map_or(false, |e| e == "csv") {
+                                    if let Ok(meta) = entry.metadata() {
+                                        if let Ok(modified) = meta.modified() {
+                                            let mod_time: chrono::DateTime<chrono::Utc> = modified.into();
+                                            if mod_time < cutoff {
+                                                if let Err(e) = std::fs::remove_file(&path) {
+                                                    warn!("Auto-purge failed {}: {}", path.display(), e);
+                                                } else {
+                                                    info!("Auto-purged: {}", path.display());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Also purge legacy snapshot CSV
+                        let legacy = "hft_snapshots.csv";
+                        if let Ok(meta) = std::fs::metadata(legacy) {
+                            if let Ok(modified) = meta.modified() {
+                                let mod_time: chrono::DateTime<chrono::Utc> = modified.into();
+                                if mod_time < cutoff {
+                                    let _ = std::fs::remove_file(legacy);
+                                }
+                            }
+                        }
+                    }
+                    _ = shutdown_purge.recv() => { return; }
+                }
+            }
+        });
+    }
+
+    // ─── SIGINT / SIGTERM graceful shutdown ──────────────────────────────────
+    {
+        let shutdown_sig = shutdown_tx.clone();
+        let sig_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            info!("SIGINT/SIGTERM received — emergency wisdom save...");
+            let eng = sig_state.adaptive_engine.lock().await;
+            let wisdom = eng.export_wisdom();
+            let json = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
+            let _ = std::fs::write("wisdom_state.json", &json);
+            sig_state.session_manager.flush_all();
+            info!("Graceful shutdown complete.");
+            let _ = shutdown_sig.send(());
+        });
+    }
+
     info!("============================================");
     info!(" Polymarket BTC 15-min Backend");
     info!(" REST API:    http://{}/api/...", addr);
     info!(" WebSocket:   ws://{}/ws", addr);
-    info!(" HFT CSV:     hft_snapshots.csv");
+    info!(" Black Box HFT — Wisdom condensation engine");
     info!("============================================");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -546,17 +643,20 @@ async fn capture_combined(
 
     // ─── Adaptive Risk Engine: macro fields + master signal ──────────────────
     {
-        let eng = state.adaptive_engine.lock().await;
+        let mut eng = state.adaptive_engine.lock().await;
         rec.macro_slope = eng.macro_slope();
         rec.vfi_value = eng.vfi_value();
         rec.macd_hist = eng.macd_hist();
         rec.predicted_bias = eng.predicted_bias().to_string();
         rec.is_feedback_adjusted = eng.feedback_adjusted();
+        let is_fb = rec.is_feedback_adjusted > 0;
+        let ts_now = chrono::Utc::now().timestamp_millis();
         let (master, cp_range, cp_valid) = eng.evaluate_master_signal(
             rec.binance_price, rec.poly_mid, rec.poly_spread,
             rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
             rec.poly_imbalance, rec.price_velocity,
-            eng.feedback_adjusted() > 0,
+            is_fb,
+            rec.binance_vol_100ms, ts_now,
         );
         rec.master_signal = master;
         rec.cp_uncertainty_range = cp_range;

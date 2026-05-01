@@ -72,6 +72,11 @@ pub struct MacroContext {
     pub auto_widened:      bool,
     pub feedback_count:    u64,
     pub mode:              String, // ACTIVE | OBSERVATION | CALIBRATING
+    // ─── Wave Hunting ────────────────────────────────────────────────────────
+    pub hunting_mode:      bool,
+    pub hunting_z_score:   f64,
+    pub volatility_1h:     f64,
+    pub signal_priority:   String, // "VFI>RSI>MACD>SMA" etc
 }
 
 impl Default for MacroContext {
@@ -101,6 +106,10 @@ impl Default for MacroContext {
             auto_widened:       false,
             feedback_count:     0,
             mode:               "ACTIVE".into(),
+            hunting_mode:       false,
+            hunting_z_score:    0.0,
+            volatility_1h:     0.0,
+            signal_priority:    "VFI>RSI>MACD>SMA".into(),
         }
     }
 }
@@ -119,6 +128,8 @@ pub struct MacroSnapshot {
     pub cp_quantile:    f64,  // 95% empirical quantile of residuals
     pub cp_alpha:       f64,  // Robbins-Monro learning rate
     pub close_prices:   Vec<f64>, // last 200 close prices (for Bollinger+CP at runtime)
+    pub hunting_z_score: f64,    // current volume Z-Score
+    pub volatility_1h:   f64,    // BB width / SMA as volatility proxy
 }
 
 /// Simple moving average.
@@ -499,6 +510,8 @@ pub struct AdaptiveRiskEngine {
     sma200_series:     Vec<f64>,
     /// RSI series.
     rsi_series:        Vec<f64>,
+    /// Volume history for wave hunting (Z-Score over 5-min window).
+    volume_history:    VecDeque<(i64, f64)>,  // (ts_ms, volume)
 }
 
 impl AdaptiveRiskEngine {
@@ -509,6 +522,7 @@ impl AdaptiveRiskEngine {
             candles:       Vec::new(),
             sma200_series: Vec::new(),
             rsi_series:    Vec::new(),
+            volume_history: VecDeque::with_capacity(300),  // 5 min @ 1 tick/sec
         }
     }
 
@@ -610,10 +624,10 @@ impl AdaptiveRiskEngine {
         self.cp.calibrate(&macd_residuals, &rsi_residuals, &price_residuals);
     }
 
-    /// Bollinger Band signal with Conformal Prediction + Volume confirmation.
-    /// Returns detailed mean reversion analysis.
+    /// Bollinger Band + Wave Hunting + Signal Hierarchy + Dynamic CP.
+    /// Returns (master_signal, cp_range, cp_valid | hunting_bit).
     pub fn evaluate_master_signal(
-        &self,
+        &mut self,
         binance_price:    f64,
         _poly_mid:        f64,
         poly_spread:      f64,
@@ -623,66 +637,174 @@ impl AdaptiveRiskEngine {
         poly_imbalance:   f64,
         price_velocity:   f64,
         is_feedback_adj:  bool,
+        binance_volume:   f64,
+        ts_ms:            i64,
     ) -> (u8, f64, u8) {
+        // ─── Step 0: Wave Hunting — Z-Score of volume over 5-min window ──────
+        let z_vol = self.compute_volume_z_score(binance_volume, ts_ms);
+        let hunting = z_vol > 3.5;
+        self.macro_snap.hunting_z_score = z_vol;
+
         let cp_range = self.cp.uncertainty_range(binance_price);
         let band_width = bollinger_upper - bollinger_lower;
 
-        // ─── Step 1: Z-score (how many std deviations from SMA) ──────────────
-        let half_width = band_width / 2.0;
-        let z_score = if half_width > 0.0 {
-            (binance_price - bollinger_sma) / (half_width / 2.0) // dividing by 2σ
-        } else { 0.0 };
+        // ─── Step 1: Dynamic CP threshold — widen if high volatility ─────────
+        let volatility = if band_width > 0.0 && bollinger_sma > 0.0 {
+            band_width / bollinger_sma
+        } else { 0.01 };
+        self.macro_snap.volatility_1h = volatility;
 
-        // ─── Step 2: CP validation — is this deviation statistically significant? ──
-        let cp_extreme = self.cp.is_price_extreme(binance_price, bollinger_sma);
+        // Dynamic CP quantile: wider when volatile (but never below base)
+        let dyn_quantile = self.cp.quantile_price.max(volatility * 0.5);
+        let dyn_threshold = dyn_quantile * binance_price;
+        let cp_extreme = self.cp.is_price_extreme(binance_price, bollinger_sma)
+            && cp_range > dyn_threshold * 0.5; // require CP extreme exceeds 50% of dynamic threshold
+
         let cp_valid: u8 = if cp_extreme { 1 } else { 0 };
 
-        // ─── Step 3: Volume confirmation — MACD + VFI alignment ──────────────
-        let macd_bullish = self.macro_snap.macd_hist > 0.0;
-        let macd_bearish = self.macro_snap.macd_hist < 0.0;
-        let macd_accelerating = macd_bullish && self.macro_snap.macd_line > self.macro_snap.macd_signal;
-        let macd_decelerating = macd_bearish && self.macro_snap.macd_line < self.macro_snap.macd_signal;
-
-        let vfi_bullish = self.macro_snap.vfi > 0.1;
-        let vfi_bearish = self.macro_snap.vfi < -0.1;
-        let vfi_strong = self.macro_snap.vfi.abs() > 0.5;
-
-        let spread_ok = poly_spread <= 0.05;
-
-        // ─── Step 4: Mean Reversion Signal ──────────────────────────────────
-        // LONG: price below lower BB → expect reversion UP
-        // Must have: CP extreme + volume confirmation (MACD turning up, VFI strong)
-        let below_lower = binance_price <= bollinger_lower;
-        let long_signal = below_lower && cp_valid == 1 && spread_ok
-            && (macd_accelerating || (macd_bullish && vfi_strong))
-            && (vfi_bullish || poly_imbalance > 1.01);
-
-        // SHORT: price above upper BB → expect reversion DOWN
-        // Must have: CP extreme + volume confirmation (MACD turning down, VFI strong)
-        let above_upper = binance_price >= bollinger_upper;
-        let short_signal = above_upper && cp_valid == 1 && spread_ok
-            && (macd_decelerating || (macd_bearish && vfi_strong))
-            && (vfi_bearish || poly_imbalance < 0.99);
-
+        // ─── Step 2: Signal Hierarchy — VFI > RSI/MACD > SMA ─────────────────
         let mut master: u8 = 0;
 
-        if long_signal && price_velocity > -0.01 {
-            master = 1; // Mean reversion: Buy (price bounced off lower BB)
-        } else if short_signal && price_velocity < 0.01 {
-            master = 2; // Mean reversion: Sell (price rejected at upper BB)
+        if hunting {
+            // HUNTING MODE: ignore macro bias → follow order flow + velocity
+            let ob_imbalance_bull = poly_imbalance > 1.05;
+            let ob_imbalance_bear = poly_imbalance < 0.95;
+            let velocity_surge = price_velocity.abs() > 0.0005;
+            let spread_ok = poly_spread <= 0.05;
+
+            if ob_imbalance_bull && velocity_surge && spread_ok {
+                master = 3; // HUNTING BUY: order flow surge UP
+                self.macro_snap.predicted_bias = "UP".into();
+            } else if ob_imbalance_bear && velocity_surge && spread_ok {
+                master = 4; // HUNTING SELL: order flow surge DOWN
+                self.macro_snap.predicted_bias = "DOWN".into();
+            }
+            info!("🌊 HUNTING MODE z={:.2} vol={:.0} master={}",
+                z_vol, binance_volume, master);
+        } else {
+            // Normal mode: signal hierarchy with weighted confluence
+            let vfi_bull = self.macro_snap.vfi > 0.1;
+            let vfi_bear = self.macro_snap.vfi < -0.1;
+            let vfi_strong = self.macro_snap.vfi.abs() > 0.5;
+
+            let rsi_overbought = self.macro_snap.rsi14 > 70.0;
+            let rsi_oversold = self.macro_snap.rsi14 < 30.0;
+
+            let macd_bull = self.macro_snap.macd_hist > 0.0;
+            let macd_bear = self.macro_snap.macd_hist < 0.0;
+
+            let sma_bull = self.macro_snap.macro_slope > 0.0001;
+            let sma_bear = self.macro_snap.macro_slope < -0.0001;
+
+            let spread_ok = poly_spread <= 0.05;
+
+            // ─── Hierarchy: VFI (70%) > RSI/MACD (20%) > SMA (10%) ───────────
+            let w_vfi  = self.cp.weight_vfi;
+            let w_macd = self.cp.weight_macd;
+            let w_rsi  = self.cp.weight_rsi;
+            let w_sma  = self.cp.weight_sma;
+            let total  = w_vfi + w_macd + w_rsi + w_sma;
+
+            let score_bull = if total > 0.0 {
+                (if vfi_bull  { w_vfi } else if vfi_bear { 0.0 } else { w_vfi * 0.5 })
+                + (if macd_bull { w_macd } else if macd_bear { 0.0 } else { w_macd * 0.5 })
+                + (if rsi_oversold { w_rsi } else if rsi_overbought { 0.0 } else { w_rsi * 0.5 })
+                + (if sma_bull  { w_sma } else if sma_bear { 0.0 } else { w_sma * 0.5 })
+            } else { 0.0 };
+
+            let score_bear = if total > 0.0 {
+                (if vfi_bear  { w_vfi } else if vfi_bull { 0.0 } else { w_vfi * 0.5 })
+                + (if macd_bear { w_macd } else if macd_bull { 0.0 } else { w_macd * 0.5 })
+                + (if rsi_overbought { w_rsi } else if rsi_oversold { 0.0 } else { w_rsi * 0.5 })
+                + (if sma_bear  { w_sma } else if sma_bull { 0.0 } else { w_sma * 0.5 })
+            } else { 0.0 };
+
+            let weighted_score = score_bull - score_bear;
+            let score_normalized = if total > 0.0 { weighted_score / total } else { 0.0 };
+
+            let below_lower = binance_price <= bollinger_lower;
+            let above_upper = binance_price >= bollinger_upper;
+
+            // BB mean reversion with CP confirmation + signal hierarchy
+            let long_signal = below_lower && cp_valid == 1 && spread_ok
+                && (score_normalized > 0.15 || (rsi_oversold && vfi_strong));
+            let short_signal = above_upper && cp_valid == 1 && spread_ok
+                && (score_normalized < -0.15 || (rsi_overbought && vfi_strong));
+
+            if long_signal && price_velocity > -0.01 {
+                master = 1;
+            } else if short_signal && price_velocity < 0.01 {
+                master = 2;
+            }
         }
 
-        // Log BB details when signal fires
-        if master > 0 {
-            let band = if master == 1 { "LOWER" } else { "UPPER" };
-            let macd_state = if macd_accelerating { "ACCEL↑" } else if macd_decelerating { "DECEL↓" }
-                else if macd_bullish { "BULL" } else if macd_bearish { "BEAR" } else { "FLAT" };
-            info!("BB MeanReversion: {} | z={:.2} cp_valid={} macd={} vfi={:.3} imb={:.3} spread={:.4}",
-                band, z_score, cp_valid, macd_state, self.macro_snap.vfi, poly_imbalance, poly_spread);
+        if master > 0 && !hunting {
+            info!("BB Signal: master={} z_vol={:.2} vfi={:.3} rsi={:.1}",
+                master, z_vol,
+                self.macro_snap.vfi, self.macro_snap.rsi14);
         }
 
+        let hunting_bit: u8 = if hunting { 2 } else { 0 };
         let feedback_bit: u8 = if is_feedback_adj { 1 } else { 0 };
-        (master, cp_range, cp_valid | feedback_bit)
+        (master, cp_range, cp_valid | hunting_bit | feedback_bit)
+    }
+
+    /// Compute Z-Score of current volume vs rolling 5-min window.
+    fn compute_volume_z_score(&mut self, volume: f64, ts_ms: i64) -> f64 {
+        // Keep only last 5 minutes
+        let cutoff = ts_ms - 300_000;
+        while self.volume_history.front().map_or(false, |(t, _)| *t < cutoff) {
+            self.volume_history.pop_front();
+        }
+        self.volume_history.push_back((ts_ms, volume));
+        if self.volume_history.len() > 300 {
+            self.volume_history.pop_front();
+        }
+
+        let n = self.volume_history.len();
+        if n < 5 { return 0.0; }
+
+        let sum: f64 = self.volume_history.iter().map(|(_, v)| *v).sum();
+        let mean = sum / n as f64;
+        let variance: f64 = self.volume_history.iter()
+            .map(|(_, v)| { let d = v - mean; d * d })
+            .sum::<f64>() / n as f64;
+        let std = variance.sqrt();
+        if std < 1e-9 { return 0.0; }
+        (volume - mean) / std
+    }
+
+    /// Export current wisdom state (CP + weights) as JSON.
+    pub fn export_wisdom(&self) -> serde_json::Value {
+        serde_json::json!({
+            "version": "2.0",
+            "exported_at": chrono::Utc::now().to_rfc3339(),
+            "cp": {
+                "confidence_level":  self.cp.confidence_level,
+                "quantile_macd":     self.cp.quantile_macd,
+                "quantile_rsi":      self.cp.quantile_rsi,
+                "quantile_price":    self.cp.quantile_price,
+                "alpha":             self.cp.alpha,
+                "feedback_count":    self.cp.feedback_count,
+                "auto_widened":      self.cp.auto_widened,
+            },
+            "weights": {
+                "sma":  self.cp.weight_sma,
+                "vfi":  self.cp.weight_vfi,
+                "macd": self.cp.weight_macd,
+                "rsi":  self.cp.weight_rsi,
+                "bb":   self.cp.weight_bb,
+            },
+            "accuracy": {
+                "rolling_24h": if self.cp.accuracy_window.is_empty() { 0.5 }
+                    else { self.cp.accuracy_window.iter().filter(|&&b| b).count() as f64 / self.cp.accuracy_window.len() as f64 },
+                "sample_count": self.cp.accuracy_window.len(),
+            },
+            "hunting": {
+                "z_score":    self.macro_snap.hunting_z_score,
+                "volatility": self.macro_snap.volatility_1h,
+            },
+        })
     }
 
     /// Compute VFI-weighted bias (60% VFI + 40% SMA slope).
@@ -796,6 +918,9 @@ impl AdaptiveRiskEngine {
         ctx.weight_bb     = self.cp.weight_bb;
         ctx.auto_widened  = self.cp.auto_widened;
         ctx.feedback_count = self.cp.feedback_count;
+        ctx.hunting_mode   = self.macro_snap.hunting_z_score > 3.5;
+        ctx.hunting_z_score = self.macro_snap.hunting_z_score;
+        ctx.volatility_1h  = self.macro_snap.volatility_1h;
         let acc = if self.cp.accuracy_window.is_empty() { 0.5 }
             else { self.cp.accuracy_window.iter().filter(|&&b| b).count() as f64 / self.cp.accuracy_window.len() as f64 };
         ctx.accuracy_24h = acc;
