@@ -512,6 +512,8 @@ pub struct AdaptiveRiskEngine {
     rsi_series:        Vec<f64>,
     /// Volume history for wave hunting (Z-Score over 5-min window).
     volume_history:    VecDeque<(i64, f64)>,  // (ts_ms, volume)
+    /// Guard: first warmup replaces CP; subsequent refreshes preserve RL state.
+    first_warmup:      bool,
 }
 
 impl AdaptiveRiskEngine {
@@ -522,7 +524,21 @@ impl AdaptiveRiskEngine {
             candles:       Vec::new(),
             sma200_series: Vec::new(),
             rsi_series:    Vec::new(),
-            volume_history: VecDeque::with_capacity(300),  // 5 min @ 1 tick/sec
+            volume_history: VecDeque::with_capacity(300),
+            first_warmup:  true,
+        }
+    }
+
+    /// Apply pre-computed warmup results — fast, lock‑friendly (no I/O).
+    /// Only replaces CP on first warmup. Subsequent calls preserve RL-learned CP state.
+    pub fn apply_warmup_result(&mut self, result: WarmupResult) {
+        self.candles = result.candles;
+        self.macro_snap = result.snapshot;
+        self.sma200_series = result.sma200_series;
+        self.rsi_series = result.rsi_series;
+        if self.first_warmup {
+            self.cp = result.cp;
+            self.first_warmup = false;
         }
     }
 
@@ -535,15 +551,6 @@ impl AdaptiveRiskEngine {
             self.macro_snap.macro_slope, self.macro_snap.predicted_bias,
             self.macro_snap.rsi14, self.macro_snap.vfi);
         Ok(())
-    }
-
-    /// Apply pre-computed warmup results — fast, lock‑friendly (no I/O).
-    pub fn apply_warmup_result(&mut self, result: WarmupResult) {
-        self.candles = result.candles;
-        self.macro_snap = result.snapshot;
-        self.sma200_series = result.sma200_series;
-        self.rsi_series = result.rsi_series;
-        self.cp = result.cp;
     }
 
     /// Compute all macro indicators from close price series.

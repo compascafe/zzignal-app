@@ -133,15 +133,21 @@ async fn process_pending_executions(state: Arc<AppState>) {
 }
 
 async fn process_sessions(state: Arc<AppState>) {
+    use std::collections::HashSet;
     // 1. Detener sesiones que ya pasaron su scheduled_end
     let mut to_stop = match repository::get_sessions_to_stop(&state).await {
         Ok(list) => list,
         Err(e)   => { warn!("Session scheduler stop query: {}", e); return; }
     };
+    let mut seen: HashSet<i32> = to_stop.iter().map(|s| s.id).collect();
 
     // Also force-stop children that exceeded their duration (fallback for missed scheduled_end)
     if let Ok(orphans) = repository::get_stale_children(&state).await {
-        to_stop.extend(orphans);
+        for o in orphans {
+            if seen.insert(o.id) {
+                to_stop.push(o);
+            }
+        }
     }
 
     let mut parents_to_replenish: Vec<i32> = Vec::new();
@@ -152,6 +158,14 @@ async fn process_sessions(state: Arc<AppState>) {
         info!("[SESSION STOP] #{} | dur={}min | end={}",
             session.id, session.duration_min,
             session.scheduled_end.format("%H:%M:%S"));
+
+        // Compute actual outcome BEFORE stop (strike vs current BTC price)
+        let actual_outcome = match (session.strike_price, btc_price) {
+            (Some(strike), Some(current)) if current > strike => "up".to_string(),
+            (Some(strike), Some(current)) if current < strike => "down".to_string(),
+            (Some(_), Some(_)) => "tie".to_string(),
+            _ => "tie".to_string(),
+        };
 
         // Flush then close session CSV file
         let _ = state.session_manager.flush(session.id);
@@ -171,9 +185,8 @@ async fn process_sessions(state: Arc<AppState>) {
         // ─── Feedback (runs in own spawn, lock().await is safe) ─────────────
         let mut eng = state.adaptive_engine.lock().await;
         let predicted_bias = eng.predicted_bias().to_string();
-        if predicted_bias == "IDLE" { continue; }
+        if predicted_bias.is_empty() || predicted_bias == "IDLE" { continue; }
 
-        let actual_outcome = session.outcome_result.clone().unwrap_or_else(|| "tie".into());
         let accuracy = (predicted_bias == "UP" && actual_outcome == "up")
                     || (predicted_bias == "DOWN" && actual_outcome == "down");
 
