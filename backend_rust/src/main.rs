@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     rec.session_id = tick_state.recording_sessions.read().await.first().copied().unwrap_or(0);
                     // ─── Adaptive Risk Engine: macro fields + master signal ───────
                     {
-                        let eng = tick_state.adaptive_engine.lock().await;
+                        let mut eng = tick_state.adaptive_engine.lock().await;
                         rec.macro_slope = eng.macro_slope();
                         rec.vfi_value = eng.vfi_value();
                         rec.macd_hist = eng.macd_hist();
@@ -189,6 +189,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rec.master_signal = master;
                         rec.cp_uncertainty_range = cp_range;
                         rec.cp_valid_signal = cp_valid;
+                        // ─── Dynamic macro context (from shared state) ────────
+                        let mut ctx = tick_state.macro_ctx.write().await;
+                        eng.update_dynamic_rsi(&mut ctx, tick.price);
+                        eng.check_momentum_trigger(&mut ctx);
+                        rec.dynamic_rsi = ctx.dynamic_rsi;
+                        rec.vfi_confidence = ctx.vfi_confidence;
+                        rec.db_accuracy_factor = ctx.db_accuracy_factor;
                     }
                     csv3.push(rec.clone());
                     sm3.push(&rec);
@@ -497,6 +504,11 @@ async fn capture_combined(
         rec.master_signal = master;
         rec.cp_uncertainty_range = cp_range;
         rec.cp_valid_signal = cp_valid;
+        // ─── Dynamic macro context (from shared state) ────────────────────
+        let ctx = state.macro_ctx.read().await;
+        rec.dynamic_rsi = ctx.dynamic_rsi;
+        rec.vfi_confidence = ctx.vfi_confidence;
+        rec.db_accuracy_factor = ctx.db_accuracy_factor;
     }
 
     state.csv_logger.push(rec.clone());

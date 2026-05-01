@@ -645,6 +645,9 @@ async fn build_fallback_csv(
                 macd_hist: 0.0,
                 predicted_bias: String::new(),
                 is_feedback_adjusted: 0,
+                dynamic_rsi: 0.0,
+                vfi_confidence: 0.0,
+                db_accuracy_factor: 1.0,
             });
         }
     }
@@ -677,6 +680,9 @@ async fn build_fallback_csv(
                 macd_hist: 0.0,
                 predicted_bias: String::new(),
                 is_feedback_adjusted: 0,
+                dynamic_rsi: 0.0,
+                vfi_confidence: 0.0,
+                db_accuracy_factor: 1.0,
             });
         }
     }
@@ -722,6 +728,9 @@ async fn build_fallback_csv(
                     macd_hist: 0.0,
                     predicted_bias: String::new(),
                     is_feedback_adjusted: 0,
+                    dynamic_rsi: 0.0,
+                    vfi_confidence: 0.0,
+                    db_accuracy_factor: 1.0,
                 });
             }
         } else {
@@ -751,24 +760,27 @@ async fn build_fallback_csv(
                     macro_slope: 0.0,
                     vfi_value: 0.0,
                     macd_hist: 0.0,
-                    predicted_bias: String::new(),
-                    is_feedback_adjusted: 0,
-                });
-            }
+                predicted_bias: String::new(),
+                is_feedback_adjusted: 0,
+                dynamic_rsi: 0.0,
+                vfi_confidence: 0.0,
+                db_accuracy_factor: 1.0,
+            });
         }
+    }
     }
 
     // Sort by timestamp
     rows.sort_by_key(|r| r.ts);
 
     let mut data = String::new();
-    // 58-column data header
-    data.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted\n");
+    // 61-column data header
+    data.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor\n");
 
     for r in &rows {
         let _ = writeln!(
             data,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             r.ts.to_rfc3339(), "", r.event_type,
             r.latencia_ms, r.binance_price, r.binance_micro_price,
             r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
@@ -781,6 +793,7 @@ async fn build_fallback_csv(
             0.0, 0.0, 0.0, 0, 0, 0, "",
             0.0, 0, 0, 0, 0.0, 0,
             r.macro_slope, r.vfi_value, r.macd_hist, r.predicted_bias, r.is_feedback_adjusted,
+            r.dynamic_rsi, r.vfi_confidence, r.db_accuracy_factor,
         );
     }
 
@@ -812,6 +825,9 @@ struct CsvFallbackRow {
     macd_hist: f64,
     predicted_bias: String,
     is_feedback_adjusted: u8,
+    dynamic_rsi: f64,
+    vfi_confidence: f64,
+    db_accuracy_factor: f64,
 }
 
 /// Try to read the per-session CSV file from disk (written by SessionManager).

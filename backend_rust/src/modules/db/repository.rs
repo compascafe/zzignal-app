@@ -778,10 +778,13 @@ pub async fn insert_session_log(
     btc_price_at_start: Option<f64>,
     cp_quantile: Option<f64>,
     cp_alpha: Option<f64>,
+    vfi_confidence: Option<f64>,
+    db_accuracy_factor: Option<f64>,
+    dynamic_rsi_end: Option<f64>,
 ) -> Result<i32> {
     let Some(pool) = pool else { return Ok(0) };
     let row: (i32,) = sqlx::query_as(
-        "INSERT INTO session_logs (session_id, predicted_bias, macd_at_start, rsi_at_start, vfi_at_start, macro_slope, btc_price_at_start, cp_quantile, cp_alpha) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id"
+        "INSERT INTO session_logs (session_id, predicted_bias, macd_at_start, rsi_at_start, vfi_at_start, macro_slope, btc_price_at_start, cp_quantile, cp_alpha, vfi_confidence, db_accuracy_factor, dynamic_rsi_end) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id"
     )
     .bind(session_id)
     .bind(predicted_bias)
@@ -792,6 +795,9 @@ pub async fn insert_session_log(
     .bind(btc_price_at_start)
     .bind(cp_quantile)
     .bind(cp_alpha)
+    .bind(vfi_confidence)
+    .bind(db_accuracy_factor)
+    .bind(dynamic_rsi_end)
     .fetch_one(pool)
     .await?;
     Ok(row.0)

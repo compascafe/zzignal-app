@@ -117,6 +117,9 @@ pub struct CsvRecord {
     pub macd_hist:             f64,   // MACD(3,10,16) histogram value
     pub predicted_bias:        String,// "UP" or "DOWN" — initial bias from macro warm-up
     pub is_feedback_adjusted:  u8,    // 1 = CP intervals widened due to low accuracy feedback
+    pub dynamic_rsi:            f64,   // Rolling RSI(14) updated each minute during session
+    pub vfi_confidence:         f64,   // VFI volume strength ratio (0-1 normalized)
+    pub db_accuracy_factor:     f64,   // Risk multiplier from historical memory (1.0 = neutral, >1 = widen)
 }
 
 impl Default for CsvRecord {
@@ -181,6 +184,9 @@ impl Default for CsvRecord {
             macd_hist:             0.0,
             predicted_bias:        String::new(),
             is_feedback_adjusted:  0,
+            dynamic_rsi:           0.0,
+            vfi_confidence:        0.0,
+            db_accuracy_factor:    1.0,
         }
     }
 }

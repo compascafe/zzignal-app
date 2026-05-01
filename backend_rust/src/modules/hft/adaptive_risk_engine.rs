@@ -42,6 +42,31 @@ pub struct Candle1m {
 
 // ─── Macro Indicators ─────────────────────────────────────────────────────────
 
+/// Thread-safe context for sharing dynamic signals between threads.
+/// Updated each minute by a background task, read by the tick consumer.
+#[derive(Debug, Clone)]
+pub struct MacroContext {
+    pub dynamic_rsi:       f64,   // Rolling RSI updated each minute
+    pub vfi_confidence:    f64,   // VFI volume strength ratio (0-1 normalized)
+    pub db_accuracy_factor: f64,  // Risk multiplier from historical memory (1.0=neutral)
+    pub weighted_bias:     String,// VFI-weighted predicted bias (UP/DOWN/NEUTRAL)
+    pub last_rsi:          f64,   // Previous RSI value (for momentum cross detection)
+    pub momentum_flipped:  bool,  // True if RSI crossed above 30 this session
+}
+
+impl Default for MacroContext {
+    fn default() -> Self {
+        Self {
+            dynamic_rsi:        50.0,
+            vfi_confidence:     0.5,
+            db_accuracy_factor: 1.0,
+            weighted_bias:      String::new(),
+            last_rsi:           50.0,
+            momentum_flipped:   false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MacroSnapshot {
     pub sma50:          f64,
@@ -543,6 +568,99 @@ impl AdaptiveRiskEngine {
 
         let feedback_bit: u8 = if is_feedback_adj { 1 } else { 0 };
         (master, cp_range, cp_valid | feedback_bit)
+    }
+
+    /// Compute VFI-weighted bias (60% VFI + 40% SMA slope).
+    /// If VFI and SMA slope diverge beyond threshold → NEUTRAL bias.
+    pub fn compute_weighted_bias(&mut self, ctx: &mut MacroContext) {
+        let vfi = self.macro_snap.vfi;
+        let slope = self.macro_snap.macro_slope;
+        let vfi_dir = if vfi > 0.1 { 1.0 } else if vfi < -0.1 { -1.0 } else { 0.0 };
+        let sma_dir = if slope > 0.0001 { 1.0 } else if slope < -0.0001 { -1.0 } else { 0.0 };
+
+        // Normalize VFI to 0-1 confidence
+        ctx.vfi_confidence = (vfi.abs() / 10.0).min(1.0);
+
+        // Divergence detection: SMA down but VFI strongly up → smart money conflict
+        let divergence = (vfi_dir * sma_dir) < 0.0 && vfi.abs() > 0.5 && slope.abs() > 0.0001;
+
+        let weighted_score = if divergence {
+            // SMA and VFI disagree → NEUTRAL (don't fight smart money)
+            0.0
+        } else {
+            // Weighted score: 60% VFI + 40% SMA
+            0.6 * vfi_dir + 0.4 * sma_dir
+        };
+
+        ctx.weighted_bias = if weighted_score > 0.15 {
+            "UP".into()
+        } else if weighted_score < -0.15 {
+            "DOWN".into()
+        } else {
+            "NEUTRAL".into()
+        };
+
+        // Also update the macro snapshot's predicted_bias for CSV
+        if ctx.weighted_bias != "NEUTRAL" {
+            self.macro_snap.predicted_bias = ctx.weighted_bias.clone();
+        }
+    }
+
+    /// Pre-trade calibration: check last N historical sessions.
+    /// If accuracy < 65%, multiply CP quantile by db_accuracy_factor (penalty).
+    pub fn pre_trade_calibrate(&mut self, ctx: &mut MacroContext, recent_accuracy: &[bool]) {
+        let n = recent_accuracy.len();
+        if n == 0 {
+            ctx.db_accuracy_factor = 1.0;
+            return;
+        }
+        let hits = recent_accuracy.iter().filter(|&&b| b).count();
+        let accuracy = hits as f64 / n as f64;
+
+        if accuracy < 0.65 {
+            // Penalty: widen CP by up to 2x depending on how bad accuracy is
+            let penalty = 1.0 + (0.65 - accuracy) * 3.0; // 0% acc → 2.95x, 40% acc → 1.75x
+            ctx.db_accuracy_factor = penalty;
+            self.cp.quantile_macd  *= penalty;
+            self.cp.quantile_rsi   *= penalty;
+            self.cp.quantile_price *= penalty;
+            info!("Pre-trade calibration: accuracy={:.0}% < 65% → CP widened by {:.2}x", accuracy * 100.0, penalty);
+        } else {
+            ctx.db_accuracy_factor = 1.0;
+        }
+    }
+
+    /// Update dynamic rolling RSI with a new price tick.
+    /// Called each time a new Binance price arrives during a session.
+    /// Returns the current dynamic RSI value.
+    pub fn update_dynamic_rsi(&mut self, ctx: &mut MacroContext, price: f64) -> f64 {
+        // Store price in a rolling buffer (keep last 15 prices for RSI-14)
+        self.macro_snap.close_prices.push(price);
+        if self.macro_snap.close_prices.len() > 200 {
+            self.macro_snap.close_prices.remove(0);
+        }
+        // Recompute RSI if we have enough data
+        if self.macro_snap.close_prices.len() >= 15 {
+            ctx.last_rsi = ctx.dynamic_rsi;
+            ctx.dynamic_rsi = rsi14(&self.macro_snap.close_prices);
+        }
+        ctx.dynamic_rsi
+    }
+
+    /// Momentum trigger: if RSI crosses above 30 from below → flip DOWN bias to UP.
+    /// Returns true if bias was flipped.
+    pub fn check_momentum_trigger(&mut self, ctx: &mut MacroContext) -> bool {
+        if ctx.last_rsi <= 30.0 && ctx.dynamic_rsi > 30.0 && !ctx.momentum_flipped {
+            ctx.momentum_flipped = true;
+            if ctx.weighted_bias == "DOWN" || self.macro_snap.predicted_bias == "DOWN" {
+                ctx.weighted_bias = "UP".into();
+                self.macro_snap.predicted_bias = "UP".into();
+                info!("Momentum trigger: RSI crossed above 30 ({}→{}) → bias flipped to UP",
+                    ctx.last_rsi, ctx.dynamic_rsi);
+                return true;
+            }
+        }
+        false
     }
 
     /// Accessors for CSV column population.

@@ -168,12 +168,14 @@ async fn process_sessions(state: Arc<AppState>) {
         if predicted_bias != "IDLE" {
             let start_price = session.btc_price_start;
             let eng = state.adaptive_engine.lock().await;
+            let ctx = state.macro_ctx.read().await;
             if let Err(e) = repository::insert_session_log(
                 state.db.as_ref(), session.id,
                 &predicted_bias,
                 Some(eng.macd_hist()), Some(eng.rsi_value()), Some(eng.vfi_value()),
                 Some(eng.macro_slope()), start_price,
                 Some(eng.cp_quantile()), Some(eng.cp_alpha()),
+                Some(ctx.vfi_confidence), Some(ctx.db_accuracy_factor), Some(ctx.dynamic_rsi),
             ).await {
                 warn!("insert_session_log #{}: {}", session.id, e);
             }
@@ -243,6 +245,11 @@ async fn process_sessions(state: Arc<AppState>) {
             if eng.cp_mut().should_auto_widen() {
                 eng.cp_mut().auto_widen();
             }
+            // Pre-trade calibration: accuracy < 65% → widen CP
+            let mut ctx = state.macro_ctx.write().await;
+            eng.pre_trade_calibrate(&mut ctx, &recent_accuracy);
+            // VFI-weighted bias with divergence detection
+            eng.compute_weighted_bias(&mut ctx);
         }
         // Fire‑and‑forget: warmup refresh (lock‑free HTTP, only brief lock for apply)
         {

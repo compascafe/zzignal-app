@@ -61,14 +61,14 @@ impl CsvLogger {
                  bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
                  technical_confluence,trend_direction,signal_label,\
                  realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                 cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted"
+                 cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor"
             );
         }
 
         for r in &rows {
             let _ = writeln!(
                 file,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 r.ts_local,
                 r.ts_exchange,
                 r.event_type.as_str(),
@@ -127,6 +127,9 @@ impl CsvLogger {
                 r.macd_hist,
                 r.predicted_bias,
                 r.is_feedback_adjusted,
+                r.dynamic_rsi,
+                r.vfi_confidence,
+                r.db_accuracy_factor,
             );
         }
 

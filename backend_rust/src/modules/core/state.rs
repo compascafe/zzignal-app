@@ -14,6 +14,7 @@ use crate::modules::hft::types::CsvRecord;
 use crate::modules::hft::executor::StrategyManager;
 use crate::modules::hft::session_manager::SessionManager;
 use crate::modules::hft::adaptive_risk_engine::AdaptiveRiskEngine;
+use crate::modules::hft::adaptive_risk_engine::MacroContext;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -68,6 +69,9 @@ pub struct AppState {
     /// Adaptive Risk Engine: macro 24h warm‑up + Conformal Prediction + feedback
     pub adaptive_engine: Arc<tokio::sync::Mutex<AdaptiveRiskEngine>>,
 
+    /// Shared dynamic macro context (RSI, VFI confidence, accuracy factor) — updated each minute
+    pub macro_ctx: Arc<RwLock<MacroContext>>,
+
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
 }
@@ -121,6 +125,7 @@ impl AppState {
             strategy_manager:  Arc::new(Mutex::new(StrategyManager::new())),
             tick_drain:        Arc::new(AtomicBool::new(false)),
             adaptive_engine:   Arc::new(tokio::sync::Mutex::new(AdaptiveRiskEngine::new())),
+            macro_ctx:         Arc::new(RwLock::new(MacroContext::default())),
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })
