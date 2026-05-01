@@ -229,7 +229,7 @@ async fn start_session(
             Err(e) => return Json(json!({"ok": false, "error": format!("Parent: {}", e)})),
         };
 
-        // 2. Start parent immediately
+        // 2. Start parent immediately (parent is a container — no CSV file, no recording_sessions)
         let btc_price = *s.btc_price.read().await;
         if let Err(e) = repository::start_session_recording(&s, parent_id, btc_price).await {
             warn!("No se pudo iniciar padre #{}: {}", parent_id, e);
@@ -248,10 +248,13 @@ async fn start_session(
         };
 
         // 4. Start child immediately
+        s.recording_sessions.write().await.push(child_id);
+        if let Err(e) = s.session_manager.start_session(child_id) {
+            warn!("SessionManager start child #{}: {}", child_id, e);
+        }
         if let Err(e) = repository::start_session_recording(&s, child_id, btc_price).await {
             warn!("No se pudo iniciar hijo #{}: {}", child_id, e);
         }
-        s.recording_sessions.write().await.push(child_id);
 
         let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
         return Json(json!({
