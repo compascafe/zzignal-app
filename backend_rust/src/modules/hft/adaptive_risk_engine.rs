@@ -127,7 +127,7 @@ pub struct MacroSnapshot {
     pub predicted_bias: String, // "UP" or "DOWN"
     pub cp_quantile:    f64,  // 95% empirical quantile of residuals
     pub cp_alpha:       f64,  // Robbins-Monro learning rate
-    pub close_prices:   Vec<f64>, // last 200 close prices (for Bollinger+CP at runtime)
+    pub close_prices:   VecDeque<f64>, // last 200 close prices (Bollinger+CP) — VecDeque for O(1) pop_front
     pub hunting_z_score: f64,    // current volume Z-Score
     pub volatility_1h:   f64,    // BB width / SMA as volatility proxy
 }
@@ -466,7 +466,7 @@ pub async fn warmup_fetch_and_compute() -> Result<WarmupResult, String> {
     snapshot.predicted_bias = if snapshot.macro_slope > 0.0 { "UP".into() } else { "DOWN".into() };
 
     // Store last 200 close prices for runtime Bollinger+CP
-    snapshot.close_prices = closes[closes.len().saturating_sub(200)..].to_vec();
+    snapshot.close_prices = VecDeque::from(closes[closes.len().saturating_sub(200)..].to_vec());
 
     // Calibrate CP residuals from 24h history
     let mut cp = ConformalPredictor::new();
@@ -591,7 +591,7 @@ impl AdaptiveRiskEngine {
         };
 
         // Store last 200 close prices for runtime Bollinger+CP
-        self.macro_snap.close_prices = closes[closes.len().saturating_sub(200)..].to_vec();
+        self.macro_snap.close_prices = VecDeque::from(closes[closes.len().saturating_sub(200)..].to_vec());
     }
 
     /// Calibrate CP residuals from the 24h history.
@@ -944,29 +944,26 @@ impl AdaptiveRiskEngine {
     /// Called each time a new Binance price arrives during a session.
     /// Returns the current dynamic RSI value.
     pub fn update_dynamic_rsi(&mut self, ctx: &mut MacroContext, price: f64) -> f64 {
-        self.macro_snap.close_prices.push(price);
+        self.macro_snap.close_prices.push_back(price);
         if self.macro_snap.close_prices.len() > 200 {
-            self.macro_snap.close_prices.remove(0);
+            self.macro_snap.close_prices.pop_front();  // O(1) vs O(n) remove(0)
         }
-        if self.macro_snap.close_prices.len() >= 15 {
+        // make_contiguous is O(1) when the buffer hasn't wrapped (true for push_front/pop_back alternation)
+        let prices = self.macro_snap.close_prices.make_contiguous();
+        if prices.len() >= 15 {
             ctx.last_rsi = ctx.dynamic_rsi;
-            ctx.dynamic_rsi = rsi14(&self.macro_snap.close_prices);
-            // ─── Sync to macro_snap so evaluate_master_signal uses live RSI ──
+            ctx.dynamic_rsi = rsi14(prices);
             self.macro_snap.rsi14 = ctx.dynamic_rsi;
         }
-        // ─── Per-tick MACD from rolling close prices ─────────────────────────
-        if self.macro_snap.close_prices.len() >= 16 {
-            let (ml, ms, mh) = macd_3_10_16(&self.macro_snap.close_prices);
+        if prices.len() >= 16 {
+            let (ml, ms, mh) = macd_3_10_16(prices);
             self.macro_snap.macd_line = ml;
             self.macro_snap.macd_signal = ms;
             self.macro_snap.macd_hist = mh;
         }
-        // ─── Per-tick SMA slope from rolling close prices ────────────────────
-        if self.macro_snap.close_prices.len() >= 200 {
-            let recent: Vec<f64> = self.macro_snap.close_prices.iter().cloned().collect();
-            self.macro_snap.sma200 = sma(&recent, 200);
-            self.macro_snap.sma50 = sma(&recent, 50);
-            // Percentage divergence: (SMA50 - SMA200) / SMA200 * 100
+        if prices.len() >= 200 {
+            self.macro_snap.sma200 = sma(prices, 200);
+            self.macro_snap.sma50 = sma(prices, 50);
             self.macro_snap.macro_slope = if self.macro_snap.sma200 > 0.0 {
                 (self.macro_snap.sma50 - self.macro_snap.sma200) / self.macro_snap.sma200 * 100.0
             } else { 0.0 };

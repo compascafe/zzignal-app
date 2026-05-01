@@ -69,8 +69,7 @@ pub enum ConnStatus {
     MarketFound(MarketInfo),
     ConnectingWs,
     Live,
-    Reconnecting(#[allow(dead_code)] u32),
-    #[allow(dead_code)]
+    Reconnecting(u32),
     Error(String),
 }
 

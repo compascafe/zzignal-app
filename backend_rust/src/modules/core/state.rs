@@ -9,7 +9,6 @@ use crate::modules::hft::types::BinanceDepth;
 use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::TrackingState;
 use crate::modules::hft::binance_depth::BinanceTickEvent;
-use crate::modules::hft::logger::CsvLogger;
 use crate::modules::hft::types::CsvRecord;
 use crate::modules::hft::executor::StrategyManager;
 use crate::modules::hft::session_manager::SessionManager;
@@ -38,7 +37,6 @@ pub struct AppState {
 
     pub cmd_tx:          mpsc::UnboundedSender<CmdMsg>,
     pub broadcast_tx:    broadcast::Sender<String>,
-    pub shutdown_tx:     broadcast::Sender<()>,
 
     pub db:              Option<PgPool>,
 
@@ -53,7 +51,6 @@ pub struct AppState {
     pub binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
     pub binance_ring:    Arc<PriceRingBuffer>,
     pub tracking_state:  Arc<TrackingState>,
-    pub csv_logger:      Arc<CsvLogger>,
     /// Canal para ticks de Binance (HFT → consumer)
     pub tick_tx:         mpsc::UnboundedSender<BinanceTickEvent>,
 
@@ -85,14 +82,12 @@ impl AppState {
     pub fn new(
         cmd_tx:          mpsc::UnboundedSender<CmdMsg>,
         broadcast_tx:    broadcast::Sender<String>,
-        shutdown_tx:     broadcast::Sender<()>,
         interval_arc:    Arc<Mutex<CandleInterval>>,
         db:              Option<PgPool>,
         btc_provider_tx: Arc<tokio::sync::watch::Sender<BtcPriceProvider>>,
         binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
         binance_ring:    Arc<PriceRingBuffer>,
         tracking_state:  Arc<TrackingState>,
-        csv_logger:      Arc<CsvLogger>,
         tick_tx:         mpsc::UnboundedSender<BinanceTickEvent>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -113,7 +108,6 @@ impl AppState {
             btc_provider_tx,
             cmd_tx,
             broadcast_tx,
-            shutdown_tx,
             db,
             recording_sessions: RwLock::new(vec![]),
             mem_sessions:      RwLock::new(vec![]),
@@ -123,7 +117,6 @@ impl AppState {
             binance_depth,
             binance_ring,
             tracking_state,
-            csv_logger,
             tick_tx,
             session_manager:   Arc::new(SessionManager::new("sessions")),
             strategy_manager:  Arc::new(Mutex::new(StrategyManager::new())),

@@ -1,8 +1,6 @@
 //! Polymarket BTC 15-min — Backend Service
 //!
-//! Pipeline HFT unificado: BOOK_UPDATE | TRADE | BINANCE_TICK → CSV 20 columnas
-
-#![allow(dead_code)]
+//! Pipeline HFT unificado: BOOK_UPDATE | TRADE | BINANCE_TICK → CSV
 
 use mimalloc::MiMalloc;
 #[global_allocator]
@@ -23,9 +21,9 @@ use crate::modules::core::persistence as db;
 use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType};
 use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::{self, TrackingState};
-use crate::modules::hft::logger::CsvLogger;
 use crate::modules::hft::binance_depth::BinanceTickEvent;
 use crate::modules::hft::adaptive_risk_engine::warmup_fetch_and_compute;
+use crate::modules::hft::perf;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -70,18 +68,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let binance_depth   = Arc::new(RwLock::new(None::<BinanceDepth>));
     let binance_ring    = Arc::new(PriceRingBuffer::new());
     let tracking_state  = Arc::new(TrackingState::new());
-    let csv_logger      = Arc::new(CsvLogger::new("hft_snapshots.csv"));
     let (tick_tx, mut tick_rx) = tokio_mpsc::unbounded_channel::<BinanceTickEvent>();
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
     let state = AppState::new(
-        cmd_tx, bcast_tx.clone(), shutdown_tx.clone(),
+        cmd_tx, bcast_tx.clone(),
         Arc::clone(&interval_arc), db,
         Arc::clone(&btc_provider_tx),
         Arc::clone(&binance_depth),
         Arc::clone(&binance_ring),
         Arc::clone(&tracking_state),
-        Arc::clone(&csv_logger),
         tick_tx,
     );
 
@@ -151,15 +147,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // CSV flush task
-    {
-        let logger2   = Arc::clone(&csv_logger);
-        let shutdown3 = shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            crate::modules::hft::logger::csv_flush_loop(logger2, shutdown3).await;
-        });
-    }
-
     // Session manager flush loop — every 30s while recording
     {
         let sm = Arc::clone(&state.session_manager);
@@ -179,28 +166,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let depth3   = Arc::clone(&binance_depth);
         let ring3    = Arc::clone(&binance_ring);
-        let csv3     = Arc::clone(&csv_logger);
         let sm3      = Arc::clone(&state.session_manager);
         let track3   = Arc::clone(&tracking_state);
         let drain3   = Arc::clone(&state.tick_drain);
         let tick_state = Arc::clone(&state);
         tokio::spawn(async move {
             while let Some(tick) = tick_rx.recv().await {
+                let _guard = perf::TICK_CONSUMER.start();
                 // Drain residual ticks on session boundary
                 if drain3.swap(false, std::sync::atomic::Ordering::Acquire) {
                     while tick_rx.try_recv().is_ok() {}
-                    continue; // discard this tick — it's from the old session
+                    continue;
                 }
                 if let Some(ref bn) = *depth3.read().await {
-                    tracking_state.track_price(tick.price, tick.event_time);
-                    tracking_state.record_binance_trade(tick.event_time);
-                    tracking_state.record_price_sample(tick.event_time, tick.price);
-                    tracking_state.push_bollinger_price(tick.price);
-                    let mut rec = metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume);
-                    // Tag with session_id so per-session CSV files receive tick data
+                    { let _g = perf::TRACK_PRICE.start(); tracking_state.track_price(tick.price, tick.event_time); }
+                    { let _g = perf::RECORD_TRADE.start(); tracking_state.record_binance_trade(tick.event_time); }
+                    { let _g = perf::RECORD_SAMPLE.start(); tracking_state.record_price_sample(tick.event_time, tick.price); }
+                    { let _g = perf::PUSH_BOLLINGER.start(); tracking_state.push_bollinger_price(tick.price); }
+                    let mut rec = { let _g = perf::BUILD_TICK.start();
+                        metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume)
+                    };
                     rec.session_id = tick_state.recording_sessions.read().await.first().copied().unwrap_or(0);
                     // ─── Adaptive Risk Engine: macro fields + master signal ───────
                     {
+                        let _g = perf::ENGINE_LOCK.start();
                         let mut eng = tick_state.adaptive_engine.lock().await;
                         rec.macro_slope = eng.macro_slope();
                         rec.vfi_value = eng.vfi_value();
@@ -208,28 +197,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rec.predicted_bias = eng.predicted_bias().to_string();
                         rec.is_feedback_adjusted = eng.feedback_adjusted();
                         let is_fb = rec.is_feedback_adjusted > 0;
-                        let (master, cp_range, cp_valid) = eng.evaluate_master_signal(
-                            rec.binance_price, rec.poly_mid, rec.poly_spread,
-                            rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
-                            rec.poly_imbalance, rec.price_velocity,
-                            is_fb,
-                            tick.volume, tick.event_time,
-                            rec.tape_speed_flag, rec.absorption_ratio, rec.spoofing_flag,
-                        );
+                        let (master, cp_range, cp_valid) = { let _g2 = perf::EVAL_MASTER.start();
+                            eng.evaluate_master_signal(
+                                rec.binance_price, rec.poly_mid, rec.poly_spread,
+                                rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
+                                rec.poly_imbalance, rec.price_velocity,
+                                is_fb,
+                                tick.volume, tick.event_time,
+                                rec.tape_speed_flag, rec.absorption_ratio, rec.spoofing_flag,
+                            )
+                        };
                         rec.master_signal = master;
                         rec.cp_uncertainty_range = cp_range;
                         rec.cp_valid_signal = cp_valid;
                         // ─── Dynamic macro context (from shared state) ────────
-                        let mut ctx = tick_state.macro_ctx.write().await;
-                        eng.sync_to_context(&mut ctx);
-                        eng.update_dynamic_rsi(&mut ctx, tick.price);
-                        eng.check_momentum_trigger(&mut ctx);
-                        rec.dynamic_rsi = ctx.dynamic_rsi;
-                        rec.vfi_confidence = ctx.vfi_confidence;
-                        rec.db_accuracy_factor = ctx.db_accuracy_factor;
+                        { let _g3 = perf::MACRO_CTX_WRITE.start();
+                            let mut ctx = tick_state.macro_ctx.write().await;
+                            eng.sync_to_context(&mut ctx);
+                            { let _g4 = perf::UPDATE_RSI.start(); eng.update_dynamic_rsi(&mut ctx, tick.price); }
+                            { let _g5 = perf::CHECK_MOMENTUM.start(); eng.check_momentum_trigger(&mut ctx); }
+                            rec.dynamic_rsi = ctx.dynamic_rsi;
+                            rec.vfi_confidence = ctx.vfi_confidence;
+                            rec.db_accuracy_factor = ctx.db_accuracy_factor;
+                        }
                     }
-                    csv3.push(rec.clone());
-                    sm3.push(&rec);
+                    { let _g = perf::SM_PUSH.start(); sm3.push(&rec); }
                 }
             }
         });
@@ -391,16 +383,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        // Also purge legacy snapshot CSV
-                        let legacy = "hft_snapshots.csv";
-                        if let Ok(meta) = std::fs::metadata(legacy) {
-                            if let Ok(modified) = meta.modified() {
-                                let mod_time: chrono::DateTime<chrono::Utc> = modified.into();
-                                if mod_time < cutoff {
-                                    let _ = std::fs::remove_file(legacy);
-                                }
-                            }
-                        }
                     }
                     _ = shutdown_purge.recv() => { return; }
                 }
@@ -501,7 +483,6 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                 }
             }
             capture_fills_csv(state, fills).await;
-            capture_fills_db(state, fills).await;
         }
 
         AppMsg::Candles { interval, candles } => {
@@ -569,24 +550,7 @@ async fn capture_book_db(state: &AppState, side: &str, bids: &[PriceLevel], asks
     }
 }
 
-async fn capture_fills_db(state: &AppState, fills: &[crate::modules::core::worker::RecentFill]) {
-    let session_ids = state.recording_sessions.read().await.clone();
-    if session_ids.is_empty() { return; }
-    for fill in fills {
-        let btc_price = *state.btc_price.read().await;
-        let trade_side = match fill.side {
-            crate::modules::core::worker::OrderSide::Buy => "buy",
-            crate::modules::core::worker::OrderSide::Sell => "sell",
-        };
-        for &session_id in &session_ids {
-            if let Err(e) = session_repo::insert_session_trade(
-                state, session_id, &fill.outcome, trade_side, fill.price, fill.size, btc_price,
-            ).await { warn!("Session trade #{}: {}", session_id, e); }
-        }
-    }
-}
-
-/// Captura combinada: BOOK_UPDATE y TRADE usan el mismo pipeline CSV + DB (legacy).
+/// Captura combinada: BOOK_UPDATE y TRADE usan el mismo pipeline CSV + DB.
 async fn capture_combined(
     state: &AppState, _side: &str,
     poly_bids: &[PriceLevel], poly_asks: &[PriceLevel],
@@ -670,8 +634,6 @@ async fn capture_combined(
         rec.db_accuracy_factor = ctx.db_accuracy_factor;
     }
 
-    state.csv_logger.push(rec.clone());
-
     // Per-session CSV file (multi-writer: each session gets its own file)
     state.session_manager.push(&rec);
 
@@ -706,7 +668,7 @@ async fn capture_combined(
     state.mem_hft.write().await.push(rec.clone());
 
     // DB insert (only if PostgreSQL is available) — write to all recording sessions
-    if let Some(pool) = state.db.as_ref() {
+    if let Some(_pool) = state.db.as_ref() {
         for &sid in &session_ids {
             let _ = sqlx::query(
                 "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
@@ -720,8 +682,20 @@ async fn capture_combined(
             .bind(sid)
             .bind(rec.latencia_ms)
             .bind(rec.binance_micro_price)
-            .execute(pool)
+            .execute(_pool)
             .await;
+        }
+        // For Trade events: also insert into session_trades table (previously capture_fills_db)
+        if evt_type == EventType::Trade && !session_ids.is_empty() {
+            let btc_price = *state.btc_price.read().await;
+            let db_trade_side = match trade_side {
+                "BUY" => "buy", "SELL" => "sell", _ => trade_side,
+            };
+            for &sid in &session_ids {
+                if let Err(e) = session_repo::insert_session_trade(
+                    state, sid, _side, db_trade_side, trade_price, trade_size, btc_price,
+                ).await { warn!("Session trade #{}: {}", sid, e); }
+            }
         }
     }
 }

@@ -18,6 +18,7 @@ use crate::modules::core::persistence as db;
 use crate::modules::core::state::AppState;
 use crate::modules::core::worker::{BtcPriceProvider, CandleInterval, CmdMsg, OrderSide, Outcome};
 use crate::modules::db::api as db_api;
+use crate::modules::hft::perf;
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/analysis/candles",get(analysis_candles))
         .route("/api/analysis/pnl",    get(analysis_pnl))
         .route("/api/analysis/fills",  get(analysis_fills))
+        // Performance counters
+        .route("/api/perf",            get(get_perf))
+        .route("/api/perf/reset",      post(reset_perf))
         // WebSocket
         .route("/ws",                  get(ws_handler))
         .with_state(Arc::clone(&state));
@@ -662,6 +666,20 @@ async fn analysis_fills(
         Ok(rows) => Json(json!(rows)),
         Err(e)   => Json(json!({"error": e.to_string()})),
     }
+}
+
+// ─── Performance Counters ────────────────────────────────────────────────────
+
+async fn get_perf() -> Response {
+    let body = perf::dump_json();
+    (axum::http::StatusCode::OK,
+     [("Content-Type", "application/json")],
+     body).into_response()
+}
+
+async fn reset_perf() -> Json<Value> {
+    perf::reset_all();
+    Json(json!({"ok": true, "message": "Performance counters reset"}))
 }
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
