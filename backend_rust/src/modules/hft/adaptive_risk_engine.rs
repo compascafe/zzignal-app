@@ -198,6 +198,8 @@ pub struct ConformalPredictor {
     pub weight_vfi:      f64,
     pub weight_macd:     f64,
     pub weight_rsi:      f64,
+    /// Bollinger Band mean-reversion weight.
+    pub weight_bb:       f64,
     /// Current CP confidence level (0.95 or 0.99).
     pub confidence_level: f64,
 }
@@ -219,6 +221,7 @@ impl ConformalPredictor {
             weight_vfi:      0.6,
             weight_macd:     0.3,
             weight_rsi:      0.2,
+            weight_bb:       0.35,
             confidence_level: 0.95,
         }
     }
@@ -307,12 +310,13 @@ impl ConformalPredictor {
         if vfi_sign.abs() > 0.01 {
             self.weight_vfi = (self.weight_vfi + delta * vfi_sign.signum() * outcome_sign).clamp(0.1, 0.9);
         }
-        // MACD/RSI get smaller adjustments
+        // MACD/RSI/BB get smaller adjustments
         self.weight_macd = (self.weight_macd + delta * 0.5 * outcome_sign).clamp(0.05, 0.6);
         self.weight_rsi  = (self.weight_rsi  + delta * 0.5 * outcome_sign).clamp(0.05, 0.5);
+        self.weight_bb   = (self.weight_bb   + delta * 0.7 * outcome_sign).clamp(0.05, 0.7);
 
-        info!("Reinforcement: correct={} w_sma={:.3} w_vfi={:.3} w_macd={:.3} w_rsi={:.3}",
-            correct, self.weight_sma, self.weight_vfi, self.weight_macd, self.weight_rsi);
+        info!("Reinforcement: correct={} w_sma={:.3} w_vfi={:.3} w_macd={:.3} w_rsi={:.3} w_bb={:.3}",
+            correct, self.weight_sma, self.weight_vfi, self.weight_macd, self.weight_rsi, self.weight_bb);
     }
 
     /// Adjust CP confidence level based on recent accuracy.
@@ -568,9 +572,8 @@ impl AdaptiveRiskEngine {
         self.cp.calibrate(&macd_residuals, &rsi_residuals, &price_residuals);
     }
 
-    /// Evaluate the master signal for a given tick context.
-    /// Returns (master_signal, cp_uncertainty_range, cp_valid_signal).
-    /// master_signal: 0=none, 1=Buy, 2=Sell
+    /// Bollinger Band signal with Conformal Prediction + Volume confirmation.
+    /// Returns detailed mean reversion analysis.
     pub fn evaluate_master_signal(
         &self,
         binance_price:    f64,
@@ -584,37 +587,60 @@ impl AdaptiveRiskEngine {
         is_feedback_adj:  bool,
     ) -> (u8, f64, u8) {
         let cp_range = self.cp.uncertainty_range(binance_price);
+        let band_width = bollinger_upper - bollinger_lower;
 
-        // ─── Step 1: CP validation on Bollinger extremes (Pasche et al., 2026) ──
-        let bb_extreme = price_below_bb(binance_price, bollinger_lower)
-            || price_above_bb(binance_price, bollinger_upper);
+        // ─── Step 1: Z-score (how many std deviations from SMA) ──────────────
+        let half_width = band_width / 2.0;
+        let z_score = if half_width > 0.0 {
+            (binance_price - bollinger_sma) / (half_width / 2.0) // dividing by 2σ
+        } else { 0.0 };
+
+        // ─── Step 2: CP validation — is this deviation statistically significant? ──
         let cp_extreme = self.cp.is_price_extreme(binance_price, bollinger_sma);
-        // Signal is only valid if BOTH BB AND CP flag an extreme event
-        let cp_valid: u8 = if bb_extreme && cp_extreme { 1 } else { 0 };
+        let cp_valid: u8 = if cp_extreme { 1 } else { 0 };
 
-        // ─── Step 2: Macro confluence ───────────────────────────────────────────
-        let macro_up   = self.macro_snap.macro_slope > 0.0;
-        let macro_down = self.macro_snap.macro_slope < 0.0;
+        // ─── Step 3: Volume confirmation — MACD + VFI alignment ──────────────
+        let macd_bullish = self.macro_snap.macd_hist > 0.0;
+        let macd_bearish = self.macro_snap.macd_hist < 0.0;
+        let macd_accelerating = macd_bullish && self.macro_snap.macd_line > self.macro_snap.macd_signal;
+        let macd_decelerating = macd_bearish && self.macro_snap.macd_line < self.macro_snap.macd_signal;
 
-        // ─── Step 3: VFI confirmation ───────────────────────────────────────────
-        let vfi_up   = self.macro_snap.vfi > 0.0;
-        let vfi_down = self.macro_snap.vfi < 0.0;
+        let vfi_bullish = self.macro_snap.vfi > 0.1;
+        let vfi_bearish = self.macro_snap.vfi < -0.1;
+        let vfi_strong = self.macro_snap.vfi.abs() > 0.5;
 
-        // ─── Step 4: Spread check ───────────────────────────────────────────────
         let spread_ok = poly_spread <= 0.05;
 
-        // ─── Step 5: Confluence ─────────────────────────────────────────────────
+        // ─── Step 4: Mean Reversion Signal ──────────────────────────────────
+        // LONG: price below lower BB → expect reversion UP
+        // Must have: CP extreme + volume confirmation (MACD turning up, VFI strong)
+        let below_lower = binance_price <= bollinger_lower;
+        let long_signal = below_lower && cp_valid == 1 && spread_ok
+            && (macd_accelerating || (macd_bullish && vfi_strong))
+            && (vfi_bullish || poly_imbalance > 1.01);
+
+        // SHORT: price above upper BB → expect reversion DOWN
+        // Must have: CP extreme + volume confirmation (MACD turning down, VFI strong)
+        let above_upper = binance_price >= bollinger_upper;
+        let short_signal = above_upper && cp_valid == 1 && spread_ok
+            && (macd_decelerating || (macd_bearish && vfi_strong))
+            && (vfi_bearish || poly_imbalance < 0.99);
+
         let mut master: u8 = 0;
 
-        let buy_conditions  = macro_up && vfi_up && spread_ok
-            && poly_imbalance > 1.02 && price_velocity > 0.0;
-        let sell_conditions = macro_down && vfi_down && spread_ok
-            && poly_imbalance < 0.98 && price_velocity < 0.0;
+        if long_signal && price_velocity > -0.01 {
+            master = 1; // Mean reversion: Buy (price bounced off lower BB)
+        } else if short_signal && price_velocity < 0.01 {
+            master = 2; // Mean reversion: Sell (price rejected at upper BB)
+        }
 
-        if buy_conditions && cp_valid == 1 {
-            master = 1; // Buy (mean reversion: price below lower BB → expect bounce)
-        } else if sell_conditions && cp_valid == 1 {
-            master = 2; // Sell (price above upper BB → expect drop)
+        // Log BB details when signal fires
+        if master > 0 {
+            let band = if master == 1 { "LOWER" } else { "UPPER" };
+            let macd_state = if macd_accelerating { "ACCEL↑" } else if macd_decelerating { "DECEL↓" }
+                else if macd_bullish { "BULL" } else if macd_bearish { "BEAR" } else { "FLAT" };
+            info!("BB MeanReversion: {} | z={:.2} cp_valid={} macd={} vfi={:.3} imb={:.3} spread={:.4}",
+                band, z_score, cp_valid, macd_state, self.macro_snap.vfi, poly_imbalance, poly_spread);
         }
 
         let feedback_bit: u8 = if is_feedback_adj { 1 } else { 0 };
@@ -755,6 +781,7 @@ impl AdaptiveRiskEngine {
             self.cp.weight_vfi  = w["vfi"].as_f64().unwrap_or(self.cp.weight_vfi);
             self.cp.weight_macd = w["macd"].as_f64().unwrap_or(self.cp.weight_macd);
             self.cp.weight_rsi  = w["rsi"].as_f64().unwrap_or(self.cp.weight_rsi);
+            self.cp.weight_bb   = w["bb"].as_f64().unwrap_or(self.cp.weight_bb);
         }
         info!("Wisdom imported: CP conf={:.2} weights sma={:.3} vfi={:.3} macd={:.3} rsi={:.3}",
             self.cp.confidence_level, self.cp.weight_sma, self.cp.weight_vfi, self.cp.weight_macd, self.cp.weight_rsi);

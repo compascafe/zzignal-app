@@ -288,6 +288,7 @@ async fn get_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
         "weight_vfi":         eng.cp.weight_vfi,
         "weight_macd":        eng.cp.weight_macd,
         "weight_rsi":         eng.cp.weight_rsi,
+        "weight_bb":          eng.cp.weight_bb,
         "feedback_count":     eng.cp.feedback_count,
         "auto_widened":       eng.cp.auto_widened,
         "dynamic_rsi":        ctx.dynamic_rsi,
@@ -418,6 +419,7 @@ async fn build_wisdom_json(s: &AppState) -> Value {
             "vfi":  eng.cp.weight_vfi,
             "macd": eng.cp.weight_macd,
             "rsi":  eng.cp.weight_rsi,
+            "bb":   eng.cp.weight_bb,
         },
         "context": {
             "dynamic_rsi":        ctx.dynamic_rsi,
