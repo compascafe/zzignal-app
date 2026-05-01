@@ -168,10 +168,9 @@ async fn process_sessions(state: Arc<AppState>) {
             parents_to_replenish.push(pid);
         }
 
-        // ─── Feedback (best-effort, never blocks the stop) ───────────────────
-        let predicted_bias = if let Ok(eng) = state.adaptive_engine.try_lock() {
-            eng.predicted_bias().to_string()
-        } else { continue }; // skip feedback if engine busy
+        // ─── Feedback (runs in own spawn, lock().await is safe) ─────────────
+        let mut eng = state.adaptive_engine.lock().await;
+        let predicted_bias = eng.predicted_bias().to_string();
         if predicted_bias == "IDLE" { continue; }
 
         let actual_outcome = session.outcome_result.clone().unwrap_or_else(|| "tie".into());
@@ -180,7 +179,7 @@ async fn process_sessions(state: Arc<AppState>) {
 
         // Insert/complete session log
         let start_price = session.btc_price_start;
-        if let Ok(eng) = state.adaptive_engine.try_lock() {
+        {
             let ctx = state.macro_ctx.read().await;
             let _ = repository::insert_session_log(
                 state.db.as_ref(), session.id, &predicted_bias,
@@ -192,18 +191,17 @@ async fn process_sessions(state: Arc<AppState>) {
             let _ = repository::complete_session_log(
                 state.db.as_ref(), session.id, &actual_outcome, accuracy,
             ).await;
-            // Feedback loop
-            drop(eng);
         }
-        if let Ok(mut eng) = state.adaptive_engine.try_lock() {
-            eng.cp_mut().record_accuracy(accuracy);
-            if !accuracy { eng.cp_mut().robbins_monro_update(0.5); }
-            if eng.cp_mut().should_auto_widen() { eng.cp_mut().auto_widen(); }
-            let vfi_sign = if eng.vfi_value() > 0.1 { 1.0 } else if eng.vfi_value() < -0.1 { -1.0 } else { 0.0 };
-            let sma_sign = if eng.macro_slope() > 0.0001 { 1.0 } else if eng.macro_slope() < -0.0001 { -1.0 } else { 0.0 };
-            eng.cp_mut().reinforce_weights(accuracy, vfi_sign, sma_sign);
-            eng.cp_mut().adjust_confidence_level();
-        }
+
+        // Reinforce learning
+        eng.cp_mut().record_accuracy(accuracy);
+        if !accuracy { eng.cp_mut().robbins_monro_update(0.5); }
+        if eng.cp_mut().should_auto_widen() { eng.cp_mut().auto_widen(); }
+        let vfi_sign = if eng.vfi_value() > 0.1 { 1.0 } else if eng.vfi_value() < -0.1 { -1.0 } else { 0.0 };
+        let sma_sign = if eng.macro_slope() > 0.0001 { 1.0 } else if eng.macro_slope() < -0.0001 { -1.0 } else { 0.0 };
+        eng.cp_mut().reinforce_weights(accuracy, vfi_sign, sma_sign);
+        eng.cp_mut().adjust_confidence_level();
+        drop(eng);
     }
 
     // 2. Auto-generar siguiente hijo para padres indefinidos
