@@ -680,13 +680,14 @@ impl AdaptiveRiskEngine {
             && cp_range > dyn_threshold * 0.5;
         let cp_valid: u8 = if cp_extreme { 1 } else { 0 };
 
-        let spread_ok = poly_spread <= 0.05;
+        let spread_ok = poly_spread > 0.0 && poly_spread <= 0.05;
+        let data_valid = poly_spread > 0.0 && poly_imbalance > 0.0 && bollinger_sma > 0.0;
         let mut master: u8 = 0;
 
         // ──────────────────────────────────────────────────────────────────────
         // LAYER 1: Microstructure (tape speed burst) — highest priority
         // ──────────────────────────────────────────────────────────────────────
-        if master == 0 && tape_speed_flag > 0 && absorption_ratio > 0.7 && spread_ok {
+        if master == 0 && data_valid && tape_speed_flag > 0 && absorption_ratio > 0.7 && spread_ok {
             let ob_bull = poly_imbalance > 1.1;
             let ob_bear = poly_imbalance < 0.9;
             if ob_bull && price_velocity > 0.0 {
@@ -705,10 +706,10 @@ impl AdaptiveRiskEngine {
         // ──────────────────────────────────────────────────────────────────────
         // LAYER 2: Momentum (RSI extremes + velocity reversal)
         // ──────────────────────────────────────────────────────────────────────
-        if master == 0 {
+        if master == 0 && data_valid {
             let rsi = self.macro_snap.rsi14;
-            let velocity_reversing_up = price_velocity > -0.0003 && price_velocity < 0.001;
-            let velocity_reversing_down = price_velocity > -0.001 && price_velocity < 0.0003;
+            let velocity_reversing_up = price_velocity > -0.0003 && price_velocity < 0.001 && price_velocity != 0.0;
+            let velocity_reversing_down = price_velocity > -0.001 && price_velocity < 0.0003 && price_velocity != 0.0;
 
             if rsi < 25.0 && velocity_reversing_up && spread_ok {
                 master = 5; // MOMENTUM BUY
@@ -724,7 +725,7 @@ impl AdaptiveRiskEngine {
         // ──────────────────────────────────────────────────────────────────────
         // LAYER 3: Hunting (volume surge — overrides macro bias)
         // ──────────────────────────────────────────────────────────────────────
-        if master == 0 && hunting {
+        if master == 0 && hunting && data_valid {
             let ob_bull = poly_imbalance > 1.05;
             let ob_bear = poly_imbalance < 0.95;
             let velocity_surge = price_velocity.abs() > 0.0005;
@@ -743,7 +744,7 @@ impl AdaptiveRiskEngine {
         // ──────────────────────────────────────────────────────────────────────
         // LAYER 4: Bollinger Band mean-reversion (CP-validated)
         // ──────────────────────────────────────────────────────────────────────
-        if master == 0 {
+        if master == 0 && data_valid {
             let vfi_bull = self.macro_snap.vfi > 0.1;
             let vfi_bear = self.macro_snap.vfi < -0.1;
             let vfi_strong = self.macro_snap.vfi.abs() > 0.5;
