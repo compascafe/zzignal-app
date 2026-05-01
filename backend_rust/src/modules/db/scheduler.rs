@@ -151,6 +151,7 @@ async fn process_sessions(state: Arc<AppState>) {
     }
 
     let mut parents_to_replenish: Vec<i32> = Vec::new();
+    let mut stopped_ids: Vec<i32> = Vec::new(); // defer recording_sessions cleanup
 
     for session in to_stop {
         let btc_price = *state.btc_price.read().await;
@@ -167,16 +168,12 @@ async fn process_sessions(state: Arc<AppState>) {
             _ => "tie".to_string(),
         };
 
-        // Flush then close session CSV file
-        let _ = state.session_manager.flush(session.id);
-        let _ = state.session_manager.stop_session(session.id);
-
         // ─── STOP in DB (always, before any other writes) ────────────────────
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("stop_session #{} FAILED: {}", session.id, e);
         } else {
-            state.recording_sessions.write().await.retain(|&sid| sid != session.id);
             info!("[SESSION STOPPED] #{} → completed", session.id);
+            stopped_ids.push(session.id);
         }
         if let Some(pid) = parent_id {
             parents_to_replenish.push(pid);
@@ -289,6 +286,13 @@ async fn process_sessions(state: Arc<AppState>) {
             info!("Sesión #{} grabando. Strike price (BTC): {:?}", session.id, btc_price);
         }
     }
+
+    // 5. Deferred cleanup: flush and close OLD sessions AFTER new ones are started
+    for sid in &stopped_ids {
+        let _ = state.session_manager.flush(*sid);
+        state.session_manager.stop_session(*sid).ok();
+    }
+    state.recording_sessions.write().await.retain(|sid| !stopped_ids.contains(sid));
 }
 
 /// Crea el siguiente hijo para un padre indefinido si no tiene hijos activos.
