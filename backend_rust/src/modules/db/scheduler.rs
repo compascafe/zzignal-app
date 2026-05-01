@@ -303,7 +303,7 @@ async fn auto_generate_child(state: &AppState, parent_id: i32) {
 
 /// Redondea a la siguiente frontera de chunk si no está ya alineado.
 /// Ej: 12:55 con chunk=15 → 13:00. 13:15 con chunk=15 → 13:15 (ya alineado).
-fn snap_to_next_chunk(ts: chrono::DateTime<Utc>, chunk_min: i32) -> chrono::DateTime<Utc> {
+pub(crate) fn snap_to_next_chunk(ts: chrono::DateTime<Utc>, chunk_min: i32) -> chrono::DateTime<Utc> {
     let chunk_secs = (chunk_min as i64) * 60;
     let secs = ts.timestamp();
     if secs % chunk_secs == 0 {

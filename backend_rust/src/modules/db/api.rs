@@ -18,7 +18,8 @@ use zip::write::SimpleFileOptions;
 use crate::modules::core::state::AppState;
 use crate::modules::db::models::ScheduledExecution;
 use crate::modules::db::repository;
-use crate::modules::db::scheduler::floor_to_chunk;
+use crate::modules::db::scheduler::snap_to_next_chunk;
+use crate::modules::hft::adaptive_risk_engine::warmup_fetch_and_compute;
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -235,8 +236,8 @@ async fn start_session(
             warn!("No se pudo iniciar padre #{}: {}", parent_id, e);
         }
 
-        // 3. Create first child — snap to previous chunk boundary for clean labels
-        let child_start = floor_to_chunk(parent_start, chunk_min);
+        // 3. Create first child — snap to NEXT chunk boundary (9:27 → 9:30)
+        let child_start = snap_to_next_chunk(parent_start, chunk_min);
         let child_end = child_start + Duration::minutes(chunk_min as i64);
         let child_name = child_session_name(child_start, chunk_min);
         let child_id = match repository::create_session(&s, &child_name, child_start, child_end, chunk_min, depth, Some(parent_id)).await {
@@ -247,7 +248,32 @@ async fn start_session(
             }
         };
 
-        // 4. Start child immediately
+        // 4. Adaptive Risk Engine: refresh warm‑up + feedback from history for this child
+        {
+            let recent_accuracy = repository::get_recent_accuracy(s.db.as_ref(), 16).await;
+            let mut eng = s.adaptive_engine.lock().await;
+            for correct in &recent_accuracy {
+                eng.cp_mut().record_accuracy(*correct);
+            }
+            if eng.cp_mut().should_auto_widen() {
+                eng.cp_mut().auto_widen();
+            }
+        }
+        {
+            let warm_state = Arc::clone(&s);
+            let dur = chunk_min;
+            tokio::spawn(async move {
+                match warmup_fetch_and_compute().await {
+                    Ok(result) => {
+                        warm_state.adaptive_engine.lock().await.apply_warmup_result(result);
+                        info!("AdaptiveRiskEngine: warm‑up refreshed for {}-min child (indefinite start)", dur);
+                    }
+                    Err(e) => warn!("AdaptiveRiskEngine refresh failed on indefinite start: {e}"),
+                }
+            });
+        }
+
+        // 5. Start child immediately
         s.recording_sessions.write().await.push(child_id);
         if let Err(e) = s.session_manager.start_session(child_id) {
             warn!("SessionManager start child #{}: {}", child_id, e);
