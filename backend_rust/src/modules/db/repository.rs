@@ -447,6 +447,17 @@ pub async fn start_session_recording(state: &AppState, id: i32, btc_price: Optio
     Ok(())
 }
 
+pub async fn get_stale_children(state: &AppState) -> Result<Vec<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = sqlx::query_as::<_, RecordingSession>(
+            &format!("{SESS_COLS} WHERE status = 'recording' AND parent_id IS NOT NULL AND started_at IS NOT NULL AND started_at + (duration_min * INTERVAL '1 minute') < NOW()")
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    } else { Ok(vec![]) }
+}
+
 pub async fn get_sessions_to_stop(state: &AppState) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         let rows = sqlx::query_as::<_, RecordingSession>(

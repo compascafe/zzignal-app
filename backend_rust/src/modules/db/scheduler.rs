@@ -130,10 +130,16 @@ async fn process_pending_executions(state: Arc<AppState>) {
 
 async fn process_sessions(state: Arc<AppState>) {
     // 1. Detener sesiones que ya pasaron su scheduled_end
-    let to_stop = match repository::get_sessions_to_stop(&state).await {
+    let mut to_stop = match repository::get_sessions_to_stop(&state).await {
         Ok(list) => list,
         Err(e)   => { warn!("Session scheduler stop query: {}", e); return; }
     };
+
+    // Also force-stop children that exceeded their duration (fallback for missed scheduled_end)
+    if let Ok(orphans) = repository::get_stale_children(&state).await {
+        to_stop.extend(orphans);
+    }
+
     let mut parents_to_replenish: Vec<i32> = Vec::new();
 
     for session in to_stop {
