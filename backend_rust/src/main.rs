@@ -218,6 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rec.cp_valid_signal = cp_valid;
                         // ─── Dynamic macro context (from shared state) ────────
                         let mut ctx = tick_state.macro_ctx.write().await;
+                        eng.sync_to_context(&mut ctx);
                         eng.update_dynamic_rsi(&mut ctx, tick.price);
                         eng.check_momentum_trigger(&mut ctx);
                         rec.dynamic_rsi = ctx.dynamic_rsi;

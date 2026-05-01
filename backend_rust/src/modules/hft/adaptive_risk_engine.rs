@@ -46,12 +46,32 @@ pub struct Candle1m {
 /// Updated each minute by a background task, read by the tick consumer.
 #[derive(Debug, Clone)]
 pub struct MacroContext {
-    pub dynamic_rsi:       f64,   // Rolling RSI updated each minute
-    pub vfi_confidence:    f64,   // VFI volume strength ratio (0-1 normalized)
-    pub db_accuracy_factor: f64,  // Risk multiplier from historical memory (1.0=neutral)
-    pub weighted_bias:     String,// VFI-weighted predicted bias (UP/DOWN/NEUTRAL)
-    pub last_rsi:          f64,   // Previous RSI value (for momentum cross detection)
-    pub momentum_flipped:  bool,  // True if RSI crossed above 30 this session
+    pub dynamic_rsi:       f64,
+    pub vfi_confidence:    f64,
+    pub db_accuracy_factor: f64,
+    pub weighted_bias:     String,
+    pub last_rsi:          f64,
+    pub momentum_flipped:  bool,
+    // ─── Cached macro snapshot (updated each tick, no engine lock needed for reads) ──
+    pub sma200:            f64,
+    pub macro_slope:       f64,
+    pub macd_hist:         f64,
+    pub rsi14:             f64,
+    pub vfi:               f64,
+    pub predicted_bias:    String,
+    // ─── Cached CP + wisdom state (updated each tick) ─────────────────────────
+    pub cp_confidence:     f64,
+    pub cp_quantile:       f64,
+    pub cp_alpha:          f64,
+    pub weight_sma:        f64,
+    pub weight_vfi:        f64,
+    pub weight_macd:       f64,
+    pub weight_rsi:        f64,
+    pub weight_bb:         f64,
+    pub accuracy_24h:      f64,
+    pub auto_widened:      bool,
+    pub feedback_count:    u64,
+    pub mode:              String, // ACTIVE | OBSERVATION | CALIBRATING
 }
 
 impl Default for MacroContext {
@@ -63,6 +83,24 @@ impl Default for MacroContext {
             weighted_bias:      String::new(),
             last_rsi:           50.0,
             momentum_flipped:   false,
+            sma200:             0.0,
+            macro_slope:        0.0,
+            macd_hist:          0.0,
+            rsi14:              50.0,
+            vfi:                0.0,
+            predicted_bias:     String::new(),
+            cp_confidence:      0.95,
+            cp_quantile:        0.0,
+            cp_alpha:           0.1,
+            weight_sma:         0.4,
+            weight_vfi:         0.6,
+            weight_macd:        0.3,
+            weight_rsi:         0.2,
+            weight_bb:          0.35,
+            accuracy_24h:       0.5,
+            auto_widened:       false,
+            feedback_count:     0,
+            mode:               "ACTIVE".into(),
         }
     }
 }
@@ -738,6 +776,32 @@ impl AdaptiveRiskEngine {
             }
         }
         false
+    }
+
+    /// Sync engine state into MacroContext for lock-free API reads.
+    pub fn sync_to_context(&self, ctx: &mut MacroContext) {
+        ctx.sma200      = self.macro_snap.sma200;
+        ctx.macro_slope  = self.macro_snap.macro_slope;
+        ctx.macd_hist   = self.macro_snap.macd_hist;
+        ctx.rsi14       = self.macro_snap.rsi14;
+        ctx.vfi         = self.macro_snap.vfi;
+        ctx.predicted_bias = self.macro_snap.predicted_bias.clone();
+        ctx.cp_confidence = self.cp.confidence_level;
+        ctx.cp_quantile   = self.cp.quantile_price;
+        ctx.cp_alpha      = self.cp.alpha;
+        ctx.weight_sma    = self.cp.weight_sma;
+        ctx.weight_vfi    = self.cp.weight_vfi;
+        ctx.weight_macd   = self.cp.weight_macd;
+        ctx.weight_rsi    = self.cp.weight_rsi;
+        ctx.weight_bb     = self.cp.weight_bb;
+        ctx.auto_widened  = self.cp.auto_widened;
+        ctx.feedback_count = self.cp.feedback_count;
+        let acc = if self.cp.accuracy_window.is_empty() { 0.5 }
+            else { self.cp.accuracy_window.iter().filter(|&&b| b).count() as f64 / self.cp.accuracy_window.len() as f64 };
+        ctx.accuracy_24h = acc;
+        ctx.mode = if acc < 0.4 { "OBSERVATION".into() }
+            else if self.cp.auto_widened { "CALIBRATING".into() }
+            else { "ACTIVE".into() };
     }
 
     /// Accessors for CSV column population.

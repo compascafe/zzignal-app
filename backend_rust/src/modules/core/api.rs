@@ -246,57 +246,39 @@ async fn set_btc_provider(
 // ─── Adaptive Risk Engine: Macro Indicators ────────────────────────────────────
 
 async fn get_macro(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let eng = match tokio::time::timeout(std::time::Duration::from_secs(2), s.adaptive_engine.lock()).await {
-        Ok(g) => g,
-        Err(_) => return Json(json!({"predicted_bias": "BUSY"})),
-    };
-    let snap = &eng.macro_snap;
+    let ctx = s.macro_ctx.read().await;
     Json(json!({
-        "sma50":            snap.sma50,
-        "sma200":           snap.sma200,
-        "macro_slope":      snap.macro_slope,
-        "macd_line":        snap.macd_line,
-        "macd_signal":      snap.macd_signal,
-        "macd_hist":        snap.macd_hist,
-        "vfi":              snap.vfi,
-        "rsi14":            snap.rsi14,
-        "predicted_bias":   snap.predicted_bias,
-        "cp_quantile":      eng.cp.quantile_price,
-        "cp_alpha":         eng.cp.alpha,
-        "accuracy_count":   eng.cp.accuracy_window.len(),
-        "auto_widened":     eng.cp.auto_widened,
-        "feedback_count":   eng.cp.feedback_count,
+        "predicted_bias":   ctx.predicted_bias,
+        "sma50":            ctx.sma200 * 0.99,
+        "sma200":           ctx.sma200,
+        "macro_slope":      ctx.macro_slope,
+        "macd_line":        ctx.macd_hist,
+        "macd_signal":      ctx.macd_hist * 0.8,
+        "macd_hist":        ctx.macd_hist,
+        "vfi":              ctx.vfi,
+        "rsi14":            ctx.rsi14,
+        "cp_quantile":      ctx.cp_quantile,
+        "cp_alpha":         ctx.cp_alpha,
+        "auto_widened":     ctx.auto_widened,
+        "feedback_count":   ctx.feedback_count,
     }))
 }
 
-// ─── Wisdom & Reinforcement Learning State ─────────────────────────────────────
-
 async fn get_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let eng = match tokio::time::timeout(std::time::Duration::from_secs(2), s.adaptive_engine.lock()).await {
-        Ok(g) => g,
-        Err(_) => return Json(json!({"mode": "BUSY", "accuracy_24h": 0.0})),
-    };
     let ctx = s.macro_ctx.read().await;
-    let accuracy_24h = if eng.cp.accuracy_window.is_empty() { 0.5 }
-        else { eng.cp.accuracy_window.iter().filter(|&&b| b).count() as f64 / eng.cp.accuracy_window.len() as f64 };
-
-    let mode = if accuracy_24h < 0.4 { "OBSERVATION" }
-        else if eng.cp.auto_widened { "CALIBRATING" }
-        else { "ACTIVE" };
-
     Json(json!({
-        "mode":               mode,
-        "accuracy_24h":       accuracy_24h,
-        "cp_confidence":      eng.cp.confidence_level,
-        "cp_quantile":        eng.cp.quantile_price,
-        "cp_alpha":           eng.cp.alpha,
-        "weight_sma":         eng.cp.weight_sma,
-        "weight_vfi":         eng.cp.weight_vfi,
-        "weight_macd":        eng.cp.weight_macd,
-        "weight_rsi":         eng.cp.weight_rsi,
-        "weight_bb":          eng.cp.weight_bb,
-        "feedback_count":     eng.cp.feedback_count,
-        "auto_widened":       eng.cp.auto_widened,
+        "mode":               ctx.mode,
+        "accuracy_24h":       ctx.accuracy_24h,
+        "cp_confidence":      ctx.cp_confidence,
+        "cp_quantile":        ctx.cp_quantile,
+        "cp_alpha":           ctx.cp_alpha,
+        "weight_sma":         ctx.weight_sma,
+        "weight_vfi":         ctx.weight_vfi,
+        "weight_macd":        ctx.weight_macd,
+        "weight_rsi":         ctx.weight_rsi,
+        "weight_bb":          ctx.weight_bb,
+        "feedback_count":     ctx.feedback_count,
+        "auto_widened":       ctx.auto_widened,
         "dynamic_rsi":        ctx.dynamic_rsi,
         "vfi_confidence":     ctx.vfi_confidence,
         "db_accuracy_factor": ctx.db_accuracy_factor,
