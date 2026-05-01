@@ -738,6 +738,28 @@ impl AdaptiveRiskEngine {
     pub fn feedback_adjusted(&self) -> u8 {
         if self.cp.auto_widened { 1 } else { 0 }
     }
+
+    /// Import wisdom state from a JSON value (from wisdom_state.json).
+    /// Restores CP calibration, weights, and confidence level.
+    pub fn import_wisdom(&mut self, wisdom: &serde_json::Value) -> Result<(), String> {
+        let cp = wisdom.get("cp").ok_or("missing cp")?;
+        self.cp.confidence_level = cp["confidence_level"].as_f64().unwrap_or(self.cp.confidence_level);
+        self.cp.quantile_macd    = cp["quantile_macd"].as_f64().unwrap_or(self.cp.quantile_macd);
+        self.cp.quantile_rsi     = cp["quantile_rsi"].as_f64().unwrap_or(self.cp.quantile_rsi);
+        self.cp.quantile_price   = cp["quantile_price"].as_f64().unwrap_or(self.cp.quantile_price);
+        self.cp.alpha            = cp["alpha"].as_f64().unwrap_or(self.cp.alpha);
+        self.cp.feedback_count   = cp["feedback_count"].as_u64().unwrap_or(self.cp.feedback_count);
+
+        if let Some(w) = wisdom.get("weights") {
+            self.cp.weight_sma  = w["sma"].as_f64().unwrap_or(self.cp.weight_sma);
+            self.cp.weight_vfi  = w["vfi"].as_f64().unwrap_or(self.cp.weight_vfi);
+            self.cp.weight_macd = w["macd"].as_f64().unwrap_or(self.cp.weight_macd);
+            self.cp.weight_rsi  = w["rsi"].as_f64().unwrap_or(self.cp.weight_rsi);
+        }
+        info!("Wisdom imported: CP conf={:.2} weights sma={:.3} vfi={:.3} macd={:.3} rsi={:.3}",
+            self.cp.confidence_level, self.cp.weight_sma, self.cp.weight_vfi, self.cp.weight_macd, self.cp.weight_rsi);
+        Ok(())
+    }
 }
 
 // ─── Binance REST API ─────────────────────────────────────────────────────────

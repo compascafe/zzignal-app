@@ -35,7 +35,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/macro",           get(get_macro))
         // Wisdom & RL state
         .route("/api/wisdom",          get(get_wisdom))
+        .route("/api/wisdom/save",     post(snapshot_wisdom))
+        .route("/api/wisdom/list",     get(list_wisdom_snapshots))
         .route("/api/wisdom/export",   get(export_wisdom))
+        .route("/api/wisdom/export-bulk",get(export_wisdom_bulk))
+        .route("/api/wisdom/import",   post(import_wisdom))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -323,6 +327,104 @@ async fn export_wisdom(State(s): State<Arc<AppState>>) -> Response {
      [("Content-Type", "application/json"),
       ("Content-Disposition", "attachment; filename=\"wisdom_state.json\"")],
      body).into_response()
+}
+
+async fn snapshot_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let wisdom = build_wisdom_json(&s).await;
+    let dir = "wisdom";
+    std::fs::create_dir_all(dir).ok();
+    let ts = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    let path = format!("{}/wisdom_state_{}.json", dir, ts);
+    let body = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
+    match std::fs::write(&path, &body) {
+        Ok(_) => Json(json!({"ok": true, "path": path, "timestamp": ts})),
+        Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
+    }
+}
+
+async fn list_wisdom_snapshots() -> Json<Value> {
+    let dir = "wisdom";
+    let mut files: Vec<Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".json") {
+                let meta = entry.metadata().ok();
+                files.push(json!({
+                    "name": name,
+                    "size": meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                    "modified": meta.and_then(|m| m.modified().ok())
+                        .map(|t| {
+                            let dt: chrono::DateTime<chrono::Utc> = t.into();
+                            dt.to_rfc3339()
+                        }).unwrap_or_default(),
+                }));
+            }
+        }
+    }
+    files.sort_by(|a, b| b["name"].as_str().cmp(&a["name"].as_str()));
+    Json(json!(files))
+}
+
+async fn export_wisdom_bulk() -> Response {
+    use std::io::Write;
+    let dir = "wisdom";
+    let mut zip_buf = Vec::new();
+    let mut zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".json") { continue; }
+            if let Ok(data) = std::fs::read(entry.path()) {
+                if zip_writer.start_file(&name, options).is_err() { continue; }
+                if zip_writer.write_all(&data).is_err() { continue; }
+            }
+        }
+    }
+    let _ = zip_writer.finish();
+    (axum::http::StatusCode::OK,
+     [("Content-Type", "application/zip"),
+      ("Content-Disposition", "attachment; filename=\"wisdom_bulk.zip\"")],
+     zip_buf).into_response()
+}
+
+async fn import_wisdom(State(s): State<Arc<AppState>>, Json(body): Json<Value>) -> Json<Value> {
+    let mut eng = s.adaptive_engine.lock().await;
+    match eng.import_wisdom(&body) {
+        Ok(()) => Json(json!({"ok": true, "message": "Wisdom imported successfully"})),
+        Err(e) => Json(json!({"ok": false, "error": e})),
+    }
+}
+
+async fn build_wisdom_json(s: &AppState) -> Value {
+    let eng = s.adaptive_engine.lock().await;
+    let ctx = s.macro_ctx.read().await;
+    json!({
+        "version":           "1.0",
+        "exported_at":       chrono::Utc::now().to_rfc3339(),
+        "cp": {
+            "confidence_level":  eng.cp.confidence_level,
+            "quantile_macd":     eng.cp.quantile_macd,
+            "quantile_rsi":      eng.cp.quantile_rsi,
+            "quantile_price":    eng.cp.quantile_price,
+            "alpha":             eng.cp.alpha,
+            "feedback_count":    eng.cp.feedback_count,
+        },
+        "weights": {
+            "sma":  eng.cp.weight_sma,
+            "vfi":  eng.cp.weight_vfi,
+            "macd": eng.cp.weight_macd,
+            "rsi":  eng.cp.weight_rsi,
+        },
+        "context": {
+            "dynamic_rsi":        ctx.dynamic_rsi,
+            "vfi_confidence":     ctx.vfi_confidence,
+            "db_accuracy_factor": ctx.db_accuracy_factor,
+        },
+    })
 }
 
 // ─── Order Book ───────────────────────────────────────────────────────────────

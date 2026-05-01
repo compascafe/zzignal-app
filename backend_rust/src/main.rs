@@ -84,6 +84,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tick_tx,
     );
 
+    // ─── Import Wisdom from file (CLI: --import-wisdom <path>) ──────────────
+    if let Some(pos) = std::env::args().position(|a| a == "--import-wisdom") {
+        let path = std::env::args().nth(pos + 1);
+        if let Some(ref p) = path {
+            match std::fs::read_to_string(p) {
+                Ok(json_str) => {
+                    match serde_json::from_str::<serde_json::Value>(&json_str) {
+                        Ok(wisdom) => {
+                            let mut eng = state.adaptive_engine.lock().await;
+                            if let Err(e) = eng.import_wisdom(&wisdom) {
+                                warn!("Wisdom import from {}: {}", p, e);
+                            } else {
+                                info!("Wisdom imported from {}", p);
+                            }
+                        }
+                        Err(e) => warn!("Wisdom JSON parse error in {}: {}", p, e),
+                    }
+                }
+                Err(e) => warn!("Cannot read {}: {}", p, e),
+            }
+        }
+    }
+
     // ─── Macro 24h Warm‑up (Adaptive Risk Engine) ────────────────────────────
     {
         let warm_engine = Arc::clone(&state.adaptive_engine);
