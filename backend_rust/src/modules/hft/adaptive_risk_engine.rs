@@ -649,7 +649,7 @@ impl AdaptiveRiskEngine {
     ) -> (u8, f64, u8) {
         // ─── Step 0: Wave Hunting — Z-Score of volume over 5-min window ──────
         let z_vol = self.compute_volume_z_score(binance_volume, ts_ms);
-        let hunting = z_vol > 3.5;
+        let hunting = z_vol > 2.0;  // lowered from 3.5 for earlier detection
         self.macro_snap.hunting_z_score = z_vol;
 
         let cp_range = self.cp.uncertainty_range(binance_price);
@@ -878,22 +878,41 @@ impl AdaptiveRiskEngine {
     /// Called each time a new Binance price arrives during a session.
     /// Returns the current dynamic RSI value.
     pub fn update_dynamic_rsi(&mut self, ctx: &mut MacroContext, price: f64) -> f64 {
-        // Store price in a rolling buffer (keep last 15 prices for RSI-14)
         self.macro_snap.close_prices.push(price);
         if self.macro_snap.close_prices.len() > 200 {
             self.macro_snap.close_prices.remove(0);
         }
-        // Recompute RSI if we have enough data
         if self.macro_snap.close_prices.len() >= 15 {
             ctx.last_rsi = ctx.dynamic_rsi;
             ctx.dynamic_rsi = rsi14(&self.macro_snap.close_prices);
+            // ─── Sync to macro_snap so evaluate_master_signal uses live RSI ──
+            self.macro_snap.rsi14 = ctx.dynamic_rsi;
+        }
+        // ─── Per-tick MACD from rolling close prices ─────────────────────────
+        if self.macro_snap.close_prices.len() >= 16 {
+            let (ml, ms, mh) = macd_3_10_16(&self.macro_snap.close_prices);
+            self.macro_snap.macd_line = ml;
+            self.macro_snap.macd_signal = ms;
+            self.macro_snap.macd_hist = mh;
+        }
+        // ─── Per-tick SMA slope from rolling close prices ────────────────────
+        if self.macro_snap.close_prices.len() >= 200 {
+            let recent: Vec<f64> = self.macro_snap.close_prices.iter().cloned().collect();
+            self.macro_snap.sma200 = sma(&recent, 200);
+            self.macro_snap.sma50 = sma(&recent, 50);
+            // Percentage divergence: (SMA50 - SMA200) / SMA200 * 100
+            self.macro_snap.macro_slope = if self.macro_snap.sma200 > 0.0 {
+                (self.macro_snap.sma50 - self.macro_snap.sma200) / self.macro_snap.sma200 * 100.0
+            } else { 0.0 };
         }
         ctx.dynamic_rsi
     }
 
-    /// Momentum trigger: if RSI crosses above 30 from below → flip DOWN bias to UP.
-    /// Returns true if bias was flipped.
+    /// Momentum trigger: if RSI crosses threshold, flip bias immediately.
+    /// Cross above 30 → flip DOWN to UP (oversold bounce).
+    /// Cross below 70 → flip UP to DOWN (overbought rejection).
     pub fn check_momentum_trigger(&mut self, ctx: &mut MacroContext) -> bool {
+        // Cross above 30: oversold → bounce UP
         if ctx.last_rsi <= 30.0 && ctx.dynamic_rsi > 30.0 && !ctx.momentum_flipped {
             ctx.momentum_flipped = true;
             if ctx.weighted_bias == "DOWN" || self.macro_snap.predicted_bias == "DOWN" {
@@ -903,6 +922,21 @@ impl AdaptiveRiskEngine {
                     ctx.last_rsi, ctx.dynamic_rsi);
                 return true;
             }
+        }
+        // Cross below 70: overbought → reject DOWN
+        if ctx.last_rsi >= 70.0 && ctx.dynamic_rsi < 70.0 && !ctx.momentum_flipped {
+            ctx.momentum_flipped = true;
+            if ctx.weighted_bias == "UP" || self.macro_snap.predicted_bias == "UP" {
+                ctx.weighted_bias = "DOWN".into();
+                self.macro_snap.predicted_bias = "DOWN".into();
+                info!("Momentum trigger: RSI crossed below 70 ({}→{}) → bias flipped to DOWN",
+                    ctx.last_rsi, ctx.dynamic_rsi);
+                return true;
+            }
+        }
+        // Reset momentum flag when RSI returns to neutral zone
+        if ctx.dynamic_rsi > 35.0 && ctx.dynamic_rsi < 65.0 {
+            ctx.momentum_flipped = false;
         }
         false
     }
@@ -925,7 +959,7 @@ impl AdaptiveRiskEngine {
         ctx.weight_bb     = self.cp.weight_bb;
         ctx.auto_widened  = self.cp.auto_widened;
         ctx.feedback_count = self.cp.feedback_count;
-        ctx.hunting_mode   = self.macro_snap.hunting_z_score > 3.5;
+        ctx.hunting_mode   = self.macro_snap.hunting_z_score > 2.0;
         ctx.hunting_z_score = self.macro_snap.hunting_z_score;
         ctx.volatility_1h  = self.macro_snap.volatility_1h;
         let acc = if self.cp.accuracy_window.is_empty() { 0.5 }
