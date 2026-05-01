@@ -193,6 +193,13 @@ pub struct ConformalPredictor {
     pub accuracy_window: VecDeque<bool>,
     /// Whether intervals have been auto-widened due to low accuracy.
     pub auto_widened:    bool,
+    /// Per-indicator weights (SMA slope, VFI, MACD, RSI) — reinforced/punished per session.
+    pub weight_sma:      f64,
+    pub weight_vfi:      f64,
+    pub weight_macd:     f64,
+    pub weight_rsi:      f64,
+    /// Current CP confidence level (0.95 or 0.99).
+    pub confidence_level: f64,
 }
 
 impl ConformalPredictor {
@@ -208,6 +215,11 @@ impl ConformalPredictor {
             feedback_count:  0,
             accuracy_window: VecDeque::with_capacity(16),
             auto_widened:    false,
+            weight_sma:      0.4,
+            weight_vfi:      0.6,
+            weight_macd:     0.3,
+            weight_rsi:      0.2,
+            confidence_level: 0.95,
         }
     }
 
@@ -280,7 +292,46 @@ impl ConformalPredictor {
         }
     }
 
-    /// Check if accuracy over last 5 sessions is below 60%.
+    /// Reinforce or punish indicator weights based on session outcome.
+    /// vfi_sign: +1 if VFI pointed UP, -1 if DOWN, 0 if neutral
+    /// sma_sign: +1 if SMA slope UP, -1 if DOWN
+    pub fn reinforce_weights(&mut self, correct: bool, vfi_sign: f64, sma_sign: f64) {
+        let delta = if correct { 0.05 } else { -0.08 }; // reward < punishment
+        let outcome_sign = if correct { 1.0 } else { -1.0 };
+
+        // SMA: adjust if it was pointing in a direction
+        if sma_sign.abs() > 0.01 {
+            self.weight_sma = (self.weight_sma + delta * sma_sign.signum() * outcome_sign).clamp(0.05, 0.8);
+        }
+        // VFI: adjust if it was active
+        if vfi_sign.abs() > 0.01 {
+            self.weight_vfi = (self.weight_vfi + delta * vfi_sign.signum() * outcome_sign).clamp(0.1, 0.9);
+        }
+        // MACD/RSI get smaller adjustments
+        self.weight_macd = (self.weight_macd + delta * 0.5 * outcome_sign).clamp(0.05, 0.6);
+        self.weight_rsi  = (self.weight_rsi  + delta * 0.5 * outcome_sign).clamp(0.05, 0.5);
+
+        info!("Reinforcement: correct={} w_sma={:.3} w_vfi={:.3} w_macd={:.3} w_rsi={:.3}",
+            correct, self.weight_sma, self.weight_vfi, self.weight_macd, self.weight_rsi);
+    }
+
+    /// Adjust CP confidence level based on recent accuracy.
+    /// accuracy < 65% → confidence 0.99 (more strict)
+    /// accuracy >= 65% → confidence 0.95 (normal)
+    pub fn adjust_confidence_level(&mut self) {
+        let recent: Vec<bool> = self.accuracy_window.iter().rev().take(5).copied().collect();
+        if recent.len() < 3 { return; }
+        let hits = recent.iter().filter(|&&b| b).count();
+        let acc = hits as f64 / recent.len() as f64;
+
+        if acc < 0.65 && self.confidence_level < 0.99 {
+            self.confidence_level = 0.99;
+            info!("CP confidence level raised to 0.99 (accuracy={:.0}%)", acc * 100.0);
+        } else if acc >= 0.65 && self.confidence_level > 0.95 {
+            self.confidence_level = 0.95;
+            info!("CP confidence level restored to 0.95 (accuracy={:.0}%)", acc * 100.0);
+        }
+    }
     /// If so, widen CP intervals to be more selective.
     pub fn should_auto_widen(&self) -> bool {
         let recent: Vec<bool> = self.accuracy_window.iter().rev().take(5).copied().collect();

@@ -194,6 +194,11 @@ async fn process_sessions(state: Arc<AppState>) {
                 if eng.cp_mut().should_auto_widen() {
                     eng.cp_mut().auto_widen();
                 }
+                // Reinforced learning: adjust indicator weights
+                let vfi_sign = if eng.vfi_value() > 0.1 { 1.0 } else if eng.vfi_value() < -0.1 { -1.0 } else { 0.0 };
+                let sma_sign = if eng.macro_slope() > 0.0001 { 1.0 } else if eng.macro_slope() < -0.0001 { -1.0 } else { 0.0 };
+                eng.cp_mut().reinforce_weights(accuracy, vfi_sign, sma_sign);
+                eng.cp_mut().adjust_confidence_level();
             }
         }
 
