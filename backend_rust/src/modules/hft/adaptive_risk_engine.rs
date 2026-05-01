@@ -634,8 +634,9 @@ impl AdaptiveRiskEngine {
         self.cp.calibrate(&macd_residuals, &rsi_residuals, &price_residuals);
     }
 
-    /// Bollinger Band + Wave Hunting + Signal Hierarchy + Dynamic CP.
-    /// Returns (master_signal, cp_range, cp_valid | hunting_bit).
+    /// Multi-layer signal engine: BB + HUNTING + MOMENTUM + MICROSTRUCTURE.
+    /// master_signal: 0=none, 1/2=BB, 3/4=HUNTING, 5/6=MOMENTUM, 7/8=MICRO (odd=buy, even=sell)
+    /// Returns (master_signal, cp_range, cp_valid_encoded).
     pub fn evaluate_master_signal(
         &mut self,
         binance_price:    f64,
@@ -649,66 +650,110 @@ impl AdaptiveRiskEngine {
         is_feedback_adj:  bool,
         binance_volume:   f64,
         ts_ms:            i64,
+        tape_speed_flag:  u8,
+        absorption_ratio: f64,
+        spoofing_flag:    u8,
     ) -> (u8, f64, u8) {
+        // ─── Block all entry if spoofing detected ────────────────────────────
+        let spoofing = spoofing_flag > 0;
+        if spoofing {
+            return (0, self.cp.uncertainty_range(binance_price), 32); // bit 5 = spoofing blocked
+        }
+
         // ─── Step 0: Wave Hunting — Z-Score of volume over 5-min window ──────
         let z_vol = self.compute_volume_z_score(binance_volume, ts_ms);
-        let hunting = z_vol > 2.0;  // lowered from 3.5 for earlier detection
+        let hunting = z_vol > 2.0;
         self.macro_snap.hunting_z_score = z_vol;
 
         let cp_range = self.cp.uncertainty_range(binance_price);
         let band_width = bollinger_upper - bollinger_lower;
 
-        // ─── Step 1: Dynamic CP threshold — widen if high volatility ─────────
+        // ─── Dynamic CP threshold ─────────────────────────────────────────────
         let volatility = if band_width > 0.0 && bollinger_sma > 0.0 {
             band_width / bollinger_sma
         } else { 0.01 };
         self.macro_snap.volatility_1h = volatility;
 
-        // Dynamic CP quantile: wider when volatile (but never below base)
         let dyn_quantile = self.cp.quantile_price.max(volatility * 0.5);
         let dyn_threshold = dyn_quantile * binance_price;
         let cp_extreme = self.cp.is_price_extreme(binance_price, bollinger_sma)
-            && cp_range > dyn_threshold * 0.5; // require CP extreme exceeds 50% of dynamic threshold
-
+            && cp_range > dyn_threshold * 0.5;
         let cp_valid: u8 = if cp_extreme { 1 } else { 0 };
 
-        // ─── Step 2: Signal Hierarchy — VFI > RSI/MACD > SMA ─────────────────
+        let spread_ok = poly_spread <= 0.05;
         let mut master: u8 = 0;
 
-        if hunting {
-            // HUNTING MODE: ignore macro bias → follow order flow + velocity
-            let ob_imbalance_bull = poly_imbalance > 1.05;
-            let ob_imbalance_bear = poly_imbalance < 0.95;
-            let velocity_surge = price_velocity.abs() > 0.0005;
-            let spread_ok = poly_spread <= 0.05;
-
-            if ob_imbalance_bull && velocity_surge && spread_ok {
-                master = 3; // HUNTING BUY: order flow surge UP
+        // ──────────────────────────────────────────────────────────────────────
+        // LAYER 1: Microstructure (tape speed burst) — highest priority
+        // ──────────────────────────────────────────────────────────────────────
+        if master == 0 && tape_speed_flag > 0 && absorption_ratio > 0.7 && spread_ok {
+            let ob_bull = poly_imbalance > 1.1;
+            let ob_bear = poly_imbalance < 0.9;
+            if ob_bull && price_velocity > 0.0 {
+                master = 7; // MICRO BUY
                 self.macro_snap.predicted_bias = "UP".into();
-            } else if ob_imbalance_bear && velocity_surge && spread_ok {
-                master = 4; // HUNTING SELL: order flow surge DOWN
+                info!("⚡ MICRO BUY tape={} abs={:.2} imb={:.2} vel={:.6}",
+                    tape_speed_flag, absorption_ratio, poly_imbalance, price_velocity);
+            } else if ob_bear && price_velocity < 0.0 {
+                master = 8; // MICRO SELL
+                self.macro_snap.predicted_bias = "DOWN".into();
+                info!("⚡ MICRO SELL tape={} abs={:.2} imb={:.2} vel={:.6}",
+                    tape_speed_flag, absorption_ratio, poly_imbalance, price_velocity);
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // LAYER 2: Momentum (RSI extremes + velocity reversal)
+        // ──────────────────────────────────────────────────────────────────────
+        if master == 0 {
+            let rsi = self.macro_snap.rsi14;
+            let velocity_reversing_up = price_velocity > -0.0003 && price_velocity < 0.001;
+            let velocity_reversing_down = price_velocity > -0.001 && price_velocity < 0.0003;
+
+            if rsi < 25.0 && velocity_reversing_up && spread_ok {
+                master = 5; // MOMENTUM BUY
+                self.macro_snap.predicted_bias = "UP".into();
+                info!("📈 MOMENTUM BUY rsi={:.1} vel={:.6}", rsi, price_velocity);
+            } else if rsi > 75.0 && velocity_reversing_down && spread_ok {
+                master = 6; // MOMENTUM SELL
+                self.macro_snap.predicted_bias = "DOWN".into();
+                info!("📉 MOMENTUM SELL rsi={:.1} vel={:.6}", rsi, price_velocity);
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // LAYER 3: Hunting (volume surge — overrides macro bias)
+        // ──────────────────────────────────────────────────────────────────────
+        if master == 0 && hunting {
+            let ob_bull = poly_imbalance > 1.05;
+            let ob_bear = poly_imbalance < 0.95;
+            let velocity_surge = price_velocity.abs() > 0.0005;
+            if ob_bull && velocity_surge && spread_ok {
+                master = 3; // HUNTING BUY
+                self.macro_snap.predicted_bias = "UP".into();
+            } else if ob_bear && velocity_surge && spread_ok {
+                master = 4; // HUNTING SELL
                 self.macro_snap.predicted_bias = "DOWN".into();
             }
-            info!("🌊 HUNTING MODE z={:.2} vol={:.0} master={}",
-                z_vol, binance_volume, master);
-        } else {
-            // Normal mode: signal hierarchy with weighted confluence
+            if master > 0 {
+                info!("🌊 HUNTING z={:.2} vol={:.0} master={}", z_vol, binance_volume, master);
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────────────
+        // LAYER 4: Bollinger Band mean-reversion (CP-validated)
+        // ──────────────────────────────────────────────────────────────────────
+        if master == 0 {
             let vfi_bull = self.macro_snap.vfi > 0.1;
             let vfi_bear = self.macro_snap.vfi < -0.1;
             let vfi_strong = self.macro_snap.vfi.abs() > 0.5;
-
             let rsi_overbought = self.macro_snap.rsi14 > 70.0;
             let rsi_oversold = self.macro_snap.rsi14 < 30.0;
-
             let macd_bull = self.macro_snap.macd_hist > 0.0;
             let macd_bear = self.macro_snap.macd_hist < 0.0;
-
             let sma_bull = self.macro_snap.macro_slope > 0.0001;
             let sma_bear = self.macro_snap.macro_slope < -0.0001;
 
-            let spread_ok = poly_spread <= 0.05;
-
-            // ─── Hierarchy: VFI (70%) > RSI/MACD (20%) > SMA (10%) ───────────
             let w_vfi  = self.cp.weight_vfi;
             let w_macd = self.cp.weight_macd;
             let w_rsi  = self.cp.weight_rsi;
@@ -731,32 +776,39 @@ impl AdaptiveRiskEngine {
 
             let weighted_score = score_bull - score_bear;
             let score_normalized = if total > 0.0 { weighted_score / total } else { 0.0 };
-
             let below_lower = binance_price <= bollinger_lower;
             let above_upper = binance_price >= bollinger_upper;
 
-            // BB mean reversion with CP confirmation + signal hierarchy
             let long_signal = below_lower && cp_valid == 1 && spread_ok
                 && (score_normalized > 0.15 || (rsi_oversold && vfi_strong));
             let short_signal = above_upper && cp_valid == 1 && spread_ok
                 && (score_normalized < -0.15 || (rsi_overbought && vfi_strong));
 
             if long_signal && price_velocity > -0.01 {
-                master = 1;
+                master = 1; // BB BUY
+                self.macro_snap.predicted_bias = "UP".into();
             } else if short_signal && price_velocity < 0.01 {
-                master = 2;
+                master = 2; // BB SELL
+                self.macro_snap.predicted_bias = "DOWN".into();
+            }
+            if master > 0 {
+                info!("BB Signal: master={} cp={:.0} score={:.3} vfi={:.1} rsi={:.1}",
+                    master, cp_range, score_normalized, self.macro_snap.vfi, self.macro_snap.rsi14);
             }
         }
 
-        if master > 0 && !hunting {
-            info!("BB Signal: master={} z_vol={:.2} vfi={:.3} rsi={:.1}",
-                master, z_vol,
-                self.macro_snap.vfi, self.macro_snap.rsi14);
-        }
-
+        // ─── Encoded cp_valid: bits 0=cp_valid, 1=hunting, 2=feedback, 3-4=layer ──
+        let layer_code: u8 = match master {
+            1|2     => 0, // BB
+            3|4     => 1, // HUNTING
+            5|6     => 2, // MOMENTUM
+            7|8     => 3, // MICRO
+            _       => 0,
+        };
         let hunting_bit: u8 = if hunting { 2 } else { 0 };
-        let feedback_bit: u8 = if is_feedback_adj { 1 } else { 0 };
-        (master, cp_range, cp_valid | hunting_bit | feedback_bit)
+        let feedback_bit: u8 = if is_feedback_adj { 4 } else { 0 };
+        let encoded = cp_valid | hunting_bit | feedback_bit | (layer_code << 3);
+        (master, cp_range, encoded)
     }
 
     /// Compute Z-Score of current volume vs rolling 5-min window.

@@ -214,6 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             rec.poly_imbalance, rec.price_velocity,
                             is_fb,
                             tick.volume, tick.event_time,
+                            rec.tape_speed_flag, rec.absorption_ratio, rec.spoofing_flag,
                         );
                         rec.master_signal = master;
                         rec.cp_uncertainty_range = cp_range;
@@ -657,6 +658,7 @@ async fn capture_combined(
             rec.poly_imbalance, rec.price_velocity,
             is_fb,
             rec.binance_vol_100ms, ts_now,
+            rec.tape_speed_flag, rec.absorption_ratio, rec.spoofing_flag,
         );
         rec.master_signal = master;
         rec.cp_uncertainty_range = cp_range;
