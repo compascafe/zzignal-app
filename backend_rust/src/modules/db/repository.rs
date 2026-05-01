@@ -341,8 +341,9 @@ pub async fn list_session_children(state: &AppState, parent_id: i32) -> Result<V
 
 pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
+        // Prefer active child (with data) over parent container
         let row = sqlx::query_as::<_, RecordingSession>(
-            &format!("{SESS_COLS} WHERE status = 'recording' ORDER BY scheduled_start DESC LIMIT 1")
+            &format!("{SESS_COLS} WHERE status = 'recording' ORDER BY tick_count DESC, scheduled_start DESC LIMIT 1")
         )
         .fetch_optional(pool)
         .await?;
