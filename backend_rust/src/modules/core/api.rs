@@ -246,7 +246,10 @@ async fn set_btc_provider(
 // ─── Adaptive Risk Engine: Macro Indicators ────────────────────────────────────
 
 async fn get_macro(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let eng = s.adaptive_engine.lock().await;
+    let eng = match s.adaptive_engine.try_lock() {
+        Ok(g) => g,
+        Err(_) => return Json(json!({"predicted_bias": "BOOTING"})),
+    };
     let snap = &eng.macro_snap;
     Json(json!({
         "sma50":            snap.sma50,
@@ -269,7 +272,10 @@ async fn get_macro(State(s): State<Arc<AppState>>) -> Json<Value> {
 // ─── Wisdom & Reinforcement Learning State ─────────────────────────────────────
 
 async fn get_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let eng = s.adaptive_engine.lock().await;
+    let eng = match s.adaptive_engine.try_lock() {
+        Ok(g) => g,
+        Err(_) => return Json(json!({"mode": "BOOTING", "accuracy_24h": 0.0})),
+    };
     let ctx = s.macro_ctx.read().await;
     let accuracy_24h = if eng.cp.accuracy_window.is_empty() { 0.5 }
         else { eng.cp.accuracy_window.iter().filter(|&&b| b).count() as f64 / eng.cp.accuracy_window.len() as f64 };
