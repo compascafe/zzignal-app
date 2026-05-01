@@ -14,6 +14,7 @@ use crate::modules::hft::adaptive_risk_engine::warmup_fetch_and_compute;
 ///  2. Cada 5s revisa scheduled_executions pendientes y las ejecuta
 ///  3. Cada 1s revisa sesiones de grabación programadas (inicia 5s antes, termina en scheduled_end)
 pub async fn run_scheduler(state: Arc<AppState>) {
+    info!("[SCHEDULER] Started — book=10s exec=5s session=1s");
     let mut book_timer   = tokio::time::interval(Duration::from_secs(10));
     let mut exec_timer   = tokio::time::interval(Duration::from_secs(5));
     let mut session_timer= tokio::time::interval(Duration::from_secs(1));
@@ -27,7 +28,10 @@ pub async fn run_scheduler(state: Arc<AppState>) {
                 process_pending_executions(Arc::clone(&state)).await;
             }
             _ = session_timer.tick() => {
-                process_sessions(Arc::clone(&state)).await;
+                let s = Arc::clone(&state);
+                tokio::spawn(async move {
+                    process_sessions(s).await;
+                });
             }
         }
     }

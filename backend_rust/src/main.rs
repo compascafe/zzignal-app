@@ -272,7 +272,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         tokio::spawn(async move {
+            info!("[SCHEDULER] Task started");
             crate::modules::db::scheduler::run_scheduler(state3).await;
+            warn!("[SCHEDULER] Task exited unexpectedly");
         });
     }
 
