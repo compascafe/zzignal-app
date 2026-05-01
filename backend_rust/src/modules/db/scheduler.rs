@@ -7,6 +7,7 @@ use chrono::Utc;
 use crate::modules::core::state::AppState;
 use crate::modules::core::worker::{CmdMsg, OrderSide, Outcome};
 use crate::modules::db::{api, repository};
+use crate::modules::hft::adaptive_risk_engine::warmup_fetch_and_compute;
 
 /// Corre en background:
 ///  1. Cada 10s guarda snapshot del order book en PostgreSQL
@@ -229,6 +230,35 @@ async fn process_sessions(state: Arc<AppState>) {
         // Reset session baselines so normalize price_gap_ratio starts fresh
         state.tracking_state.reset_session_baselines();
         state.recording_sessions.write().await.push(session.id);
+
+        // ─── Adaptive Risk Engine: refresh macro warm‑up + feedback from history ──
+        {
+            // Load recent accuracy from past sessions for CP feedback
+            let recent_accuracy = repository::get_recent_accuracy(state.db.as_ref(), 16).await;
+            let mut eng = state.adaptive_engine.lock().await;
+            // Replay historical accuracy into CP engine (fast, no I/O)
+            for correct in &recent_accuracy {
+                eng.cp_mut().record_accuracy(*correct);
+            }
+            if eng.cp_mut().should_auto_widen() {
+                eng.cp_mut().auto_widen();
+            }
+        }
+        // Fire‑and‑forget: warmup refresh (lock‑free HTTP, only brief lock for apply)
+        {
+            let warm_state = Arc::clone(&state);
+            let session_dur = session.duration_min;
+            tokio::spawn(async move {
+                info!("AdaptiveRiskEngine: refreshing warm‑up for {}-min session...", session_dur);
+                match warmup_fetch_and_compute().await {
+                    Ok(result) => {
+                        warm_state.adaptive_engine.lock().await.apply_warmup_result(result);
+                        info!("AdaptiveRiskEngine: warm‑up refreshed for {}-min session", session_dur);
+                    }
+                    Err(e) => warn!("AdaptiveRiskEngine session-start refresh failed: {e}"),
+                }
+            });
+        }
 
         // New session: truncate and write fresh header
         if let Err(e) = state.session_manager.start_session(session.id) {

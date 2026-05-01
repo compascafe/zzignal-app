@@ -31,6 +31,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/btc",             get(get_btc))
         .route("/api/btc/provider",    get(get_btc_provider))
         .route("/api/btc/provider",    post(set_btc_provider))
+        // Macro indicators (Adaptive Risk Engine)
+        .route("/api/macro",           get(get_macro))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -232,6 +234,29 @@ async fn set_btc_provider(
     );
 
     Json(json!({"ok": true, "provider": provider.as_str()}))
+}
+
+// ─── Adaptive Risk Engine: Macro Indicators ────────────────────────────────────
+
+async fn get_macro(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let eng = s.adaptive_engine.lock().await;
+    let snap = &eng.macro_snap;
+    Json(json!({
+        "sma50":            snap.sma50,
+        "sma200":           snap.sma200,
+        "macro_slope":      snap.macro_slope,
+        "macd_line":        snap.macd_line,
+        "macd_signal":      snap.macd_signal,
+        "macd_hist":        snap.macd_hist,
+        "vfi":              snap.vfi,
+        "rsi14":            snap.rsi14,
+        "predicted_bias":   snap.predicted_bias,
+        "cp_quantile":      eng.cp.quantile_price,
+        "cp_alpha":         eng.cp.alpha,
+        "accuracy_count":   eng.cp.accuracy_window.len(),
+        "auto_widened":     eng.cp.auto_widened,
+        "feedback_count":   eng.cp.feedback_count,
+    }))
 }
 
 // ─── Order Book ───────────────────────────────────────────────────────────────

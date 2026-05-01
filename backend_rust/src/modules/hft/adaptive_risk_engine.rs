@@ -286,6 +286,93 @@ fn empirical_quantile_95(data: &VecDeque<f64>) -> f64 {
 
 // ─── Adaptive Risk Engine (orchestrator) ──────────────────────────────────────
 
+/// Pre‑computed warmup data — allows HTTP fetch outside the lock.
+pub struct WarmupResult {
+    pub candles:       Vec<Candle1m>,
+    pub snapshot:      MacroSnapshot,
+    pub cp:            ConformalPredictor,
+    pub sma200_series: Vec<f64>,
+    pub rsi_series:    Vec<f64>,
+}
+
+/// Fetch Binance candles + compute all indicators WITHOUT holding any engine lock.
+/// This is the expensive part (2–5s HTTP); the engine lock is only needed for `apply_warmup_result`.
+pub async fn warmup_fetch_and_compute() -> Result<WarmupResult, String> {
+    let candles = fetch_binance_klines("BTCUSDT", "1m", 1440).await?;
+    if candles.len() < 200 {
+        return Err(format!("Not enough candles: {} < 200", candles.len()));
+    }
+    let closes: Vec<f64> = candles.iter().map(|c| c.close).collect();
+
+    let mut snapshot = MacroSnapshot::default();
+    let n = closes.len();
+
+    // SMA
+    snapshot.sma50  = sma(&closes, 50);
+    snapshot.sma200 = sma(&closes, 200);
+
+    // SMA200 series + slope
+    let sma200_series: Vec<f64> = (0..=n.saturating_sub(200))
+        .map(|i| sma(&closes[0..=i], 200))
+        .collect();
+    snapshot.macro_slope = slope(&sma200_series, 50.min(sma200_series.len()));
+
+    // MACD(3,10,16)
+    let (ml, ms, mh) = macd_3_10_16(&closes);
+    snapshot.macd_line   = ml;
+    snapshot.macd_signal = ms;
+    snapshot.macd_hist   = mh;
+
+    // VFI
+    snapshot.vfi = vfi(&candles, 130, 0.2);
+
+    // RSI(14)
+    let rsi_series = compute_rsi_series(&closes, 14);
+    snapshot.rsi14 = *rsi_series.last().unwrap_or(&50.0);
+
+    // Predicted bias
+    snapshot.predicted_bias = if snapshot.macro_slope > 0.0 { "UP".into() } else { "DOWN".into() };
+
+    // Store last 200 close prices for runtime Bollinger+CP
+    snapshot.close_prices = closes[closes.len().saturating_sub(200)..].to_vec();
+
+    // Calibrate CP residuals from 24h history
+    let mut cp = ConformalPredictor::new();
+    if n >= 200 {
+        let macd_residuals: Vec<f64> = (200..n)
+            .map(|i| {
+                let slice = &closes[0..=i];
+                let (ml, _, _) = macd_3_10_16(slice);
+                let prev = &closes[0..=i - 1];
+                let (pl, _, _) = macd_3_10_16(prev);
+                (ml - pl).abs()
+            })
+            .collect();
+        let rsi_residuals: Vec<f64> = (200..n)
+            .map(|i| {
+                let slice = &closes[0..=i];
+                let rsi = rsi14(slice);
+                let prev = &closes[0..=i - 1];
+                let prsi = rsi14(prev);
+                (rsi - prsi).abs()
+            })
+            .collect();
+        let price_residuals: Vec<f64> = (200..n)
+            .map(|i| {
+                let slice = &closes[0..=i];
+                let sma200 = sma(slice, 200);
+                if sma200 == 0.0 { return 0.0; }
+                (slice.last().unwrap() - sma200).abs() / sma200
+            })
+            .collect();
+        cp.calibrate(&macd_residuals, &rsi_residuals, &price_residuals);
+    }
+    snapshot.cp_quantile = cp.quantile_price;
+    snapshot.cp_alpha    = cp.alpha;
+
+    Ok(WarmupResult { candles, snapshot: snapshot.clone(), cp, sma200_series, rsi_series })
+}
+
 pub struct AdaptiveRiskEngine {
     pub macro_snap:    MacroSnapshot,
     pub cp:            ConformalPredictor,
@@ -310,17 +397,21 @@ impl AdaptiveRiskEngine {
     /// Phase 1: Download 1,440 1‑min candles from Binance REST and compute all indicators.
     pub async fn warmup(&mut self) -> Result<(), String> {
         info!("AdaptiveRiskEngine: fetching 1,440 candles (1m) from Binance...");
-        self.candles = fetch_binance_klines("BTCUSDT", "1m", 1440).await?;
-        if self.candles.len() < 200 {
-            return Err(format!("Not enough candles: {} < 200", self.candles.len()));
-        }
-        let closes: Vec<f64> = self.candles.iter().map(|c| c.close).collect();
-        self.compute_indicators(&closes);
-        self.calibrate_cp(&closes);
+        let result = warmup_fetch_and_compute().await?;
+        self.apply_warmup_result(result);
         info!("AdaptiveRiskEngine: warm‑up complete. slope={:.6} bias={} rsi={:.2} vfi={:.4}",
             self.macro_snap.macro_slope, self.macro_snap.predicted_bias,
             self.macro_snap.rsi14, self.macro_snap.vfi);
         Ok(())
+    }
+
+    /// Apply pre-computed warmup results — fast, lock‑friendly (no I/O).
+    pub fn apply_warmup_result(&mut self, result: WarmupResult) {
+        self.candles = result.candles;
+        self.macro_snap = result.snapshot;
+        self.sma200_series = result.sma200_series;
+        self.rsi_series = result.rsi_series;
+        self.cp = result.cp;
     }
 
     /// Compute all macro indicators from close price series.
