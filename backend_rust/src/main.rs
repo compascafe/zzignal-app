@@ -241,6 +241,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             state3.recording_sessions.write().await.extend(&recovered);
         }
+        // Auto-start: if nothing is recording, create indefinite 15-min session now
+        if state3.recording_sessions.read().await.is_empty() && state3.db.is_some() {
+            info!("No active recording sessions — auto-starting 15-min indefinite...");
+            let now = chrono::Utc::now();
+            let name = format!("BTC15-Auto-{}", now.format("%Y%m%dT%H%M"));
+            let parent_start = now;
+            let parent_end = parent_start + chrono::Duration::days(365);
+            let chunk_min = 15i32;
+            match session_repo::create_session(&state3, &name, parent_start, parent_end, chunk_min, 50, None).await {
+                Ok(parent_id) => {
+                    let btc_price = *state3.btc_price.read().await;
+                    session_repo::start_session_recording(&state3, parent_id, btc_price).await.ok();
+                    // Create first child aligned to next boundary
+                    let child_start = crate::modules::db::scheduler::snap_to_next_chunk(parent_start, chunk_min);
+                    let child_end = child_start + chrono::Duration::minutes(chunk_min as i64);
+                    let child_name = crate::modules::db::api::child_session_name(child_start, chunk_min);
+                    if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
+                        state3.recording_sessions.write().await.push(child_id);
+                        state3.session_manager.start_session(child_id).ok();
+                        session_repo::start_session_recording(&state3, child_id, btc_price).await.ok();
+                        info!("Auto-started indefinite session: parent #{}, child #{} ({})", parent_id, child_id, child_name);
+                    }
+                }
+                Err(e) => warn!("Auto-start failed: {}", e),
+            }
+        }
         tokio::spawn(async move {
             crate::modules::db::scheduler::run_scheduler(state3).await;
         });
