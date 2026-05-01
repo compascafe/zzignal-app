@@ -111,6 +111,12 @@ pub struct CsvRecord {
     // ─── Conformal Prediction Risk Validation ─────────────────────────────
     pub cp_uncertainty_range:  f64,   // width of 95% confidence interval (USD)
     pub cp_valid_signal:       u8,    // 1 = signal passes CP validation, 0 = blocked (too erratic)
+    // ─── Adaptive Risk Engine: Macro 24h + Feedback ───────────────────────
+    pub macro_slope:           f64,   // SMA200 slope via linear regression on last 50 points
+    pub vfi_value:             f64,   // Volume Flow Indicator (VFI) current value
+    pub macd_hist:             f64,   // MACD(3,10,16) histogram value
+    pub predicted_bias:        String,// "UP" or "DOWN" — initial bias from macro warm-up
+    pub is_feedback_adjusted:  u8,    // 1 = CP intervals widened due to low accuracy feedback
 }
 
 impl Default for CsvRecord {
@@ -170,6 +176,11 @@ impl Default for CsvRecord {
             master_signal:         0,
             cp_uncertainty_range:  0.0,
             cp_valid_signal:       0,
+            macro_slope:           0.0,
+            vfi_value:             0.0,
+            macd_hist:             0.0,
+            predicted_bias:        String::new(),
+            is_feedback_adjusted:  0,
         }
     }
 }

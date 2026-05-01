@@ -84,6 +84,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tick_tx,
     );
 
+    // ─── Macro 24h Warm‑up (Adaptive Risk Engine) ────────────────────────────
+    {
+        let warm_engine = Arc::clone(&state.adaptive_engine);
+        tokio::spawn(async move {
+            if let Err(e) = warm_engine.lock().await.warmup().await {
+                warn!("AdaptiveRiskEngine warm‑up failed: {e} — continuing without macro bias");
+            } else {
+                info!("AdaptiveRiskEngine warm‑up OK");
+            }
+        });
+    }
+
     // Worker (hilo OS)
     {
         let tx2 = tx.clone();
@@ -160,6 +172,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut rec = metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume);
                     // Tag with session_id so per-session CSV files receive tick data
                     rec.session_id = tick_state.recording_sessions.read().await.first().copied().unwrap_or(0);
+                    // ─── Adaptive Risk Engine: macro fields + master signal ───────
+                    {
+                        let eng = tick_state.adaptive_engine.lock().await;
+                        rec.macro_slope = eng.macro_slope();
+                        rec.vfi_value = eng.vfi_value();
+                        rec.macd_hist = eng.macd_hist();
+                        rec.predicted_bias = eng.predicted_bias().to_string();
+                        rec.is_feedback_adjusted = eng.feedback_adjusted();
+                        let (master, cp_range, cp_valid) = eng.evaluate_master_signal(
+                            rec.binance_price, rec.poly_mid, rec.poly_spread,
+                            rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
+                            rec.poly_imbalance, rec.price_velocity,
+                            eng.feedback_adjusted() > 0,
+                        );
+                        rec.master_signal = master;
+                        rec.cp_uncertainty_range = cp_range;
+                        rec.cp_valid_signal = cp_valid;
+                    }
                     csv3.push(rec.clone());
                     sm3.push(&rec);
                 }
@@ -449,6 +479,25 @@ async fn capture_combined(
         .or_else(|| session_ids.first().copied())
         .unwrap_or(0);
     rec.session_id = active_sid;
+
+    // ─── Adaptive Risk Engine: macro fields + master signal ──────────────────
+    {
+        let eng = state.adaptive_engine.lock().await;
+        rec.macro_slope = eng.macro_slope();
+        rec.vfi_value = eng.vfi_value();
+        rec.macd_hist = eng.macd_hist();
+        rec.predicted_bias = eng.predicted_bias().to_string();
+        rec.is_feedback_adjusted = eng.feedback_adjusted();
+        let (master, cp_range, cp_valid) = eng.evaluate_master_signal(
+            rec.binance_price, rec.poly_mid, rec.poly_spread,
+            rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
+            rec.poly_imbalance, rec.price_velocity,
+            eng.feedback_adjusted() > 0,
+        );
+        rec.master_signal = master;
+        rec.cp_uncertainty_range = cp_range;
+        rec.cp_valid_signal = cp_valid;
+    }
 
     state.csv_logger.push(rec.clone());
 

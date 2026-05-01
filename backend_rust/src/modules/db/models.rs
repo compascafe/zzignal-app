@@ -117,3 +117,22 @@ pub struct SessionTrade {
     pub btc_price:   Option<f64>,
     pub created_at:  DateTime<Utc>,
 }
+
+// ─── Adaptive Risk Engine: Session Feedback Logs ──────────────────────────────
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct SessionLog {
+    pub id:                  i32,
+    pub session_id:          i32,
+    pub predicted_bias:      String,      // "UP" or "DOWN"
+    pub macd_at_start:       Option<f64>,
+    pub rsi_at_start:        Option<f64>,
+    pub vfi_at_start:        Option<f64>,
+    pub macro_slope:         Option<f64>,
+    pub btc_price_at_start:  Option<f64>,
+    pub actual_outcome:      Option<String>, // "up", "down", "tie", NULL if pending
+    pub accuracy_success:    Option<bool>,   // NULL until session completes
+    pub cp_quantile:         Option<f64>,    // current CP 95% quantile value
+    pub cp_alpha:            Option<f64>,    // Robbins-Monro learning rate alpha
+    pub created_at:          DateTime<Utc>,
+}

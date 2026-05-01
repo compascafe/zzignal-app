@@ -151,6 +151,49 @@ async fn process_sessions(state: Arc<AppState>) {
             warn!("SessionManager flush #{}: {}", session.id, e);
         }
 
+        // ─── Adaptive Risk Engine: write session log + feedback loop ────────
+        let predicted_bias;
+        let actual_outcome: String;
+        let accuracy: bool;
+        {
+            let eng = state.adaptive_engine.lock().await;
+            predicted_bias = eng.predicted_bias().to_string();
+            // Compare predicted bias vs actual outcome
+            actual_outcome = session.outcome_result.clone().unwrap_or_else(|| "tie".into());
+            accuracy = (predicted_bias == "UP" && actual_outcome == "up")
+                    || (predicted_bias == "DOWN" && actual_outcome == "down");
+        }
+        // Insert session log at start (we write completion now)
+        if predicted_bias != "IDLE" {
+            let start_price = session.btc_price_start;
+            let eng = state.adaptive_engine.lock().await;
+            if let Err(e) = repository::insert_session_log(
+                state.db.as_ref(), session.id,
+                &predicted_bias,
+                Some(eng.macd_hist()), Some(eng.rsi_value()), Some(eng.vfi_value()),
+                Some(eng.macro_slope()), start_price,
+                Some(eng.cp_quantile()), Some(eng.cp_alpha()),
+            ).await {
+                warn!("insert_session_log #{}: {}", session.id, e);
+            }
+            if let Err(e) = repository::complete_session_log(
+                state.db.as_ref(), session.id, &actual_outcome, accuracy,
+            ).await {
+                warn!("complete_session_log #{}: {}", session.id, e);
+            }
+            // Feedback loop: record accuracy + auto‑widen if needed
+            {
+                let mut eng = state.adaptive_engine.lock().await;
+                eng.cp_mut().record_accuracy(accuracy);
+                if !accuracy {
+                    eng.cp_mut().robbins_monro_update(0.5);
+                }
+                if eng.cp_mut().should_auto_widen() {
+                    eng.cp_mut().auto_widen();
+                }
+            }
+        }
+
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("No se pudo detener sesión #{}: {}", session.id, e);
         } else {

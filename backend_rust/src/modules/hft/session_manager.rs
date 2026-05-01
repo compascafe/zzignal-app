@@ -58,7 +58,7 @@ impl SessionManager {
              bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
              technical_confluence,trend_direction,signal_label,\
              realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-             cp_uncertainty_range,cp_valid_signal"
+                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted"
         );
 
         let mut writers = self.writers.lock().unwrap();
@@ -109,7 +109,8 @@ impl SessionManager {
                  price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
                  bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
                  technical_confluence,trend_direction,signal_label,\
-                 realized_volatility,high_volatility_event,bollinger_position,master_signal"
+                 realized_volatility,high_volatility_event,bollinger_position,master_signal,\
+                 cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted"
             );
         }
 
@@ -139,7 +140,7 @@ impl SessionManager {
 
         let _ = writeln!(
             sw.writer,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             record.ts_local,
             record.ts_exchange,
             record.event_type.as_str(),
@@ -193,6 +194,11 @@ impl SessionManager {
             record.master_signal,
             record.cp_uncertainty_range,
             record.cp_valid_signal,
+            record.macro_slope,
+            record.vfi_value,
+            record.macd_hist,
+            record.predicted_bias,
+            record.is_feedback_adjusted,
         );
 
         match record.event_type {

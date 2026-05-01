@@ -764,3 +764,65 @@ pub async fn query_hft_snapshots(pool: Option<&PgPool>, session_id: i32) -> Resu
     .await?;
     Ok(rows)
 }
+
+// ─── Adaptive Risk Engine: Session Logs ───────────────────────────────────────
+
+pub async fn insert_session_log(
+    pool: Option<&PgPool>,
+    session_id: i32,
+    predicted_bias: &str,
+    macd_at_start: Option<f64>,
+    rsi_at_start: Option<f64>,
+    vfi_at_start: Option<f64>,
+    macro_slope: Option<f64>,
+    btc_price_at_start: Option<f64>,
+    cp_quantile: Option<f64>,
+    cp_alpha: Option<f64>,
+) -> Result<i32> {
+    let Some(pool) = pool else { return Ok(0) };
+    let row: (i32,) = sqlx::query_as(
+        "INSERT INTO session_logs (session_id, predicted_bias, macd_at_start, rsi_at_start, vfi_at_start, macro_slope, btc_price_at_start, cp_quantile, cp_alpha) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id"
+    )
+    .bind(session_id)
+    .bind(predicted_bias)
+    .bind(macd_at_start)
+    .bind(rsi_at_start)
+    .bind(vfi_at_start)
+    .bind(macro_slope)
+    .bind(btc_price_at_start)
+    .bind(cp_quantile)
+    .bind(cp_alpha)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+pub async fn complete_session_log(
+    pool: Option<&PgPool>,
+    session_id: i32,
+    actual_outcome: &str,
+    accuracy_success: bool,
+) -> Result<()> {
+    let Some(pool) = pool else { return Ok(()) };
+    sqlx::query(
+        "UPDATE session_logs SET actual_outcome = $1, accuracy_success = $2 WHERE session_id = $3 AND actual_outcome IS NULL"
+    )
+    .bind(actual_outcome)
+    .bind(accuracy_success)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_recent_accuracy(pool: Option<&PgPool>, limit: i32) -> Vec<bool> {
+    let Some(pool) = pool else { return vec![] };
+    let rows: Vec<(Option<bool>,)> = sqlx::query_as(
+        "SELECT accuracy_success FROM session_logs WHERE accuracy_success IS NOT NULL ORDER BY created_at DESC LIMIT $1"
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    rows.into_iter().filter_map(|(b,)| b).collect()
+}

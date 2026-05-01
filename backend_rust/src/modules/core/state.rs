@@ -13,6 +13,7 @@ use crate::modules::hft::logger::CsvLogger;
 use crate::modules::hft::types::CsvRecord;
 use crate::modules::hft::executor::StrategyManager;
 use crate::modules::hft::session_manager::SessionManager;
+use crate::modules::hft::adaptive_risk_engine::AdaptiveRiskEngine;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -63,6 +64,9 @@ pub struct AppState {
 
     /// Flag: set by scheduler on new session start → consumer drains tick channel
     pub tick_drain: Arc<AtomicBool>,
+
+    /// Adaptive Risk Engine: macro 24h warm‑up + Conformal Prediction + feedback
+    pub adaptive_engine: Arc<tokio::sync::Mutex<AdaptiveRiskEngine>>,
 
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
@@ -116,6 +120,7 @@ impl AppState {
             session_manager:   Arc::new(SessionManager::new("sessions")),
             strategy_manager:  Arc::new(Mutex::new(StrategyManager::new())),
             tick_drain:        Arc::new(AtomicBool::new(false)),
+            adaptive_engine:   Arc::new(tokio::sync::Mutex::new(AdaptiveRiskEngine::new())),
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })
