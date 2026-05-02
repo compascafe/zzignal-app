@@ -7,6 +7,45 @@ use tracing::{info, warn};
 
 use crate::modules::hft::types::{CsvRecord, EventType};
 
+/// Pre-format a CsvRecord into a CSV line string.
+/// Uses a single pre-allocated String with write! to avoid per-field allocation.
+/// Called outside the writer lock — only the final `write_all` is inside the mutex.
+#[inline]
+fn fast_format_csv_line(r: &CsvRecord) -> String {
+    use std::fmt::Write;
+    // One allocation, no reallocs for the final string
+    let mut out = String::with_capacity(512);
+    let _ = write!(
+        out,
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
+         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
+         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        r.ts_local, r.ts_exchange, r.event_type.as_str(), r.latencia_ms,
+        r.binance_price, r.binance_micro_price, r.binance_imbalance,
+        r.binance_vol_100ms, r.binance_vol_24h,
+        r.poly_bid, r.poly_ask, r.poly_mid, r.poly_spread,
+        r.poly_bid_vol_all, r.poly_ask_vol_all, r.poly_imbalance,
+        r.trade_side, r.trade_price, r.trade_size,
+        r.is_informed,
+        r.imba_status, r.imba_side, r.imba_entry_price, r.imba_exit_price,
+        r.imba_trade_pnl, r.imba_balance,
+        r.liqb_status, r.liqb_side, r.liqb_entry_price, r.liqb_exit_price,
+        r.liqb_trade_pnl, r.liqb_balance,
+        r.trades_per_second, r.price_velocity, r.poly_liquidity_delta,
+        r.absorption_ratio, r.price_gap_ratio,
+        r.spoofing_flag, r.tape_speed_flag, r.gap_alert_flag,
+        r.bollinger_sma, r.bollinger_upper, r.bollinger_lower,
+        r.mean_reversion_signal, r.technical_confluence,
+        r.trend_direction, r.signal_label,
+        r.realized_volatility, r.high_volatility_event, r.bollinger_position,
+        r.master_signal, r.cp_uncertainty_range, r.cp_valid_signal,
+        r.macro_slope, r.vfi_value, r.macd_hist,
+        r.predicted_bias, r.is_feedback_adjusted,
+        r.dynamic_rsi, r.vfi_confidence, r.db_accuracy_factor,
+    );
+    out
+}
+
 struct SessionWriter {
     writer:    BufWriter<File>,
     path:      String,
@@ -42,7 +81,7 @@ impl SessionManager {
             .open(&path)
             .map_err(|e| format!("SessionManager: cannot create {}: {}", path, e))?;
 
-        let mut writer = BufWriter::with_capacity(65536, file);
+        let mut writer = BufWriter::with_capacity(10_485_760, file); // 10 MiB — cabe sesión de hasta ~20k filas en RAM
 
         // Write 51-column header
         let _ = writeln!(
@@ -93,7 +132,7 @@ impl SessionManager {
             .open(&path)
             .map_err(|e| format!("SessionManager: cannot recover {}: {}", path, e))?;
 
-        let mut writer = BufWriter::with_capacity(65536, file);
+        let mut writer = BufWriter::with_capacity(10_485_760, file); // 10 MiB
 
         // Write header only if file is new or empty
         if !file_exists {
@@ -128,9 +167,16 @@ impl SessionManager {
     }
 
     /// Push a CsvRecord to the session specified by record.session_id.
+    /// Pre-formats the CSV line OUTSIDE the writer lock to minimise mutex hold time.
+    /// Data stays in BufWriter(2 MiB) + OS page cache — flushed only at session end.
     pub fn push(&self, record: &CsvRecord) -> bool {
         let sid = record.session_id;
         if sid == 0 { return false; }
+
+        // Pre-format the CSV line outside the lock — avoids holding the mutex
+        // while formatting 60 float/string fields.
+        let line = fast_format_csv_line(record);
+        let is_trade = matches!(record.event_type, EventType::Trade);
 
         let mut writers = self.writers.lock().unwrap();
         let sw = match writers.get_mut(&sid) {
@@ -138,81 +184,19 @@ impl SessionManager {
             None => return false,
         };
 
-        let _ = writeln!(
-            sw.writer,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            record.ts_local,
-            record.ts_exchange,
-            record.event_type.as_str(),
-            record.latencia_ms,
-            record.binance_price,
-            record.binance_micro_price,
-            record.binance_imbalance,
-            record.binance_vol_100ms,
-            record.binance_vol_24h,
-            record.poly_bid,
-            record.poly_ask,
-            record.poly_mid,
-            record.poly_spread,
-            record.poly_bid_vol_all,
-            record.poly_ask_vol_all,
-            record.poly_imbalance,
-            record.trade_side,
-            record.trade_price,
-            record.trade_size,
-            record.is_informed,
-            record.imba_status,
-            record.imba_side,
-            record.imba_entry_price,
-            record.imba_exit_price,
-            record.imba_trade_pnl,
-            record.imba_balance,
-            record.liqb_status,
-            record.liqb_side,
-            record.liqb_entry_price,
-            record.liqb_exit_price,
-            record.liqb_trade_pnl,
-            record.liqb_balance,
-            record.trades_per_second,
-            record.price_velocity,
-            record.poly_liquidity_delta,
-            record.absorption_ratio,
-            record.price_gap_ratio,
-            record.spoofing_flag,
-            record.tape_speed_flag,
-            record.gap_alert_flag,
-            record.bollinger_sma,
-            record.bollinger_upper,
-            record.bollinger_lower,
-            record.mean_reversion_signal,
-            record.technical_confluence,
-            record.trend_direction,
-            record.signal_label,
-            record.realized_volatility,
-            record.high_volatility_event,
-            record.bollinger_position,
-            record.master_signal,
-            record.cp_uncertainty_range,
-            record.cp_valid_signal,
-            record.macro_slope,
-            record.vfi_value,
-            record.macd_hist,
-            record.predicted_bias,
-            record.is_feedback_adjusted,
-            record.dynamic_rsi,
-            record.vfi_confidence,
-            record.db_accuracy_factor,
-        );
+        // Write pre-formatted line + newline (single write! call = single buffer copy)
+        let _ = sw.writer.write_all(line.as_bytes());
+        let _ = sw.writer.write_all(b"\n");
 
-        match record.event_type {
-            EventType::Trade => sw.trade_count += 1,
-            _ => sw.tick_count += 1,
+        if is_trade {
+            sw.trade_count += 1;
+        } else {
+            sw.tick_count += 1;
         }
 
         sw.row_count += 1;
-        if sw.row_count % 10 == 0 {
-            let _ = sw.writer.flush();
-        }
+        // NO mid-session flush — data stays in BufWriter + OS page cache.
+        // Flushed only at stop_session() / Drop / SIGINT.
         true
     }
 

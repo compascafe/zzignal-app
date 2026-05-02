@@ -1,7 +1,7 @@
-//! Adaptive Risk Engine with Conformal Prediction & Macro 24h Warm-up.
+//! Adaptive Risk Engine with Conformal Prediction & Macro 4h Warm-up.
 //!
 //! Pipeline:
-//!   1. Macro warm‑up: fetch 1,440 candles (1m) from Binance REST, compute
+//!   1. Macro warm‑up: fetch 240 candles (1m, 4h) from Binance REST, compute
 //!      SMA200‑slope, MACD(3,10,16), VFI, RSI(14).
 //!   2. Conformal Prediction: residuals‑based normalcy range, 95 % quantile.
 //!   3. Master signal: macro + VFI + CP + spread confluence.
@@ -130,6 +130,9 @@ pub struct MacroSnapshot {
     pub close_prices:   VecDeque<f64>, // last 200 close prices (Bollinger+CP) — VecDeque for O(1) pop_front
     pub hunting_z_score: f64,    // current volume Z-Score
     pub volatility_1h:   f64,    // BB width / SMA as volatility proxy
+    pub live_tick_count: u64,    // live ticks since session start (gate for warmup)
+    pub warmup_ready:    bool,   // true when indicators are statistically stable
+    pub last_macd_hist:  f64,    // previous tick's MACD histogram (for stability check)
 }
 
 /// Simple moving average.
@@ -251,9 +254,9 @@ pub struct ConformalPredictor {
 impl ConformalPredictor {
     pub fn new() -> Self {
         Self {
-            residuals_macd:  VecDeque::with_capacity(1440),
-            residuals_rsi:   VecDeque::with_capacity(1440),
-            residuals_price: VecDeque::with_capacity(1440),
+            residuals_macd:  VecDeque::with_capacity(240),
+            residuals_rsi:   VecDeque::with_capacity(240),
+            residuals_price: VecDeque::with_capacity(240),
             quantile_macd:   0.05,
             quantile_rsi:    0.05,
             quantile_price:  0.005, // 0.5% of price
@@ -278,10 +281,10 @@ impl ConformalPredictor {
         for &r in macd_res { self.residuals_macd.push_back(r); }
         for &r in rsi_res  { self.residuals_rsi.push_back(r); }
         for &r in price_res { self.residuals_price.push_back(r); }
-        // Trim to 1440 max
-        while self.residuals_macd.len() > 1440 { self.residuals_macd.pop_front(); }
-        while self.residuals_rsi.len() > 1440 { self.residuals_rsi.pop_front(); }
-        while self.residuals_price.len() > 1440 { self.residuals_price.pop_front(); }
+        // Trim to 240 max (4h window)
+        while self.residuals_macd.len() > 240 { self.residuals_macd.pop_front(); }
+        while self.residuals_rsi.len() > 240 { self.residuals_rsi.pop_front(); }
+        while self.residuals_price.len() > 240 { self.residuals_price.pop_front(); }
         self.update_quantiles();
     }
 
@@ -428,11 +431,11 @@ pub struct WarmupResult {
 }
 
 /// Fetch Binance candles + compute all indicators WITHOUT holding any engine lock.
-/// This is the expensive part (2–5s HTTP); the engine lock is only needed for `apply_warmup_result`.
+/// Uses 4h of 1m candles (240) — enough for SMA200+VFI130 without stale volatility.
 pub async fn warmup_fetch_and_compute() -> Result<WarmupResult, String> {
-    let candles = fetch_binance_klines("BTCUSDT", "1m", 1440).await?;
+    let candles = fetch_binance_klines("BTCUSDT", "1m", 240).await?;
     if candles.len() < 200 {
-        return Err(format!("Not enough candles: {} < 200", candles.len()));
+        return Err(format!("Not enough candles: {} < 200 (need 200 for SMA200)", candles.len()));
     }
     let closes: Vec<f64> = candles.iter().map(|c| c.close).collect();
 
@@ -468,7 +471,7 @@ pub async fn warmup_fetch_and_compute() -> Result<WarmupResult, String> {
     // Store last 200 close prices for runtime Bollinger+CP
     snapshot.close_prices = VecDeque::from(closes[closes.len().saturating_sub(200)..].to_vec());
 
-    // Calibrate CP residuals from 24h history
+    // Calibrate CP residuals from 4h history (240 candles)
     let mut cp = ConformalPredictor::new();
     if n >= 200 {
         let macd_residuals: Vec<f64> = (200..n)
@@ -532,6 +535,14 @@ impl AdaptiveRiskEngine {
         }
     }
 
+    /// Reset per-session warmup state (called at session start).
+    pub fn reset_session_warmup(&mut self) {
+        self.macro_snap.live_tick_count = 0;
+        self.macro_snap.warmup_ready = false;
+        self.macro_snap.last_macd_hist = 0.0;
+        self.macro_snap.predicted_bias = String::new();
+    }
+
     /// Apply pre-computed warmup results — fast, lock‑friendly (no I/O).
     /// Only replaces CP on first warmup. Subsequent calls preserve RL-learned CP state.
     pub fn apply_warmup_result(&mut self, result: WarmupResult) {
@@ -545,9 +556,9 @@ impl AdaptiveRiskEngine {
         }
     }
 
-    /// Phase 1: Download 1,440 1‑min candles from Binance REST and compute all indicators.
+    /// Phase 1: Download 240 1‑min candles from Binance REST and compute all indicators.
     pub async fn warmup(&mut self) -> Result<(), String> {
-        info!("AdaptiveRiskEngine: fetching 1,440 candles (1m) from Binance...");
+        info!("AdaptiveRiskEngine: fetching 240 candles (1m, 4h) from Binance...");
         let result = warmup_fetch_and_compute().await?;
         self.apply_warmup_result(result);
         info!("AdaptiveRiskEngine: warm‑up complete. slope={:.6} bias={} rsi={:.2} vfi={:.4}",
@@ -594,7 +605,7 @@ impl AdaptiveRiskEngine {
         self.macro_snap.close_prices = VecDeque::from(closes[closes.len().saturating_sub(200)..].to_vec());
     }
 
-    /// Calibrate CP residuals from the 24h history.
+    /// Calibrate CP residuals from the 4h history (240 candles, 40 residuals).
     fn calibrate_cp(&mut self, closes: &[f64]) {
         let n = closes.len();
         if n < 200 { return; }
@@ -668,20 +679,22 @@ impl AdaptiveRiskEngine {
         let cp_range = self.cp.uncertainty_range(binance_price);
         let band_width = bollinger_upper - bollinger_lower;
 
-        // ─── Dynamic CP threshold ─────────────────────────────────────────────
+        // ─── Dynamic CP threshold — graduated confidence ──────────────────────
         let volatility = if band_width > 0.0 && bollinger_sma > 0.0 {
             band_width / bollinger_sma
         } else { 0.01 };
         self.macro_snap.volatility_1h = volatility;
 
-        let dyn_quantile = self.cp.quantile_price.max(volatility * 0.5);
-        let dyn_threshold = dyn_quantile * binance_price;
-        let cp_extreme = self.cp.is_price_extreme(binance_price, bollinger_sma)
-            && cp_range > dyn_threshold * 0.5;
-        let cp_valid: u8 = if cp_extreme { 1 } else { 0 };
+        // Graduated cp_valid: deviation_ratio = |price - sma| / (sma * quantile_price)
+        // cp_valid=1 when ratio > 0.25 (mild anomaly), previously required > 1.0 (extreme)
+        let deviation_ratio = if bollinger_sma > 0.0 && cp_range > 0.0 {
+            (binance_price - bollinger_sma).abs() / cp_range
+        } else { 0.0 };
+        let cp_valid: u8 = if deviation_ratio > 0.25 { 1 } else { 0 };
 
         let spread_ok = poly_spread > 0.0 && poly_spread <= 0.05;
-        let data_valid = poly_spread > 0.0 && poly_imbalance > 0.0 && bollinger_sma > 0.0;
+        // data_valid: poly_imbalance can be 0 (all liquidity on one side), don't block
+        let data_valid = poly_spread > 0.0 && bollinger_sma > 0.0;
         let mut master: u8 = 0;
 
         // ──────────────────────────────────────────────────────────────────────
@@ -711,11 +724,11 @@ impl AdaptiveRiskEngine {
             let velocity_reversing_up = price_velocity > -0.0003 && price_velocity < 0.001 && price_velocity != 0.0;
             let velocity_reversing_down = price_velocity > -0.001 && price_velocity < 0.0003 && price_velocity != 0.0;
 
-            if rsi < 25.0 && velocity_reversing_up && spread_ok {
+            if rsi < 30.0 && velocity_reversing_up && spread_ok {
                 master = 5; // MOMENTUM BUY
                 self.macro_snap.predicted_bias = "UP".into();
                 info!("📈 MOMENTUM BUY rsi={:.1} vel={:.6}", rsi, price_velocity);
-            } else if rsi > 75.0 && velocity_reversing_down && spread_ok {
+            } else if rsi > 70.0 && velocity_reversing_down && spread_ok {
                 master = 6; // MOMENTUM SELL
                 self.macro_snap.predicted_bias = "DOWN".into();
                 info!("📉 MOMENTUM SELL rsi={:.1} vel={:.6}", rsi, price_velocity);
@@ -796,6 +809,12 @@ impl AdaptiveRiskEngine {
                 info!("BB Signal: master={} cp={:.0} score={:.3} vfi={:.1} rsi={:.1}",
                     master, cp_range, score_normalized, self.macro_snap.vfi, self.macro_snap.rsi14);
             }
+        }
+
+        // ─── Warmup gate: suppress all signals until indicators stabilise ────
+        if !self.macro_snap.warmup_ready {
+            master = 0;
+            self.macro_snap.predicted_bias = String::new();
         }
 
         // ─── Encoded cp_valid: bits 0=cp_valid, 1=hunting, 2=feedback, 3-4=layer ──
@@ -943,12 +962,13 @@ impl AdaptiveRiskEngine {
     /// Update dynamic rolling RSI with a new price tick.
     /// Called each time a new Binance price arrives during a session.
     /// Returns the current dynamic RSI value.
+    /// Gates warmup: MACD/RSI/SMA must have ≥50 live ticks + stable history before bias emission.
     pub fn update_dynamic_rsi(&mut self, ctx: &mut MacroContext, price: f64) -> f64 {
+        self.macro_snap.live_tick_count += 1;
         self.macro_snap.close_prices.push_back(price);
         if self.macro_snap.close_prices.len() > 200 {
-            self.macro_snap.close_prices.pop_front();  // O(1) vs O(n) remove(0)
+            self.macro_snap.close_prices.pop_front();
         }
-        // make_contiguous is O(1) when the buffer hasn't wrapped (true for push_front/pop_back alternation)
         let prices = self.macro_snap.close_prices.make_contiguous();
         if prices.len() >= 15 {
             ctx.last_rsi = ctx.dynamic_rsi;
@@ -968,6 +988,18 @@ impl AdaptiveRiskEngine {
                 (self.macro_snap.sma50 - self.macro_snap.sma200) / self.macro_snap.sma200 * 100.0
             } else { 0.0 };
         }
+        // Warmup gate: 50+ live ticks AND MACD histogram must be stable (|Δ| < 50%)
+        if self.macro_snap.live_tick_count >= 50 && prices.len() >= 16 {
+            let prev_hist = self.macro_snap.last_macd_hist;
+            let curr_hist = self.macro_snap.macd_hist;
+            if prev_hist == 0.0 || curr_hist == 0.0 {
+                self.macro_snap.warmup_ready = false;
+            } else {
+                let delta_ratio = ((curr_hist - prev_hist).abs() / prev_hist.abs()).min(1.0);
+                self.macro_snap.warmup_ready = delta_ratio < 0.5;
+            }
+            self.macro_snap.last_macd_hist = curr_hist;
+        }
         ctx.dynamic_rsi
     }
 
@@ -975,6 +1007,7 @@ impl AdaptiveRiskEngine {
     /// Cross above 30 → flip DOWN to UP (oversold bounce).
     /// Cross below 70 → flip UP to DOWN (overbought rejection).
     pub fn check_momentum_trigger(&mut self, ctx: &mut MacroContext) -> bool {
+        if !self.macro_snap.warmup_ready { return false; }
         // Cross above 30: oversold → bounce UP
         if ctx.last_rsi <= 30.0 && ctx.dynamic_rsi > 30.0 && !ctx.momentum_flipped {
             ctx.momentum_flipped = true;

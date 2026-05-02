@@ -14,6 +14,9 @@ use crate::modules::hft::metrics; // for TrackingState type
 const BINANCE_COMBINED_WS: &str =
     "wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/btcusdt@ticker";
 
+/// If Binance delivers no message for this duration, force disconnect + reconnect.
+const BINANCE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Evento de tick de Binance (precio + volumen + timestamp) para el pipeline unificado.
 #[derive(Debug, Clone)]
 pub struct BinanceTickEvent {
@@ -49,7 +52,16 @@ pub async fn run_binance_depth_stream(
 
                 loop {
                     let msg_result = tokio::select! {
-                        msg = read.next() => msg,
+                        msg = async {
+                            match tokio::time::timeout(BINANCE_READ_TIMEOUT, read.next()).await {
+                                Ok(inner) => inner,
+                                Err(_elapsed) => {
+                                    warn!("Binance depth stream: read timeout {}s — forcing reconnect",
+                                        BINANCE_READ_TIMEOUT.as_secs());
+                                    None // triggers break below
+                                }
+                            }
+                        } => msg,
                         _ = shutdown.recv() => {
                             info!("Binance depth stream: shutdown signal");
                             return;

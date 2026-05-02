@@ -261,6 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
                         state3.recording_sessions.write().await.push(child_id);
                         state3.session_manager.start_session(child_id).ok();
+                        state3.adaptive_engine.lock().await.reset_session_warmup();
                         session_repo::start_session_recording(&state3, child_id, btc_price).await.ok();
                         info!("Auto-started indefinite session: parent #{}, child #{} ({})", parent_id, child_id, child_name);
                     }
@@ -476,13 +477,21 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         AppMsg::OpenOrders(o) => { *state.open_orders.write().await = o.clone(); }
 
         AppMsg::RecentFills(fills) => {
-            *state.recent_fills.write().await = fills.clone();
-            for fill in fills {
-                if let Err(e) = db::insert_fill(state.db.as_ref(), fill).await {
-                    warn!("DB insert_fill: {e}");
+            // Dedup: skip if fills haven't changed since last poll (CLOB returns history, not deltas)
+            let current = state.recent_fills.read().await;
+            let is_same = current.len() == fills.len()
+                && current.first().map_or(false, |f| fills.first().map_or(false, |g| f.time == g.time))
+                && current.last().map_or(false, |f| fills.last().map_or(false, |g| f.time == g.time));
+            drop(current);
+            if !is_same {
+                *state.recent_fills.write().await = fills.clone();
+                for fill in fills.iter() {
+                    if let Err(e) = db::insert_fill(state.db.as_ref(), fill).await {
+                        warn!("DB insert_fill: {e}");
+                    }
                 }
+                capture_fills_csv(state, &fills).await;
             }
-            capture_fills_csv(state, fills).await;
         }
 
         AppMsg::Candles { interval, candles } => {
@@ -639,7 +648,6 @@ async fn capture_combined(
 
     // Strategy Manager: evaluate both shadow strategies (A: Imbalance, B: Liquidity)
     let result = state.strategy_manager.lock().unwrap().evaluate(&rec);
-    let closed = result.imba.status == "CLOSED" || result.liqb.status == "CLOSED";
 
     // Update the in-memory record with strategy fields
     {
@@ -659,10 +667,8 @@ async fn capture_combined(
             last.liqb_balance = result.liqb.balance;
         }
     }
-    // If a trade just closed, flush the CSV immediately
-    if closed {
-        let _ = state.session_manager.flush(active_sid);
-    }
+    // NO mid-session flush — all data stays in BufWriter + OS page cache
+    // until session end (stop_session) or graceful shutdown (SIGINT).
 
     // In-memory buffer
     state.mem_hft.write().await.push(rec.clone());

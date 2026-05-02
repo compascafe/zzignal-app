@@ -126,17 +126,17 @@ impl TrackingState {
         *last = Some(price);
     }
 
-    /// Flag de trading informado: 1 si hubo big move (>$1.00) O spike de volumen (>2σ) en últimos 100ms.
+    /// Flag de trading informado: 1 si hubo big move (>$1.00) O spike de volumen (>2σ) en últimos 500ms.
     pub fn is_informed(&self, now_ms: i64) -> u8 {
-        // Check big move
+        // Check big move (500ms window — Binance exchange time may lag local time)
         let bm = self.last_big_move.lock().unwrap();
         if let Some(ts) = *bm {
-            if now_ms - ts <= 100 { return 1; }
+            if now_ms - ts <= 500 { return 1; }
         }
-        // Check volume spike: último volumen > mean + 2σ
+        // Check volume spike: último volumen > mean + 1.5σ (was 2σ)
         let vol_now = self.vol_100ms(now_ms);
         let stats = self.vol_stats.lock().unwrap();
-        if stats.is_spike(vol_now, 2.0) {
+        if stats.is_spike(vol_now, 1.5) {
             return 1;
         }
         0
@@ -623,9 +623,9 @@ pub fn compute_liquidity_delta(
         Some(p) if p > 0.0 => current_ask_vol - p,
         _ => 0.0,
     };
-    // Detect spoofing: >30% volume drop with no Polymarket trade matching
+    // Detect spoofing: >50% volume drop with no Polymarket trade (was 30% — too noisy)
     let spoofing = if let Some(p) = prev {
-        if p > 0.0 && delta < 0.0 && (delta.abs() / p) > 0.30 && !is_poly_trade {
+        if p > 0.0 && delta < 0.0 && (delta.abs() / p) > 0.50 && !is_poly_trade {
             1u8
         } else { 0u8 }
     } else { 0u8 };
@@ -668,7 +668,7 @@ pub fn compute_price_gap(
     let poly_pct_move = (effective_poly - poly_start) / poly_start.max(1e-10);
     let gap_pct = (poly_pct_move - btc_pct_move) * 100.0;
 
-    let alert = if gap_pct.abs() > 0.05 { 1u8 } else { 0u8 };
+    let alert = if gap_pct.abs() > 0.5 { 1u8 } else { 0u8 }; // 0.5% gap (was 0.05% — too noisy)
     (gap_pct, alert)
 }
 
