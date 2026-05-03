@@ -133,6 +133,17 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "# [113] fenix4550_entry    = entry price");
     let _ = writeln!(w, "# [114] fenix4550_pnl      = live PnL");
     let _ = writeln!(w, "# [115] fenix_signal        = 0=none 1=UP 2=DOWN (delta bid/ask + velocity)");
+    let _ = writeln!(w, "# ─── Fenix Target + Exit ────────────────────────────────────────────");
+    let _ = writeln!(w, "# [116] fenix35_target      = exit target price");
+    let _ = writeln!(w, "# [117] fenix30_target      = exit target price");
+    let _ = writeln!(w, "# [118] fenix45_target      = exit target price");
+    let _ = writeln!(w, "# [119] fenix40_target      = exit target price");
+    let _ = writeln!(w, "# [120] fenix4550_target    = exit target price");
+    let _ = writeln!(w, "# [121] fenix35_exit        = 1=target hit");
+    let _ = writeln!(w, "# [122] fenix30_exit        = 1=target hit");
+    let _ = writeln!(w, "# [123] fenix45_exit        = 1=target hit");
+    let _ = writeln!(w, "# [124] fenix40_exit        = 1=target hit");
+    let _ = writeln!(w, "# [125] fenix4550_exit      = 1=target hit");
     let _ = writeln!(w, "# ─────────────────────────────────────────────────────────────────────");
 
 }
@@ -148,7 +159,7 @@ fn fast_format_csv_line(r: &CsvRecord) -> String {
         "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
          {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
          {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
-         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
         r.ts_local, r.ts_exchange, r.event_type.as_str(), r.latencia_ms,
         r.binance_price, r.binance_micro_price, r.binance_imbalance,
         r.binance_vol_100ms, r.binance_vol_24h,
@@ -191,6 +202,9 @@ fn fast_format_csv_line(r: &CsvRecord) -> String {
         r.fenix45_entry, r.fenix45_pnl,
         r.fenix40_entry, r.fenix40_pnl,
         r.fenix4550_entry, r.fenix4550_pnl,
+        r.fenix35_target, r.fenix30_target, r.fenix45_target,
+        r.fenix40_target, r.fenix4550_target,
+        r.fenix35_exit, r.fenix30_exit, r.fenix45_exit, r.fenix40_exit, r.fenix4550_exit,
         r.fenix_signal,
     );
     out
@@ -250,7 +264,7 @@ impl SessionManager {
              bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
              technical_confluence,trend_direction,signal_label,\
              realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix_signal"
+                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,fenix_signal"
         );
 
         let mut writers = self.writers.lock().unwrap();
@@ -302,7 +316,7 @@ impl SessionManager {
                  bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
                  technical_confluence,trend_direction,signal_label,\
                  realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix_signal"
+                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,fenix_signal"
             );
         }
 

@@ -185,6 +185,17 @@ pub struct CsvRecord {
     pub fenix40_pnl:            f64,
     pub fenix4550_entry:        f64,
     pub fenix4550_pnl:          f64,
+    // ─── Fenix target + exit ───────────────────────────────────────────────
+    pub fenix35_target:         f64,   // exit target price
+    pub fenix30_target:         f64,
+    pub fenix45_target:         f64,
+    pub fenix40_target:         f64,
+    pub fenix4550_target:       f64,
+    pub fenix35_exit:           u8,    // 1 = exited (target hit)
+    pub fenix30_exit:           u8,
+    pub fenix45_exit:           u8,
+    pub fenix40_exit:           u8,
+    pub fenix4550_exit:         u8,
     // ─── Fenix delta + velocity composite signal ──────────────────────────
     pub fenix_signal:           u8,    // 0=none, 1=UP, 2=DOWN (delta+velocity)
 }
@@ -290,6 +301,16 @@ impl Default for CsvRecord {
             fenix45_entry:           0.0, fenix45_pnl: 0.0,
             fenix40_entry:           0.0, fenix40_pnl: 0.0,
             fenix4550_entry:         0.0, fenix4550_pnl: 0.0,
+            fenix35_target:          0.0,
+            fenix30_target:          0.0,
+            fenix45_target:          0.0,
+            fenix40_target:          0.0,
+            fenix4550_target:        0.0,
+            fenix35_exit:            0,
+            fenix30_exit:            0,
+            fenix45_exit:            0,
+            fenix40_exit:            0,
+            fenix4550_exit:          0,
             fenix_signal:            0,
         }
     }

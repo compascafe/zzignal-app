@@ -728,13 +728,13 @@ async fn capture_combined(
         // ─── Fenix Trading: paper-trading simulation ──────────────────────────
         let (fenix_trades, fenix_signal) = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask, &rec.predicted_bias, rec.poly_spread, rec.binance_vol_100ms, rec.trades_per_second, rec.poly_imbalance, rec.price_velocity, rec.poly_bid_vol_all, rec.poly_ask_vol_all);
         rec.fenix_signal = fenix_signal;
-        for (code, active, entry, pnl, skip) in fenix_trades {
+        for (code, active, entry, pnl, skip, target, exit) in fenix_trades {
             match code.as_str() {
-                "fenix35"   => { rec.fenix35_trade = active; rec.fenix35_entry = entry; rec.fenix35_pnl = pnl; rec.fenix35_skip = skip; }
-                "fenix30"   => { rec.fenix30_trade = active; rec.fenix30_entry = entry; rec.fenix30_pnl = pnl; rec.fenix30_skip = skip; }
-                "fenix45"   => { rec.fenix45_trade = active; rec.fenix45_entry = entry; rec.fenix45_pnl = pnl; rec.fenix45_skip = skip; }
-                "fenix40"   => { rec.fenix40_trade = active; rec.fenix40_entry = entry; rec.fenix40_pnl = pnl; rec.fenix40_skip = skip; }
-                "fenix4550" => { rec.fenix4550_trade = active; rec.fenix4550_entry = entry; rec.fenix4550_pnl = pnl; rec.fenix4550_skip = skip; }
+                "fenix35"   => { rec.fenix35_trade = active; rec.fenix35_entry = entry; rec.fenix35_pnl = pnl; rec.fenix35_skip = skip; rec.fenix35_target = target; rec.fenix35_exit = exit; }
+                "fenix30"   => { rec.fenix30_trade = active; rec.fenix30_entry = entry; rec.fenix30_pnl = pnl; rec.fenix30_skip = skip; rec.fenix30_target = target; rec.fenix30_exit = exit; }
+                "fenix45"   => { rec.fenix45_trade = active; rec.fenix45_entry = entry; rec.fenix45_pnl = pnl; rec.fenix45_skip = skip; rec.fenix45_target = target; rec.fenix45_exit = exit; }
+                "fenix40"   => { rec.fenix40_trade = active; rec.fenix40_entry = entry; rec.fenix40_pnl = pnl; rec.fenix40_skip = skip; rec.fenix40_target = target; rec.fenix40_exit = exit; }
+                "fenix4550" => { rec.fenix4550_trade = active; rec.fenix4550_entry = entry; rec.fenix4550_pnl = pnl; rec.fenix4550_skip = skip; rec.fenix4550_target = target; rec.fenix4550_exit = exit; }
                 _ => {}
             }
         }
