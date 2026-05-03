@@ -10,3 +10,4 @@ pub mod strategy_framework;
 pub mod t5_strategy;
 pub mod t3_strategy;
 pub mod pnr_strategy;
+pub mod insight_strategies;

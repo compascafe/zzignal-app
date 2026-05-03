@@ -17,6 +17,7 @@ use crate::modules::hft::adaptive_risk_engine::MacroContext;
 use crate::modules::hft::t5_strategy::T5Manager;
 use crate::modules::hft::t3_strategy::T3Manager;
 use crate::modules::hft::pnr_strategy::PnrManager;
+use crate::modules::hft::insight_strategies::InsightManager;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -81,6 +82,9 @@ pub struct AppState {
     /// PNR Analysis — Wisdom v4 (Hydra No Return)
     pub pnr_manager: Arc<PnrManager>,
 
+    /// Insight Strategies — Cerbero & Fenix families
+    pub insight_manager: Arc<InsightManager>,
+
     /// Latency tracking (ms) for health endpoint
     pub latency_binance: RwLock<u64>,
     pub latency_poly:    RwLock<u64>,
@@ -138,6 +142,7 @@ impl AppState {
             t5_manager:        Arc::new(T5Manager::new()),
             t3_manager:        Arc::new(T3Manager::new()),
             pnr_manager:       Arc::new(PnrManager::new()),
+            insight_manager:   Arc::new(InsightManager::new()),
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
             #[cfg(feature = "premium-patterns")]

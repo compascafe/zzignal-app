@@ -689,6 +689,19 @@ async fn capture_combined(
             state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
                 rec.pnr_price, rec.pnr_return_up, rec.pnr_return_down);
         }
+        // ─── Insight Strategies: Cerbero + Fenix ─────────────────────────────
+        let insights = state.insight_manager.on_tick(active_sid, rec.poly_mid);
+        for (code, active, dir) in insights {
+            match code.as_str() {
+                "cerbero70" => { rec.cerbero70_active = active; rec.cerbero70_price = if active>0 {rec.poly_mid} else {0.0}; rec.cerbero70_dir = dir as i8; }
+                "cerbero80" => { rec.cerbero80_active = active; rec.cerbero80_price = if active>0 {rec.poly_mid} else {0.0}; rec.cerbero80_dir = dir as i8; }
+                "cerbero90" => { rec.cerbero90_active = active; rec.cerbero90_price = if active>0 {rec.poly_mid} else {0.0}; rec.cerbero90_dir = dir as i8; }
+                "fenix35"   => { rec.fenix35_active = active; rec.fenix35_price = if active>0 {rec.poly_mid} else {0.0}; rec.fenix35_dir = dir as i8; }
+                "fenix30"   => { rec.fenix30_active = active; rec.fenix30_price = if active>0 {rec.poly_mid} else {0.0}; rec.fenix30_dir = dir as i8; }
+                "fenix45"   => { rec.fenix45_active = active; rec.fenix45_price = if active>0 {rec.poly_mid} else {0.0}; rec.fenix45_dir = dir as i8; }
+                _ => {}
+            }
+        }
     }
 
     // Per-session CSV file (multi-writer: each session gets its own file)

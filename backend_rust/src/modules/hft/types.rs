@@ -138,6 +138,30 @@ pub struct CsvRecord {
     pub pnr_confidence:         f64,   // |poly_mid - 0.5| * 2 (0-1 scale)
     pub pnr_trend:              i8,    // +1 UP, -1 DOWN, 0 flat
     pub pnr_spread_pct:         f64,   // spread / mid (or 1.0 if one-sided)
+    // ─── Cerbero 70-80: price in [0.70, 0.80] ─────────────────────────────
+    pub cerbero70_active:       u8,
+    pub cerbero70_price:        f64,
+    pub cerbero70_dir:          i8,    // 1=UP, -1=DOWN, 0=N/A
+    // ─── Cerbero 80-90: price in [0.80, 0.90] ─────────────────────────────
+    pub cerbero80_active:       u8,
+    pub cerbero80_price:        f64,
+    pub cerbero80_dir:          i8,
+    // ─── Cerbero 90-98: price in [0.90, 0.98] ─────────────────────────────
+    pub cerbero90_active:       u8,
+    pub cerbero90_price:        f64,
+    pub cerbero90_dir:          i8,
+    // ─── Fenix 35-65: price in [0.35, 0.65] ───────────────────────────────
+    pub fenix35_active:         u8,
+    pub fenix35_price:          f64,
+    pub fenix35_dir:            i8,
+    // ─── Fenix 30-50: price in [0.30, 0.50] ───────────────────────────────
+    pub fenix30_active:         u8,
+    pub fenix30_price:          f64,
+    pub fenix30_dir:            i8,
+    // ─── Fenix 45-55: price in [0.45, 0.55] ───────────────────────────────
+    pub fenix45_active:         u8,
+    pub fenix45_price:          f64,
+    pub fenix45_dir:            i8,
 }
 
 impl Default for CsvRecord {
@@ -220,6 +244,12 @@ impl Default for CsvRecord {
             pnr_confidence:         0.0,
             pnr_trend:              0,
             pnr_spread_pct:         0.0,
+            cerbero70_active:        0, cerbero70_price: 0.0, cerbero70_dir: 0,
+            cerbero80_active:        0, cerbero80_price: 0.0, cerbero80_dir: 0,
+            cerbero90_active:        0, cerbero90_price: 0.0, cerbero90_dir: 0,
+            fenix35_active:          0, fenix35_price: 0.0, fenix35_dir: 0,
+            fenix30_active:          0, fenix30_price: 0.0, fenix30_dir: 0,
+            fenix45_active:          0, fenix45_price: 0.0, fenix45_dir: 0,
         }
     }
 }
