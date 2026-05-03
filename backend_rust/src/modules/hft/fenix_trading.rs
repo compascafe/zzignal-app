@@ -98,7 +98,9 @@ pub struct FenixStats {
     pub range:          String,
     pub confirm_ticks:  u32,
     pub capital:        f64,
-    pub balance:        f64,
+    pub balance:        f64,           // acumulativo desde inicio
+    pub session_pnl:    f64,           // PnL de la última sesión
+    pub session_balance: f64,          // balance al cierre de última sesión ($20 + PnL)
     pub trades:         u64,
     pub wins:           u64,
     pub accuracy:       f64,
@@ -116,7 +118,7 @@ impl FenixStats {
             name: def.name.into(), code: def.code.into(),
             range: format!("[{:.2}, {:.2}]", def.min, def.max),
             confirm_ticks: def.confirm_ticks,
-            capital: 20.0, balance: 20.0, trades: 0, wins: 0,
+            capital: 20.0, balance: 20.0, session_pnl: 0.0, session_balance: 20.0,
             accuracy: 0.0, total_pnl: 0.0, avg_pnl: 0.0,
             best_pnl: 0.0, worst_pnl: 0.0, sessions_tracked: 0,
             last_10: Vec::with_capacity(10),
@@ -301,6 +303,13 @@ impl FenixTradingManager {
         };
 
         let mut stats = self.stats.lock().unwrap();
+
+        // Reset session balance to $20 per strategy
+        for s in stats.iter_mut() {
+            s.session_balance = 20.0;
+            s.session_pnl = 0.0;
+        }
+
         for (i, def) in FENIX_DEFS.iter().enumerate() {
             let trade = &state.trades[i];
             if !trade.entered { continue; }
@@ -318,6 +327,10 @@ impl FenixTradingManager {
 
             let correct = pnl > 0.0;
 
+            // Per-session
+            stats[i].session_pnl += pnl;
+            stats[i].session_balance += pnl;
+            // Cumulative
             stats[i].balance += pnl;
             stats[i].trades += 1;
             if correct { stats[i].wins += 1; }
@@ -329,10 +342,10 @@ impl FenixTradingManager {
             stats[i].last_10.push(correct);
             if stats[i].last_10.len() > 10 { stats[i].last_10.remove(0); }
 
-            info!("[FenixTrading] #{} {} SETTLED: {}@{}→{} pnl={:.4} bal=${:.2} {}",
+            info!("[FenixTrading] #{} {} SETTLED: {}@{}→{} pnl={:.4} bal=${:.2}|${:.2} {}",
                 session_id, def.name,
                 if trade.direction_up {"UP"} else {"DOWN"}, trade.entry_price, trade.target_price,
-                pnl, stats[i].balance,
+                pnl, stats[i].session_balance, stats[i].balance,
                 if trade.settled { "[target hit]"} else { "[session end]" });
         }
         for s in stats.iter_mut() { s.sessions_tracked += 1; }
