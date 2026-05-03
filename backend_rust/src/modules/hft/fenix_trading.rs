@@ -125,6 +125,7 @@ impl FenixTradingManager {
                    predicted_bias: &str, poly_spread: f64,
                    binance_vol_100ms: f64, trades_per_second: f64,
                    poly_imbalance: f64, price_velocity: f64,
+                   poly_bid_vol_all: f64, poly_ask_vol_all: f64,
     ) -> Vec<(String, u8, f64, f64, u8)>
     {
         let mut sessions = self.sessions.lock().unwrap();
@@ -137,8 +138,10 @@ impl FenixTradingManager {
 
         let mut results = Vec::with_capacity(FENIX_DEFS.len());
         for (i, def) in FENIX_DEFS.iter().enumerate() {
-            // In range = both bid AND ask are within strategy bounds (real uncertainty)
-            let in_range = poly_bid >= def.min && poly_ask <= def.max && poly_bid > 0.0 && poly_ask > 0.0;
+            // In range = real two-sided market: both sides have volume + prices exist
+            let in_range = poly_bid_vol_all > 10.0 && poly_ask_vol_all > 10.0
+                        && poly_bid > 0.0 && poly_ask > 0.0
+                        && poly_mid >= def.min && poly_mid <= def.max;
             if in_range {
                 trades[i].ticks_in_range += 1;
 
@@ -207,10 +210,11 @@ impl FenixTradingManager {
                     trades[i].entered = true;
                     trades[i].direction_up = dir_up;
                     trades[i].entry_price = if dir_up { poly_ask } else { poly_bid };
-                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (spread={:.4} bias={} vol={:.2} tps={:.1} imb={:.2})",
+                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (spread={:.4} bias={} vol={:.2} tps={:.1} imb={:.2} bidV={:.0f} askV={:.0f})",
                         session_id, def.name, if dir_up {"UP"} else {"DOWN"},
                         trades[i].entry_price, poly_spread, predicted_bias,
-                        binance_vol_100ms, trades_per_second, poly_imbalance);
+                        binance_vol_100ms, trades_per_second, poly_imbalance,
+                        poly_bid_vol_all, poly_ask_vol_all);
                 }
             } else {
                 if !trades[i].entered {
