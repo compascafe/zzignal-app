@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
 jobs:
   deploy-frontend:
     runs-on: ubuntu-latest
@@ -148,11 +152,15 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SERVER_SSH_KEY_TK }}
           script: |
+            set -e
             cd /home/ubuntu/zzignal-app
             tar -xzf deploy.tar.gz
             rm deploy.tar.gz
             echo "${{ secrets.ENV_FILE }}" | base64 -d > .env
             chmod +x polymarket-backend
+            test -f polymarket-backend || (echo "FATAL: binary not found after extract" && exit 1)
+            file polymarket-backend
+            echo "Binary size: $(stat -c%s polymarket-backend) bytes"
 
       - name: Restart Service
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
@@ -162,4 +170,17 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SERVER_SSH_KEY_TK }}
           script: |
+            set -e
             sudo systemctl restart zzignal-app
+            echo "Waiting for service to bind..."
+            for i in $(seq 1 10); do
+              sleep 2
+              if curl -sf http://localhost:8080/api/status > /dev/null 2>&1; then
+                echo "OK: Service is healthy after ${i}s"
+                exit 0
+              fi
+              echo "  attempt $i/10: not ready yet..."
+            done
+            echo "ERROR: Service did not become healthy after 20s"
+            sudo journalctl -u zzignal-app --no-pager -n 30
+            exit 1

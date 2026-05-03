@@ -9,7 +9,8 @@ use crate::modules::hft::types::{CsvRecord, EventType};
 
 /// Write column descriptions as # comment lines before the header row.
 fn write_column_metadata(w: &mut BufWriter<File>) {
-    let _ = writeln!(w, "# ─── Column Reference (94 columns) ─────────────────────────────────────");
+    let _ = writeln!(w, "# build_version={} built@{}", env!("GIT_VERSION"), env!("BUILD_TIME"));
+    let _ = writeln!(w, "# ─── Column Reference (114 columns) ─────────────────────────────────────");
     let _ = writeln!(w, "# [1]  ts_local            = Local timestamp (ISO 8601)");
     let _ = writeln!(w, "# [2]  ts_exchange         = Binance exchange event_time (unix ms)");
     let _ = writeln!(w, "# [3]  event_type          = BOOK_UPDATE | TRADE | BINANCE_TICK");
@@ -115,11 +116,11 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "# [98] fenix40_trade       = 1=active trade");
     let _ = writeln!(w, "# [99] fenix4550_trade     = 1=active trade");
     let _ = writeln!(w, "# ─── Fenix Skip Reason (diagnostic) ────────────────────────────────");
-    let _ = writeln!(w, "# [100] fenix35_skip       = 0=none 1=trend blocked 2=spread blocked");
-    let _ = writeln!(w, "# [101] fenix30_skip       = 0=none 1=trend blocked 2=spread blocked");
-    let _ = writeln!(w, "# [102] fenix45_skip       = 0=none 1=trend blocked 2=spread blocked");
-    let _ = writeln!(w, "# [103] fenix40_skip       = 0=none 1=trend blocked 2=spread blocked");
-    let _ = writeln!(w, "# [104] fenix4550_skip     = 0=none 1=trend blocked 2=spread blocked");
+    let _ = writeln!(w, "# [100] fenix35_skip       = 0=none 1=trend blocked 2=spread blocked 3=volume blocked");
+    let _ = writeln!(w, "# [101] fenix30_skip       = 0=none 1=trend blocked 2=spread blocked 3=volume blocked");
+    let _ = writeln!(w, "# [102] fenix45_skip       = 0=none 1=trend blocked 2=spread blocked 3=volume blocked");
+    let _ = writeln!(w, "# [103] fenix40_skip       = 0=none 1=trend blocked 2=spread blocked 3=volume blocked");
+    let _ = writeln!(w, "# [104] fenix4550_skip     = 0=none 1=trend blocked 2=spread blocked 3=volume blocked");
     let _ = writeln!(w, "# ─── Fenix Live PnL ─────────────────────────────────────────────────");
     let _ = writeln!(w, "# [105] fenix35_entry      = entry price");
     let _ = writeln!(w, "# [106] fenix35_pnl        = live PnL");

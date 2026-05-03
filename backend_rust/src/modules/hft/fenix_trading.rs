@@ -137,7 +137,8 @@ impl FenixTradingManager {
 
         let mut results = Vec::with_capacity(FENIX_DEFS.len());
         for (i, def) in FENIX_DEFS.iter().enumerate() {
-            let in_range = poly_mid >= def.min && poly_mid <= def.max;
+            // In range = both bid AND ask are within strategy bounds (real uncertainty)
+            let in_range = poly_bid >= def.min && poly_ask <= def.max && poly_bid > 0.0 && poly_ask > 0.0;
             if in_range {
                 trades[i].ticks_in_range += 1;
 
@@ -149,11 +150,11 @@ impl FenixTradingManager {
                 };
 
                 if !trades[i].entered && trades[i].ticks_in_range >= effective_confirm {
-                    // ── Filter 4: spread gate (5% relative to mid price) ─────
+                    // ── Filter 4: spread gate (200% relative, market-defining edge) ─
                     let spread_ratio = if poly_mid > 0.0 { poly_spread / poly_mid } else { 1.0 };
-                    if spread_ratio > 0.05 {
+                    if spread_ratio > 2.0 {
                         trades[i].ticks_in_range = 0;
-                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 2u8)); // skip=spread
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 2u8));
                         continue;
                     }
 

@@ -40,6 +40,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
+    info!("zzignal-app v{} built @{}", env!("GIT_VERSION"), env!("BUILD_TIME"));
+
     let creds = match ClobCredentials::from_env() {
         Ok(c) => { info!("Wallet: {}", c.display_address()); Arc::new(c) }
         Err(e) => { error!("Credenciales no disponibles: {:#}", e); return Ok(()); }

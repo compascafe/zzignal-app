@@ -169,7 +169,7 @@ pub struct CsvRecord {
     pub fenix40_trade:          u8,
     pub fenix4550_trade:        u8,
     // ─── Fenix skip reason (per-tick diagnostic) ────────────────────────────
-    pub fenix35_skip:           u8,    // 0=none, 1=trend blocked, 2=spread blocked
+    pub fenix35_skip:           u8,    // 0=none, 1=trend blocked, 2=spread blocked, 3=volume blocked
     pub fenix30_skip:           u8,
     pub fenix45_skip:           u8,
     pub fenix40_skip:           u8,
