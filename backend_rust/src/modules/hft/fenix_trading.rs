@@ -9,15 +9,16 @@
 //!
 //! Filters per tick:
 //!   Trend:  don't enter DOWN if predicted_bias=UP (and vice versa)
-//!   Spread: poly_spread > 0.02 → skip entry
-//!   Momentum: direction from last 8 poly_mid slope (replaces fixed DOWN)
+//!   Spread: >200% relative → skip
+//!   Volume gate: binance_vol_100ms < 0.3 && tps < 1.0 → skip
+//!   Delta signal: bid/ask volume deltas + velocity → UP/DOWN signal
+//!   Momentum: last 8 poly_mid slope
 //!
-//! CSV: fenixXX_trade (active), fenixXX_entry (entry price), fenixXX_pnl (live PnL)
+//! CSV: fenixXX_trade, fenixXX_entry, fenixXX_pnl, fenixXX_skip, fenix_signal
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use chrono::Utc;
 use serde::Serialize;
 use tracing::info;
 
@@ -30,7 +31,7 @@ struct FenixDef {
     min:           f64,
     max:           f64,
     direction:     &'static str,
-    confirm_ticks: u32,  // ticks in range before entry
+    confirm_ticks: u32,
 }
 
 static FENIX_DEFS: &[FenixDef] = &[
@@ -54,7 +55,7 @@ struct FenixSessionTrade {
     settled:         bool,
     virtual_pnl:     f64,
     correct:         bool,
-    recent_prices:   Vec<f64>,  // last MOMENTUM_WINDOW poly_mid for momentum calc
+    recent_prices:   Vec<f64>,
 }
 
 impl Default for FenixSessionTrade {
@@ -65,6 +66,53 @@ impl Default for FenixSessionTrade {
             recent_prices: Vec::with_capacity(MOMENTUM_WINDOW),
         }
     }
+}
+
+// ─── Per-Session Delta Tracker ──────────────────────────────────────────────
+
+struct FenixSessionState {
+    trades:        Vec<FenixSessionTrade>,
+    prev_bid_vol:  f64,
+    prev_ask_vol:  f64,
+    prev_imb:      f64,
+}
+
+/// Compute composite delta + velocity signal: 0=none, 1=UP, 2=DOWN
+fn compute_fenix_signal(
+    bid_vol: f64, ask_vol: f64, imb: f64,
+    prev_bid: f64, prev_ask: f64, prev_imb: f64,
+    velocity: f64,
+) -> u8 {
+    let delta_bid = bid_vol - prev_bid;
+    let delta_ask = ask_vol - prev_ask;
+    let delta_imb = imb - prev_imb;
+
+    // Strong UP: volume shifting from ask→bid + BTC rising
+    if velocity > 2.0 && delta_bid > 0.0 && delta_ask < 0.0 {
+        return 1;
+    }
+    // Strong UP: velocity alone strong + imbalance increasing
+    if velocity > 3.0 && delta_imb > 0.05 {
+        return 1;
+    }
+    // Strong DOWN: volume shifting from bid→ask + BTC falling
+    if velocity < -2.0 && delta_bid < 0.0 && delta_ask > 0.0 {
+        return 2;
+    }
+    // Strong DOWN: velocity alone strong + imbalance decreasing
+    if velocity < -3.0 && delta_imb < -0.05 {
+        return 2;
+    }
+    // Weak UP
+    if velocity > 1.0 && delta_imb > 0.0 {
+        return 1;
+    }
+    // Weak DOWN
+    if velocity < -1.0 && delta_imb < 0.0 {
+        return 2;
+    }
+    // No clear signal
+    0
 }
 
 // ─── Cumulative Stats ──────────────────────────────────────────────────────
@@ -106,7 +154,7 @@ impl FenixStats {
 // ─── Fenix Trading Manager ─────────────────────────────────────────────────
 
 pub struct FenixTradingManager {
-    sessions: Mutex<HashMap<i32, Vec<FenixSessionTrade>>>,
+    sessions: Mutex<HashMap<i32, FenixSessionState>>,
     stats:    Mutex<Vec<FenixStats>>,
 }
 
@@ -120,18 +168,31 @@ impl FenixTradingManager {
 
     /// On each tick: check entry for each strategy independently.
     /// Returns: Vec of (code, active, entry_price, unrealized_pnl, skip_reason)
-    /// skip_reason: 0=none, 1=trend blocked, 2=spread blocked, 3=volume blocked
+    /// + fenix_signal: 0=none, 1=UP, 2=DOWN (delta+velocity composite)
     pub fn on_tick(&self, session_id: i32, poly_mid: f64, poly_bid: f64, poly_ask: f64,
                    predicted_bias: &str, poly_spread: f64,
                    binance_vol_100ms: f64, trades_per_second: f64,
                    poly_imbalance: f64, price_velocity: f64,
                    poly_bid_vol_all: f64, poly_ask_vol_all: f64,
-    ) -> Vec<(String, u8, f64, f64, u8)>
+    ) -> (Vec<(String, u8, f64, f64, u8)>, u8)
     {
         let mut sessions = self.sessions.lock().unwrap();
-        let trades = sessions.entry(session_id).or_insert_with(|| {
-            FENIX_DEFS.iter().map(|_| FenixSessionTrade::default()).collect()
+        let state = sessions.entry(session_id).or_insert_with(|| FenixSessionState {
+            trades:        FENIX_DEFS.iter().map(|_| FenixSessionTrade::default()).collect(),
+            prev_bid_vol:  poly_bid_vol_all,
+            prev_ask_vol:  poly_ask_vol_all,
+            prev_imb:      poly_imbalance,
         });
+
+        // ── Delta signal ──────────────────────────────────────────────────
+        let fenix_signal = compute_fenix_signal(
+            poly_bid_vol_all, poly_ask_vol_all, poly_imbalance,
+            state.prev_bid_vol, state.prev_ask_vol, state.prev_imb,
+            price_velocity,
+        );
+        state.prev_bid_vol = poly_bid_vol_all;
+        state.prev_ask_vol = poly_ask_vol_all;
+        state.prev_imb     = poly_imbalance;
 
         let bias_up = predicted_bias.contains("UP");
         let bias_down = predicted_bias.contains("DOWN");
@@ -142,106 +203,112 @@ impl FenixTradingManager {
             let in_range = poly_bid_vol_all > 10.0 && poly_ask_vol_all > 10.0
                         && poly_bid > 0.0 && poly_ask > 0.0
                         && poly_mid >= def.min && poly_mid <= def.max;
-            if in_range {
-                trades[i].ticks_in_range += 1;
 
-                // ── Volume trigger: high activity → faster entry (reduce confirm by 1) ─
+            if in_range {
+                state.trades[i].ticks_in_range += 1;
+
                 let effective_confirm = if trades_per_second >= 1.5 && binance_vol_100ms > 0.5 {
                     def.confirm_ticks.saturating_sub(1).max(1)
                 } else {
                     def.confirm_ticks
                 };
 
-                if !trades[i].entered && trades[i].ticks_in_range >= effective_confirm {
-                    // ── Filter 4: spread gate (200% relative, market-defining edge) ─
+                if !state.trades[i].entered && state.trades[i].ticks_in_range >= effective_confirm {
+                    // ── Filter 4: spread gate (200% relative) ────────────
                     let spread_ratio = if poly_mid > 0.0 { poly_spread / poly_mid } else { 1.0 };
                     if spread_ratio > 2.0 {
-                        trades[i].ticks_in_range = 0;
+                        state.trades[i].ticks_in_range = 0;
                         results.push((def.code.to_string(), 0u8, 0.0, 0.0, 2u8));
                         continue;
                     }
 
-                    // ── Filter 5: volume gate ─────────────────────────────
+                    // ── Filter 5: volume gate ────────────────────────────
                     if binance_vol_100ms < 0.3 && trades_per_second < 1.0 {
-                        trades[i].ticks_in_range = 0;
-                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 3u8)); // skip=volume
+                        state.trades[i].ticks_in_range = 0;
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 3u8));
                         continue;
                     }
 
-                    // ── Direction: MAJORITY, MOMENTUM, UP, DOWN ────────────
-                    let mut dir_up = match def.direction {
-                        "UP"       => true,
-                        "DOWN"     => false,
-                        "MOMENTUM" => {
-                            let rp = &trades[i].recent_prices;
-                            if rp.len() >= 4 {
-                                let slope = rp[..].windows(2)
-                                    .map(|w| w[1] - w[0])
-                                    .sum::<f64>();
-                                slope > 0.0
-                            } else {
-                                poly_mid > 0.5
+                    // ── Direction: DELTA SIGNAL overrides others ────────
+                    let mut dir_up = if fenix_signal == 1 {
+                        true // delta+velocity says UP
+                    } else if fenix_signal == 2 {
+                        false // delta+velocity says DOWN
+                    } else {
+                        match def.direction {
+                            "UP"       => true,
+                            "DOWN"     => false,
+                            "MOMENTUM" => {
+                                let rp = &state.trades[i].recent_prices;
+                                if rp.len() >= 4 {
+                                    let slope = rp[..].windows(2)
+                                        .map(|w| w[1] - w[0])
+                                        .sum::<f64>();
+                                    slope > 0.0
+                                } else {
+                                    poly_mid > 0.5
+                                }
                             }
+                            _ => poly_mid > 0.5,
                         }
-                        _          => poly_mid > 0.5,
                     };
 
-                    // ── Volume direction bias: override if strong signal ───
-                    // Strong imbalance + BTC velocity aligns → confident direction
-                    if poly_imbalance > 1.2 && price_velocity > 2.0 {
-                        dir_up = true;  // buying pressure + BTC rising
-                    } else if poly_imbalance < 0.8 && price_velocity < -2.0 {
-                        dir_up = false; // selling pressure + BTC falling
+                    // ── Volume direction bias (fallback override) ───────
+                    if fenix_signal == 0 {
+                        if poly_imbalance > 1.2 && price_velocity > 2.0 {
+                            dir_up = true;
+                        } else if poly_imbalance < 0.8 && price_velocity < -2.0 {
+                            dir_up = false;
+                        }
                     }
 
-                    // ── Filter 1: macro trend gate ─────────────────────────
+                    // ── Filter 1: macro trend gate ──────────────────────
                     if !bias_up && !bias_down {
-                        // No bias → allow entry (warmup phase)
+                        // warmup
                     } else if dir_up && bias_down {
-                        trades[i].ticks_in_range = 0;
-                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8)); // skip=trend
+                        state.trades[i].ticks_in_range = 0;
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8));
                         continue;
                     } else if !dir_up && bias_up {
-                        trades[i].ticks_in_range = 0;
-                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8)); // skip=trend
+                        state.trades[i].ticks_in_range = 0;
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8));
                         continue;
                     }
 
-                    trades[i].entered = true;
-                    trades[i].direction_up = dir_up;
-                    trades[i].entry_price = if dir_up { poly_ask } else { poly_bid };
-                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (spread={:.4} bias={} vol={:.2} tps={:.1} imb={:.2} bidV={:.0f} askV={:.0f})",
+                    state.trades[i].entered = true;
+                    state.trades[i].direction_up = dir_up;
+                    state.trades[i].entry_price = if dir_up { poly_ask } else { poly_bid };
+                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (sgn={} spread={:.4} bias={} vol={:.2} tps={:.1} imb={:.2} bidV={:.0} askV={:.0})",
                         session_id, def.name, if dir_up {"UP"} else {"DOWN"},
-                        trades[i].entry_price, poly_spread, predicted_bias,
+                        state.trades[i].entry_price, fenix_signal,
+                        poly_spread, predicted_bias,
                         binance_vol_100ms, trades_per_second, poly_imbalance,
                         poly_bid_vol_all, poly_ask_vol_all);
                 }
             } else {
-                if !trades[i].entered {
-                    trades[i].ticks_in_range = 0;
+                if !state.trades[i].entered {
+                    state.trades[i].ticks_in_range = 0;
                 }
             }
 
-            // Track recent prices for momentum (always, even if not in range)
-            trades[i].recent_prices.push(poly_mid);
-            if trades[i].recent_prices.len() > MOMENTUM_WINDOW {
-                trades[i].recent_prices.remove(0);
+            state.trades[i].recent_prices.push(poly_mid);
+            if state.trades[i].recent_prices.len() > MOMENTUM_WINDOW {
+                state.trades[i].recent_prices.remove(0);
             }
 
-            let active = if trades[i].entered && !trades[i].settled { 1u8 } else { 0u8 };
-            let entry = if active == 1 { trades[i].entry_price } else { 0.0 };
-
+            let active = if state.trades[i].entered && !state.trades[i].settled { 1u8 } else { 0u8 };
+            let entry = if active == 1 { state.trades[i].entry_price } else { 0.0 };
             let live_pnl = if active == 1 {
-                if trades[i].direction_up {
-                    poly_mid - trades[i].entry_price
+                if state.trades[i].direction_up {
+                    poly_mid - state.trades[i].entry_price
                 } else {
-                    trades[i].entry_price - poly_mid
+                    state.trades[i].entry_price - poly_mid
                 }
             } else { 0.0 };
 
             results.push((def.code.to_string(), active, entry, live_pnl, 0u8));
         }
-        results
+        (results, fenix_signal)
     }
 
     /// Called at session close. Settles all open trades.
@@ -251,14 +318,14 @@ impl FenixTradingManager {
         let is_tie = !actual_up && !actual_down;
 
         let mut sessions = self.sessions.lock().unwrap();
-        let trades = match sessions.remove(&session_id) {
-            Some(t) => t,
+        let state = match sessions.remove(&session_id) {
+            Some(s) => s,
             None => return,
         };
 
         let mut stats = self.stats.lock().unwrap();
         for (i, def) in FENIX_DEFS.iter().enumerate() {
-            let trade = &trades[i];
+            let trade = &state.trades[i];
             if !trade.entered { continue; }
 
             let pnl = if is_tie {

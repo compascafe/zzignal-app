@@ -185,6 +185,8 @@ pub struct CsvRecord {
     pub fenix40_pnl:            f64,
     pub fenix4550_entry:        f64,
     pub fenix4550_pnl:          f64,
+    // ─── Fenix delta + velocity composite signal ──────────────────────────
+    pub fenix_signal:           u8,    // 0=none, 1=UP, 2=DOWN (delta+velocity)
 }
 
 impl Default for CsvRecord {
@@ -288,6 +290,7 @@ impl Default for CsvRecord {
             fenix45_entry:           0.0, fenix45_pnl: 0.0,
             fenix40_entry:           0.0, fenix40_pnl: 0.0,
             fenix4550_entry:         0.0, fenix4550_pnl: 0.0,
+            fenix_signal:            0,
         }
     }
 }
