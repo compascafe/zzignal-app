@@ -356,7 +356,12 @@ pub async fn get_active_session(state: &AppState) -> Result<Option<RecordingSess
 pub async fn list_recording_session_ids(pool: Option<&PgPool>) -> Vec<i32> {
     match pool {
         Some(p) => {
-            sqlx::query_as::<_, (i32,)>("SELECT id FROM recording_sessions WHERE status = 'recording'")
+            // Exclude parent containers: they have children and should never record data
+            sqlx::query_as::<_, (i32,)>(
+                "SELECT id FROM recording_sessions WHERE status = 'recording' \
+                 AND (parent_id IS NOT NULL \
+                      OR NOT EXISTS (SELECT 1 FROM recording_sessions WHERE parent_id = recording_sessions.id))"
+            )
                 .fetch_all(p)
                 .await
                 .map(|rows| rows.into_iter().map(|(id,)| id).collect())
@@ -401,8 +406,12 @@ pub async fn list_sessions(state: &AppState, limit: i64) -> Result<Vec<Recording
 
 pub async fn get_sessions_to_start(state: &AppState) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
+        // Exclude parent containers: they have children and should never start recording
         let rows = sqlx::query_as::<_, RecordingSession>(
-            &format!("{SESS_COLS} WHERE status = 'scheduled' AND scheduled_start <= NOW() + INTERVAL '5 seconds' ORDER BY scheduled_start ASC")
+            &format!("{SESS_COLS} WHERE status = 'scheduled' AND scheduled_start <= NOW() + INTERVAL '5 seconds' \
+                      AND (parent_id IS NOT NULL \
+                           OR NOT EXISTS (SELECT 1 FROM recording_sessions WHERE parent_id = recording_sessions.id)) \
+                      ORDER BY scheduled_start ASC")
         )
         .fetch_all(pool)
         .await?;

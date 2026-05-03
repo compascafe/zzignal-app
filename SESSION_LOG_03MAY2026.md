@@ -113,11 +113,49 @@ frontend_react/src/components/WisdomCompare.jsx           (NUEVO)
 
 ### Próximos pasos
 
-1. Esperar sesión 600 (termina 15:15) → verificar archivo NO esté en 8KB
-2. Sesión 601 (15:15-15:30) → confirmar estabilidad
+1. ~~Esperar sesión 600 (termina 15:15) → verificar archivo NO esté en 8KB~~ → sesión 603 confirmada: 2110 ticks, CSV vacío (0 filas de datos)
+2. ~~Sesión 601 (15:15-15:30) → confirmar estabilidad~~ → mismo bug, CSV vacío
 3. Revisar `GET /api/fenix` para ver PnL acumulado
 4. Implementar estrategias adicionales que el usuario mencionó
 5. Posible: módulo de análisis exhaustivo multi-estrategia
+
+---
+
+## Fix: CSV vacío (sesión 603) — 17:00 UTC
+
+### Diagnóstico
+
+Sesión 603 (`session_603_hft.csv`) con metadata correcta (2110 ticks, outcome=down) pero **cero filas de datos**. Causa raíz:
+
+```
+Parent 378 (indefinido) created → scheduler lo arranca como sesión normal
+→ recording_sessions = [378]
+→ Child 603 created → recording_sessions = [378, 603]
+→ rec.session_id = first() = 378 → TODOS los ticks van a CSV de 378
+→ CSV de 603 recibe header + metadata pero NUNCA datos
+```
+
+El parent (contenedor) NUNCA debería estar en `recording_sessions` porque no debe grabar datos.
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---|---|
+| `backend_rust/src/main.rs:210` | `first()` → `last()` (tick consumer, safety net) |
+| `backend_rust/src/main.rs:484` | `first()` → `last()` (strategy on_tick) |
+| `backend_rust/src/main.rs:656` | `first()` → `last()` (book/trade record + active_ids) |
+| `backend_rust/src/modules/db/repository.rs:359` | `list_recording_session_ids` excluye parents (sesiones con hijos) |
+| `backend_rust/src/modules/db/repository.rs:404` | `get_sessions_to_start` excluye parents |
+
+### Query de filtro
+
+```sql
+WHERE status = 'recording'  -- o 'scheduled'
+  AND (parent_id IS NOT NULL
+       OR NOT EXISTS (SELECT 1 FROM recording_sessions WHERE parent_id = recording_sessions.id))
+```
+
+Excluye padres contenedores, incluye hijos y sesiones standalone.
 
 ### Comandos útiles en servidor
 

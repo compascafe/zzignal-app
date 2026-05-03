@@ -207,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut rec = { let _g = perf::BUILD_TICK.start();
                         metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume)
                     };
-                    rec.session_id = tick_state.recording_sessions.read().await.first().copied().unwrap_or(0);
+                    rec.session_id = tick_state.recording_sessions.read().await.last().copied().unwrap_or(0);
                     // ─── Adaptive Risk Engine: macro fields + master signal ───────
                     {
                         let _g = perf::ENGINE_LOCK.start();
@@ -481,7 +481,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                 (bid.price + ask.price) / 2.0
             } else { 0.0 };
             if poly_mid > 0.0 {
-                let sid = state.recording_sessions.read().await.first().copied().unwrap_or(0);
+                let sid = state.recording_sessions.read().await.last().copied().unwrap_or(0);
                 state.t5_manager.on_tick(Utc::now(), sid, poly_mid,
                     b.bids.first().map(|l| l.price).unwrap_or(0.0),
                     b.asks.first().map(|l| l.price).unwrap_or(0.0));
@@ -653,8 +653,8 @@ async fn capture_combined(
     };
     // Tag with session_id BEFORE pushing to per-session CSV + in-memory buffer
     let session_ids = state.recording_sessions.read().await.clone();
-    let active_sid = state.session_manager.active_ids().first().copied()
-        .or_else(|| session_ids.first().copied())
+    let active_sid = session_ids.last().copied()
+        .or_else(|| state.session_manager.active_ids().last().copied())
         .unwrap_or(0);
     rec.session_id = active_sid;
 
