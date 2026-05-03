@@ -671,6 +671,20 @@ async fn capture_combined(
         rec.t3_prediction = t3_pred;
         rec.t3_entry_price = t3_entry;
         rec.t3_active = if t3_active { 1 } else { 0 };
+        // ─── PNR: Point of No Return indicators (last 5 min analysis) ────────
+        let secs_left = state.t5_manager.seconds_left(active_sid);
+        if secs_left >= 0 && secs_left <= 300 {
+            rec.pnr_active = 1;
+            rec.pnr_seconds_left = secs_left as i32;
+            rec.pnr_price = rec.poly_mid;
+            rec.pnr_return_up = if rec.poly_ask > 0.0 { 1.0 - rec.poly_ask } else { 0.0 };
+            rec.pnr_return_down = if rec.poly_bid > 0.0 { rec.poly_bid } else { 0.0 };
+            rec.pnr_volatility_1m = rec.poly_liquidity_delta.abs();
+            rec.pnr_confidence = ((rec.poly_mid - 0.5).abs() * 2.0).min(1.0);
+            rec.pnr_trend = if rec.predicted_bias.contains("UP") { 1 }
+                else if rec.predicted_bias.contains("DOWN") { -1 } else { 0 };
+            rec.pnr_spread_pct = if rec.poly_mid > 0.0 { rec.poly_spread / rec.poly_mid } else { 0.0 };
+        }
     }
 
     // Per-session CSV file (multi-writer: each session gets its own file)

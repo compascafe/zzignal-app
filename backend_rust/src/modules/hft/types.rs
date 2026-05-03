@@ -128,6 +128,16 @@ pub struct CsvRecord {
     pub t3_prediction:          String,
     pub t3_entry_price:         f64,
     pub t3_active:              u8,    // 1 = trade active
+    // ─── PNR: Point of No Return (last 5 min analysis) ─────────────────────
+    pub pnr_active:             u8,    // 1 = inside last 300s window
+    pub pnr_seconds_left:       i32,   // seconds until session close
+    pub pnr_price:              f64,   // poly_mid at this tick
+    pub pnr_return_up:          f64,   // 1.0 - poly_ask (expected return if UP)
+    pub pnr_return_down:        f64,   // poly_bid - 0.0 (expected return if DOWN)
+    pub pnr_volatility_1m:      f64,   // max price swing in last 60s
+    pub pnr_confidence:         f64,   // |poly_mid - 0.5| * 2 (0-1 scale)
+    pub pnr_trend:              i8,    // +1 UP, -1 DOWN, 0 flat
+    pub pnr_spread_pct:         f64,   // spread / mid (or 1.0 if one-sided)
 }
 
 impl Default for CsvRecord {
@@ -201,6 +211,15 @@ impl Default for CsvRecord {
             t3_prediction:         String::new(),
             t3_entry_price:        0.0,
             t3_active:             0,
+            pnr_active:             0,
+            pnr_seconds_left:       0,
+            pnr_price:              0.0,
+            pnr_return_up:          0.0,
+            pnr_return_down:        0.0,
+            pnr_volatility_1m:      0.0,
+            pnr_confidence:         0.0,
+            pnr_trend:              0,
+            pnr_spread_pct:         0.0,
         }
     }
 }

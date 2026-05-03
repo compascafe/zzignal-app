@@ -461,6 +461,17 @@ impl T5Manager {
             (String::new(), 0.0, false)
         }
     }
+
+    /// Seconds remaining in the session (negative if session ended).
+    pub fn seconds_left(&self, session_id: i32) -> i64 {
+        let snap = self.snapshots.lock().unwrap();
+        if let Some(s) = snap.get(&session_id) {
+            let now = Utc::now();
+            (s.scheduled_end - now).num_seconds()
+        } else {
+            -1
+        }
+    }
 }
 
 // ─── Trade Logic Helpers ───────────────────────────────────────────────────

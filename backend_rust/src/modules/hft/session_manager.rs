@@ -17,9 +17,9 @@ fn fast_format_csv_line(r: &CsvRecord) -> String {
     let mut out = String::with_capacity(512);
     let _ = write!(
         out,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
-         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
-         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
+         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
+         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
         r.ts_local, r.ts_exchange, r.event_type.as_str(), r.latencia_ms,
         r.binance_price, r.binance_micro_price, r.binance_imbalance,
         r.binance_vol_100ms, r.binance_vol_24h,
@@ -44,6 +44,9 @@ fn fast_format_csv_line(r: &CsvRecord) -> String {
         r.dynamic_rsi, r.vfi_confidence, r.db_accuracy_factor,
         r.t5_prediction, r.t5_entry_price, r.t5_correct,
         r.t3_prediction, r.t3_entry_price, r.t3_active,
+        r.pnr_active, r.pnr_seconds_left, r.pnr_price,
+        r.pnr_return_up, r.pnr_return_down, r.pnr_volatility_1m,
+        r.pnr_confidence, r.pnr_trend, r.pnr_spread_pct,
     );
     out
 }
@@ -99,7 +102,7 @@ impl SessionManager {
              bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
              technical_confluence,trend_direction,signal_label,\
              realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active"
+                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct"
         );
 
         let mut writers = self.writers.lock().unwrap();
@@ -151,7 +154,7 @@ impl SessionManager {
                  bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
                  technical_confluence,trend_direction,signal_label,\
                  realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active"
+                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct"
             );
         }
 
