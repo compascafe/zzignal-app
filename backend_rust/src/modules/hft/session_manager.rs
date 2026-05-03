@@ -196,7 +196,7 @@ impl SessionManager {
             .open(&path)
             .map_err(|e| format!("SessionManager: cannot create {}: {}", path, e))?;
 
-        let mut writer = BufWriter::with_capacity(10_485_760, file); // 10 MiB — cabe sesión de hasta ~20k filas en RAM
+        let mut writer = BufWriter::with_capacity(52_428_800, file); // 50 MiB
 
         // Write column metadata
         write_column_metadata(&mut writer);
@@ -250,7 +250,7 @@ impl SessionManager {
             .open(&path)
             .map_err(|e| format!("SessionManager: cannot recover {}: {}", path, e))?;
 
-        let mut writer = BufWriter::with_capacity(10_485_760, file); // 10 MiB
+        let mut writer = BufWriter::with_capacity(52_428_800, file); // 50 MiB
 
         // Write header only if file is new or empty
         if !file_exists {
@@ -286,7 +286,7 @@ impl SessionManager {
 
     /// Push a CsvRecord to the session specified by record.session_id.
     /// Pre-formats the CSV line OUTSIDE the writer lock to minimise mutex hold time.
-    /// Data stays in BufWriter(2 MiB) + OS page cache — flushed only at session end.
+    /// Data stays in BufWriter(50 MiB) + OS page cache — safety flush every 500 rows.
     pub fn push(&self, record: &CsvRecord) -> bool {
         let sid = record.session_id;
         if sid == 0 { return false; }
@@ -313,8 +313,11 @@ impl SessionManager {
         }
 
         sw.row_count += 1;
-        // NO mid-session flush — data stays in BufWriter + OS page cache.
-        // Flushed only at stop_session() / Drop / SIGINT.
+        // Periodic safety flush every 500 rows (~30s at 16 rows/s) — protects against crash,
+        // but keeps 99% of data in RAM via BufWriter(10MB).
+        if sw.row_count % 500 == 0 {
+            let _ = sw.writer.flush();
+        }
         true
     }
 
