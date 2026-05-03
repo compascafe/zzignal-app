@@ -175,3 +175,63 @@ tail -5 ~/zzignal-app/sessions/session_0601_hft.csv
 # Contar líneas de datos
 wc -l ~/zzignal-app/sessions/session_0601_hft.csv
 ```
+
+---
+
+## Fenix v3 — Range-based Trading con 50ms Edge — 20:00-21:00 UTC
+
+### Commits
+
+| Commit | Descripción |
+|---|---|
+| `fc422db` | Fix CSV vacío: parent 378 se colaba en recording_sessions |
+| `83d4ac8` | Fix SQL alias: recording_sessions.id se resolvía contra tabla interna |
+| `ab1d696` | Rate-limit gap alert a 1 cada 5s |
+| `3c71196` | Fenix filters v1: trend gate, momentum direction, spread filter, fenixXX_skip |
+| `dcfa4de` | Fenix volume filter: binance_vol gate, TPS fast entry, imbalance direction bias |
+| `9e4efb2` | Spread gate: cambiado de absoluto >0.02 a relativo >5% (spread/mid) |
+| `39506bb` | Fenix in_range usa bid/ask real + spread gate 200% |
+| `35508ad` | Fenix in_range usa volumen real (bid/ask depth ≥10) + poly_mid |
+| `bb688f4` | Fenix delta tracker: bid/ask volume deltas + velocity → UP/DOWN signal |
+| `25e3abe` | Volume gate usa poly depth (bid/ask vol) en vez de binance |
+| `833c781` | **Fenix v3**: range-based entry/exit con target, fenixXX_target + fenixXX_exit CSV |
+| `21277b3` | Per-session balance ($20 start) + cumulative balance |
+| `d198d6e` | Fix: FenixStats::new missing fields |
+| `87991c2` | Fix: market_active acepta one-sided markets |
+
+### Cómo funciona Fenix v3
+
+Cada estrategia tiene un rango de precios [min, max]. La dirección se determina por:
+1. **Delta signal** (delta bid/ask vol + velocity) — prioridad máxima
+2. **Volume bias** (imbalance + velocity) — fallback
+3. **Momentum** (last 8 poly_mid slope) — fallback final
+
+**Entry**: precio en el 25% inferior del rango para UP, o 25% superior para DOWN. Confirmación con N ticks + volume trigger (TPS > 1.5 acelera).
+
+**Exit**: precio alcanza el 95% del borde opuesto → take profit automático.
+
+**50ms edge**: BTC se mueve en Binance → Fenix lo detecta 50ms antes que Polymarket reprecie → compra al precio viejo → vende al nuevo.
+
+### Estrategias
+
+| # | Estrategia | Rango | Conf Ticks | Entry UP @ | Target UP @ | Entry DOWN @ | Target DOWN @ |
+|---|---|---|---|---|---|---|---|
+| 1 | Fenix 35-65 | 0.35-0.65 | 1 | ≤0.42 | 0.62 | ≥0.57 | 0.37 |
+| 2 | Fenix 30-50 | 0.30-0.50 | 3 | ≤0.35 | 0.47 | ≥0.45 | 0.32 |
+| 3 | Fenix 45-55 | 0.45-0.55 | 5 | ≤0.47 | 0.52 | ≥0.53 | 0.47 |
+| 4 | Fenix 40-50 | 0.40-0.50 | 7 | ≤0.42 | 0.47 | ≥0.48 | 0.42 |
+| 5 | Fenix 45-50 | 0.45-0.50 | 10 | ≤0.46 | 0.48 | ≥0.49 | 0.47 |
+
+### Nuevas columnas CSV (125 total)
+
+| Columna | Descripción |
+|---|---|
+| `fenix_signal` | 0=none, 1=UP, 2=DOWN (delta bid/ask volume + velocity) |
+| `fenixXX_target` | Precio objetivo de salida |
+| `fenixXX_exit` | 1 = target alcanzado, 0 = abierto |
+
+### API
+
+```
+GET /api/fenix → balance acumulativo + session_balance + session_pnl por estrategia
+```
