@@ -149,8 +149,9 @@ impl FenixTradingManager {
                 };
 
                 if !trades[i].entered && trades[i].ticks_in_range >= effective_confirm {
-                    // ── Filter 4: spread gate ──────────────────────────────
-                    if poly_spread > 0.02 {
+                    // ── Filter 4: spread gate (5% relative to mid price) ─────
+                    let spread_ratio = if poly_mid > 0.0 { poly_spread / poly_mid } else { 1.0 };
+                    if spread_ratio > 0.05 {
                         trades[i].ticks_in_range = 0;
                         results.push((def.code.to_string(), 0u8, 0.0, 0.0, 2u8)); // skip=spread
                         continue;
