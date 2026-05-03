@@ -79,12 +79,8 @@ jobs:
       - name: Check for backend changes
         id: changes
         run: |
-          git diff --name-only HEAD~1 HEAD > changed_files.txt
-          if grep -q "backend_rust/" changed_files.txt; then
-            echo "BACKEND_CHANGED=true" >> $GITHUB_OUTPUT
-          else
-            echo "BACKEND_CHANGED=false" >> $GITHUB_OUTPUT
-          fi
+          # Always deploy backend — avoid HEAD~1 race condition with multi-commit pushes
+          echo "BACKEND_CHANGED=true" >> $GITHUB_OUTPUT
 
       - name: Cache Cargo registry
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
