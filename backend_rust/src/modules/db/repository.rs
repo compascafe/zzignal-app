@@ -14,7 +14,7 @@ const SESS_COLS: &str = "SELECT id, parent_id, name, scheduled_start, scheduled_
     strike_price, final_price, outcome_result, btc_price_start, btc_price_end,\
     status, tick_count, trade_count, \
     COALESCE(tag, '') as tag, COALESCE(tag_color, '#3b82f6') as tag_color, \
-    created_at FROM recording_sessions";
+    created_at FROM recording_sessions rs";
 
 // ─── Order Book Snapshots ────────────────────────────────────────────────────
 
@@ -358,9 +358,10 @@ pub async fn list_recording_session_ids(pool: Option<&PgPool>) -> Vec<i32> {
         Some(p) => {
             // Exclude parent containers: they have children and should never record data
             sqlx::query_as::<_, (i32,)>(
-                "SELECT id FROM recording_sessions WHERE status = 'recording' \
-                 AND (parent_id IS NOT NULL \
-                      OR NOT EXISTS (SELECT 1 FROM recording_sessions WHERE parent_id = recording_sessions.id))"
+                "SELECT rs.id FROM recording_sessions rs \
+                 WHERE rs.status = 'recording' \
+                 AND (rs.parent_id IS NOT NULL \
+                      OR NOT EXISTS (SELECT 1 FROM recording_sessions c WHERE c.parent_id = rs.id))"
             )
                 .fetch_all(p)
                 .await
@@ -410,7 +411,7 @@ pub async fn get_sessions_to_start(state: &AppState) -> Result<Vec<RecordingSess
         let rows = sqlx::query_as::<_, RecordingSession>(
             &format!("{SESS_COLS} WHERE status = 'scheduled' AND scheduled_start <= NOW() + INTERVAL '5 seconds' \
                       AND (parent_id IS NOT NULL \
-                           OR NOT EXISTS (SELECT 1 FROM recording_sessions WHERE parent_id = recording_sessions.id)) \
+                           OR NOT EXISTS (SELECT 1 FROM recording_sessions c WHERE c.parent_id = rs.id)) \
                       ORDER BY scheduled_start ASC")
         )
         .fetch_all(pool)
