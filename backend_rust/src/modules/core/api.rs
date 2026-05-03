@@ -54,6 +54,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 
         // ─── Insight Strategies: Cerbero + Fenix ───────────────────────────
         .route("/api/insights",        get(get_insights))
+
+        // ─── Fenix Trading ─────────────────────────────────────────────────
+        .route("/api/fenix",           get(get_fenix))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -360,6 +363,12 @@ async fn get_wisdom4(State(s): State<Arc<AppState>>) -> Json<Value> {
 
 async fn get_insights(State(s): State<Arc<AppState>>) -> Json<Value> {
     let json_str = s.insight_manager.export_json();
+    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
+    Json(value)
+}
+
+async fn get_fenix(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let json_str = s.fenix_trading.export_json();
     let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
     Json(value)
 }

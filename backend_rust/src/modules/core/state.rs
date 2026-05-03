@@ -18,6 +18,7 @@ use crate::modules::hft::t5_strategy::T5Manager;
 use crate::modules::hft::t3_strategy::T3Manager;
 use crate::modules::hft::pnr_strategy::PnrManager;
 use crate::modules::hft::insight_strategies::InsightManager;
+use crate::modules::hft::fenix_trading::FenixTradingManager;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -85,6 +86,9 @@ pub struct AppState {
     /// Insight Strategies — Cerbero & Fenix families
     pub insight_manager: Arc<InsightManager>,
 
+    /// Fenix Trading — paper-trading simulation ($20 per strategy)
+    pub fenix_trading: Arc<FenixTradingManager>,
+
     /// Latency tracking (ms) for health endpoint
     pub latency_binance: RwLock<u64>,
     pub latency_poly:    RwLock<u64>,
@@ -143,6 +147,7 @@ impl AppState {
             t3_manager:        Arc::new(T3Manager::new()),
             pnr_manager:       Arc::new(PnrManager::new()),
             insight_manager:   Arc::new(InsightManager::new()),
+            fenix_trading:     Arc::new(FenixTradingManager::new()),
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
             #[cfg(feature = "premium-patterns")]

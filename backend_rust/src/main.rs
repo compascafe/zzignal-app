@@ -723,6 +723,19 @@ async fn capture_combined(
                 _ => {}
             }
         }
+        // ─── Fenix Trading: paper-trading simulation ──────────────────────────
+        let fenix_trades = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask);
+        for (code, active, _entry) in fenix_trades {
+            match code.as_str() {
+                "fenix35"   => { rec.fenix35_trade = active; }
+                "fenix30"   => { rec.fenix30_trade = active; }
+                "fenix45"   => { rec.fenix45_trade = active; }
+                "fenix40"   => { rec.fenix40_trade = active; }
+                "fenix4550" => { rec.fenix4550_trade = active; }
+                _ => {}
+            }
+            // entry price could go to CSV if needed
+        }
     }
 
     // Per-session CSV file (multi-writer: each session gets its own file)

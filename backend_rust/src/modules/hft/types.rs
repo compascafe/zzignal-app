@@ -162,6 +162,12 @@ pub struct CsvRecord {
     pub fenix45_active:         u8,
     pub fenix45_price:          f64,
     pub fenix45_dir:            i8,
+    // ─── Fenix Trading (paper-trading simulation) ───────────────────────────
+    pub fenix35_trade:          u8,    // 1 = active trade
+    pub fenix30_trade:          u8,
+    pub fenix45_trade:          u8,
+    pub fenix40_trade:          u8,
+    pub fenix4550_trade:        u8,
 }
 
 impl Default for CsvRecord {
@@ -249,7 +255,12 @@ impl Default for CsvRecord {
             cerbero90_active:        0, cerbero90_price: 0.0, cerbero90_dir: 0,
             fenix35_active:          0, fenix35_price: 0.0, fenix35_dir: 0,
             fenix30_active:          0, fenix30_price: 0.0, fenix30_dir: 0,
-            fenix45_active:          0, fenix45_price: 0.0, fenix45_dir: 0,
+            fenix45_active:          0, fenix45_price: 0.0,             fenix45_dir:             0,
+            fenix35_trade:           0,
+            fenix30_trade:           0,
+            fenix45_trade:           0,
+            fenix40_trade:           0,
+            fenix4550_trade:         0,
         }
     }
 }
