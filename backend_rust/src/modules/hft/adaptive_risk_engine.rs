@@ -793,9 +793,9 @@ impl AdaptiveRiskEngine {
             let below_lower = binance_price <= bollinger_lower;
             let above_upper = binance_price >= bollinger_upper;
 
-            let long_signal = below_lower && cp_valid == 1 && spread_ok
+            let long_signal = below_lower && cp_valid == 1
                 && (score_normalized > 0.15 || (rsi_oversold && vfi_strong));
-            let short_signal = above_upper && cp_valid == 1 && spread_ok
+            let short_signal = above_upper && cp_valid == 1
                 && (score_normalized < -0.15 || (rsi_overbought && vfi_strong));
 
             if long_signal && price_velocity > -0.01 {
@@ -811,6 +811,20 @@ impl AdaptiveRiskEngine {
             }
         }
 
+        // ─── Layer 5: CP-only signal (thin-book fallback) ────────────────────
+        // When CP detects an anomaly but spread blocks other layers,
+        // emit a low-confidence signal based on engine bias alone.
+        if master == 0 && cp_valid == 1 && data_valid && !spoofing {
+            let bias = &self.macro_snap.predicted_bias;
+            if bias == "UP" && price_velocity > -0.01 {
+                master = 9; // CP-UP
+                self.macro_snap.predicted_bias = "UP".into();
+            } else if bias == "DOWN" && price_velocity < 0.01 {
+                master = 10; // CP-DOWN
+                self.macro_snap.predicted_bias = "DOWN".into();
+            }
+        }
+
         // ─── Warmup gate: suppress all signals until indicators stabilise ────
         if !self.macro_snap.warmup_ready {
             master = 0;
@@ -823,6 +837,7 @@ impl AdaptiveRiskEngine {
             3|4     => 1, // HUNTING
             5|6     => 2, // MOMENTUM
             7|8     => 3, // MICRO
+            9|10    => 4, // CP-ONLY
             _       => 0,
         };
         let hunting_bit: u8 = if hunting { 2 } else { 0 };

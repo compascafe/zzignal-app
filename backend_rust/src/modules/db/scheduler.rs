@@ -195,6 +195,8 @@ async fn process_sessions(state: Arc<AppState>) {
                 }
             }
         }
+        // ─── Hydra No Return: flush PNR data ────────────────────────────────
+        state.pnr_manager.flush_session(session.id, &actual_outcome);
 
         // ─── STOP in DB (always, before any other writes) ────────────────────
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {

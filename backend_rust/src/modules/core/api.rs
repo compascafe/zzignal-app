@@ -48,6 +48,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 
         // ─── Wisdom v3: T-3 Aggressive Strategy ────────────────────────────
         .route("/api/wisdom3",         get(get_wisdom3))
+
+        // ─── Wisdom v4: Hydra No Return ────────────────────────────────────
+        .route("/api/wisdom4",         get(get_wisdom4))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -342,6 +345,12 @@ async fn get_wisdom2(State(s): State<Arc<AppState>>) -> Json<Value> {
 
 async fn get_wisdom3(State(s): State<Arc<AppState>>) -> Json<Value> {
     let json_str = s.t3_manager.export_wisdom3();
+    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
+    Json(value)
+}
+
+async fn get_wisdom4(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let json_str = s.pnr_manager.export_json();
     let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
     Json(value)
 }

@@ -407,6 +407,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = std::fs::write("wisdom2_state.json", &wisdom2);
             let wisdom3 = sig_state.t3_manager.export_wisdom3();
             let _ = std::fs::write("wisdom3_state.json", &wisdom3);
+            let wisdom4 = sig_state.pnr_manager.export_json();
+            let _ = std::fs::write("hydra_noreturn_state.json", &wisdom4);
             sig_state.session_manager.flush_all();
             info!("Graceful shutdown complete.");
             let _ = shutdown_sig.send(());
@@ -458,11 +460,10 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                 (bid.price + ask.price) / 2.0
             } else { 0.0 };
             if poly_mid > 0.0 {
-                let btc = state.btc_price.read().await.unwrap_or(0.0);
                 let sid = state.recording_sessions.read().await.first().copied().unwrap_or(0);
                 state.t5_manager.on_tick(Utc::now(), sid, poly_mid,
                     b.bids.first().map(|l| l.price).unwrap_or(0.0),
-                    b.asks.first().map(|l| l.price).unwrap_or(0.0), btc);
+                    b.asks.first().map(|l| l.price).unwrap_or(0.0));
                 state.t5_manager.track_volatility(sid, poly_mid);
                 state.t3_manager.on_tick(Utc::now(), sid, poly_mid,
                     b.bids.first().map(|l| l.price).unwrap_or(0.0),
@@ -684,6 +685,9 @@ async fn capture_combined(
             rec.pnr_trend = if rec.predicted_bias.contains("UP") { 1 }
                 else if rec.predicted_bias.contains("DOWN") { -1 } else { 0 };
             rec.pnr_spread_pct = if rec.poly_mid > 0.0 { rec.poly_spread / rec.poly_mid } else { 0.0 };
+            // Feed to Hydra No Return accumulator
+            state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
+                rec.pnr_price, rec.pnr_return_up, rec.pnr_return_down);
         }
     }
 

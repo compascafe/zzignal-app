@@ -6,5 +6,7 @@ pub mod session_manager;
 pub mod executor;
 pub mod adaptive_risk_engine;
 pub mod perf;
+pub mod strategy_framework;
 pub mod t5_strategy;
 pub mod t3_strategy;
+pub mod pnr_strategy;
