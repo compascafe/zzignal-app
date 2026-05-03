@@ -724,14 +724,14 @@ async fn capture_combined(
             }
         }
         // ─── Fenix Trading: paper-trading simulation ──────────────────────────
-        let fenix_trades = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask);
-        for (code, active, entry, pnl) in fenix_trades {
+        let fenix_trades = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask, &rec.predicted_bias, rec.poly_spread);
+        for (code, active, entry, pnl, skip) in fenix_trades {
             match code.as_str() {
-                "fenix35"   => { rec.fenix35_trade = active; rec.fenix35_entry = entry; rec.fenix35_pnl = pnl; }
-                "fenix30"   => { rec.fenix30_trade = active; rec.fenix30_entry = entry; rec.fenix30_pnl = pnl; }
-                "fenix45"   => { rec.fenix45_trade = active; rec.fenix45_entry = entry; rec.fenix45_pnl = pnl; }
-                "fenix40"   => { rec.fenix40_trade = active; rec.fenix40_entry = entry; rec.fenix40_pnl = pnl; }
-                "fenix4550" => { rec.fenix4550_trade = active; rec.fenix4550_entry = entry; rec.fenix4550_pnl = pnl; }
+                "fenix35"   => { rec.fenix35_trade = active; rec.fenix35_entry = entry; rec.fenix35_pnl = pnl; rec.fenix35_skip = skip; }
+                "fenix30"   => { rec.fenix30_trade = active; rec.fenix30_entry = entry; rec.fenix30_pnl = pnl; rec.fenix30_skip = skip; }
+                "fenix45"   => { rec.fenix45_trade = active; rec.fenix45_entry = entry; rec.fenix45_pnl = pnl; rec.fenix45_skip = skip; }
+                "fenix40"   => { rec.fenix40_trade = active; rec.fenix40_entry = entry; rec.fenix40_pnl = pnl; rec.fenix40_skip = skip; }
+                "fenix4550" => { rec.fenix4550_trade = active; rec.fenix4550_entry = entry; rec.fenix4550_pnl = pnl; rec.fenix4550_skip = skip; }
                 _ => {}
             }
         }

@@ -168,6 +168,12 @@ pub struct CsvRecord {
     pub fenix45_trade:          u8,
     pub fenix40_trade:          u8,
     pub fenix4550_trade:        u8,
+    // ─── Fenix skip reason (per-tick diagnostic) ────────────────────────────
+    pub fenix35_skip:           u8,    // 0=none, 1=trend blocked, 2=spread blocked
+    pub fenix30_skip:           u8,
+    pub fenix45_skip:           u8,
+    pub fenix40_skip:           u8,
+    pub fenix4550_skip:         u8,
     // ─── Fenix live PnL per strategy ───────────────────────────────────────
     pub fenix35_entry:          f64,
     pub fenix35_pnl:            f64,
@@ -272,6 +278,11 @@ impl Default for CsvRecord {
             fenix45_trade:           0,
             fenix40_trade:           0,
             fenix4550_trade:         0,
+            fenix35_skip:            0,
+            fenix30_skip:            0,
+            fenix45_skip:            0,
+            fenix40_skip:            0,
+            fenix4550_skip:          0,
             fenix35_entry:           0.0, fenix35_pnl: 0.0,
             fenix30_entry:           0.0, fenix30_pnl: 0.0,
             fenix45_entry:           0.0, fenix45_pnl: 0.0,

@@ -2,10 +2,15 @@
 //!
 //! 5 strategies, $20 virtual each, DIFFERENT confirmation gates:
 //!   Fenix 35-65: [0.35, 0.65] majority → confirm 1 tick (aggressive)
-//!   Fenix 30-50: [0.30, 0.50] DOWN    → confirm 3 ticks
+//!   Fenix 30-50: [0.30, 0.50] MOMENTUM  → confirm 3 ticks
 //!   Fenix 45-55: [0.45, 0.55] majority → confirm 5 ticks
-//!   Fenix 40-50: [0.40, 0.50] DOWN    → confirm 7 ticks (conservative)
-//!   Fenix 45-50: [0.45, 0.50] DOWN    → confirm 10 ticks (very conservative)
+//!   Fenix 40-50: [0.40, 0.50] MOMENTUM  → confirm 7 ticks (conservative)
+//!   Fenix 45-50: [0.45, 0.50] MOMENTUM  → confirm 10 ticks (v.conservative)
+//!
+//! Filters per tick:
+//!   Trend:  don't enter DOWN if predicted_bias=UP (and vice versa)
+//!   Spread: poly_spread > 0.02 → skip entry
+//!   Momentum: direction from last 8 poly_mid slope (replaces fixed DOWN)
 //!
 //! CSV: fenixXX_trade (active), fenixXX_entry (entry price), fenixXX_pnl (live PnL)
 
@@ -30,15 +35,17 @@ struct FenixDef {
 
 static FENIX_DEFS: &[FenixDef] = &[
     FenixDef { name: "Fenix 35-65", code: "fenix35", min: 0.35, max: 0.65, direction: "MAJORITY", confirm_ticks: 1 },
-    FenixDef { name: "Fenix 30-50", code: "fenix30", min: 0.30, max: 0.50, direction: "DOWN",     confirm_ticks: 3 },
+    FenixDef { name: "Fenix 30-50", code: "fenix30", min: 0.30, max: 0.50, direction: "MOMENTUM", confirm_ticks: 3 },
     FenixDef { name: "Fenix 45-55", code: "fenix45", min: 0.45, max: 0.55, direction: "MAJORITY", confirm_ticks: 5 },
-    FenixDef { name: "Fenix 40-50", code: "fenix40", min: 0.40, max: 0.50, direction: "DOWN",     confirm_ticks: 7 },
-    FenixDef { name: "Fenix 45-50", code: "fenix4550", min: 0.45, max: 0.50, direction: "DOWN",     confirm_ticks: 10 },
+    FenixDef { name: "Fenix 40-50", code: "fenix40", min: 0.40, max: 0.50, direction: "MOMENTUM", confirm_ticks: 7 },
+    FenixDef { name: "Fenix 45-50", code: "fenix4550", min: 0.45, max: 0.50, direction: "MOMENTUM", confirm_ticks: 10 },
 ];
 
 // ─── Per-Strategy Session State ────────────────────────────────────────────
 
-#[derive(Debug, Clone, Default)]
+const MOMENTUM_WINDOW: usize = 8;
+
+#[derive(Debug, Clone)]
 struct FenixSessionTrade {
     entered:         bool,
     direction_up:    bool,
@@ -47,6 +54,17 @@ struct FenixSessionTrade {
     settled:         bool,
     virtual_pnl:     f64,
     correct:         bool,
+    recent_prices:   Vec<f64>,  // last MOMENTUM_WINDOW poly_mid for momentum calc
+}
+
+impl Default for FenixSessionTrade {
+    fn default() -> Self {
+        Self {
+            entered: false, direction_up: false, entry_price: 0.0,
+            ticks_in_range: 0, settled: false, virtual_pnl: 0.0, correct: false,
+            recent_prices: Vec::with_capacity(MOMENTUM_WINDOW),
+        }
+    }
 }
 
 // ─── Cumulative Stats ──────────────────────────────────────────────────────
@@ -101,12 +119,18 @@ impl FenixTradingManager {
     }
 
     /// On each tick: check entry for each strategy independently.
-    /// Returns: Vec of (code, active, entry_price, unrealized_pnl)
-    pub fn on_tick(&self, session_id: i32, poly_mid: f64, poly_bid: f64, poly_ask: f64) -> Vec<(String, u8, f64, f64)> {
+    /// Returns: Vec of (code, active, entry_price, unrealized_pnl, skip_reason)
+    /// skip_reason: 0=none, 1=trend blocked, 2=spread blocked
+    pub fn on_tick(&self, session_id: i32, poly_mid: f64, poly_bid: f64, poly_ask: f64,
+                   predicted_bias: &str, poly_spread: f64) -> Vec<(String, u8, f64, f64, u8)>
+    {
         let mut sessions = self.sessions.lock().unwrap();
         let trades = sessions.entry(session_id).or_insert_with(|| {
             FENIX_DEFS.iter().map(|_| FenixSessionTrade::default()).collect()
         });
+
+        let bias_up = predicted_bias.contains("UP");
+        let bias_down = predicted_bias.contains("DOWN");
 
         let mut results = Vec::with_capacity(FENIX_DEFS.len());
         for (i, def) in FENIX_DEFS.iter().enumerate() {
@@ -114,31 +138,70 @@ impl FenixTradingManager {
             if in_range {
                 trades[i].ticks_in_range += 1;
 
-                // Entry: reached confirmation threshold, not yet entered
                 if !trades[i].entered && trades[i].ticks_in_range >= def.confirm_ticks {
+                    // ── Filter 4: spread gate ──────────────────────────────
+                    if poly_spread > 0.02 {
+                        trades[i].ticks_in_range = 0;
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 2u8)); // skip=spread
+                        continue;
+                    }
+
+                    // ── Direction: MAJORITY, MOMENTUM, UP, DOWN ────────────
                     let dir_up = match def.direction {
                         "UP"       => true,
                         "DOWN"     => false,
+                        "MOMENTUM" => {
+                            // Last MOMENTUM_WINDOW poly_mid slope
+                            let rp = &trades[i].recent_prices;
+                            if rp.len() >= 4 {
+                                let slope = rp[..].windows(2)
+                                    .map(|w| w[1] - w[0])
+                                    .sum::<f64>();
+                                slope > 0.0
+                            } else {
+                                poly_mid > 0.5 // fallback
+                            }
+                        }
                         _          => poly_mid > 0.5,
                     };
+
+                    // ── Filter 1: macro trend gate ─────────────────────────
+                    if !bias_up && !bias_down {
+                        // No bias → allow entry (warmup phase)
+                    } else if dir_up && bias_down {
+                        // Trying UP when macro says DOWN → skip
+                        trades[i].ticks_in_range = 0;
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8)); // skip=trend
+                        continue;
+                    } else if !dir_up && bias_up {
+                        // Trying DOWN when macro says UP → skip
+                        trades[i].ticks_in_range = 0;
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8)); // skip=trend
+                        continue;
+                    }
+
                     trades[i].entered = true;
                     trades[i].direction_up = dir_up;
                     trades[i].entry_price = if dir_up { poly_ask } else { poly_bid };
-                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (confirm={} ticks)",
+                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (spread={:.4} bias={})",
                         session_id, def.name, if dir_up {"UP"} else {"DOWN"},
-                        trades[i].entry_price, def.confirm_ticks);
+                        trades[i].entry_price, poly_spread, predicted_bias);
                 }
             } else {
-                // Reset counter when price exits range (before entry only)
                 if !trades[i].entered {
                     trades[i].ticks_in_range = 0;
                 }
             }
 
+            // Track recent prices for momentum (always, even if not in range)
+            trades[i].recent_prices.push(poly_mid);
+            if trades[i].recent_prices.len() > MOMENTUM_WINDOW {
+                trades[i].recent_prices.remove(0);
+            }
+
             let active = if trades[i].entered && !trades[i].settled { 1u8 } else { 0u8 };
             let entry = if active == 1 { trades[i].entry_price } else { 0.0 };
 
-            // Live PnL: if we closed right now at current mid
             let live_pnl = if active == 1 {
                 if trades[i].direction_up {
                     poly_mid - trades[i].entry_price
@@ -147,7 +210,7 @@ impl FenixTradingManager {
                 }
             } else { 0.0 };
 
-            results.push((def.code.to_string(), active, entry, live_pnl));
+            results.push((def.code.to_string(), active, entry, live_pnl, 0u8));
         }
         results
     }
