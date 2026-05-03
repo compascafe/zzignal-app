@@ -222,8 +222,8 @@ impl FenixTradingManager {
                         continue;
                     }
 
-                    // ── Filter 5: volume gate ────────────────────────────
-                    if binance_vol_100ms < 0.3 && trades_per_second < 1.0 {
+                    // ── Filter 5: volume gate (polymarket depth, not binance) ───
+                    if poly_bid_vol_all < 5.0 || poly_ask_vol_all < 5.0 {
                         state.trades[i].ticks_in_range = 0;
                         results.push((def.code.to_string(), 0u8, 0.0, 0.0, 3u8));
                         continue;
