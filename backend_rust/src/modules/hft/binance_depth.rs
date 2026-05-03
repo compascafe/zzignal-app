@@ -169,10 +169,9 @@ pub async fn run_binance_depth_stream(
                                         if tv > 0.0 { (av5 * bb_bid + bv5 * bb_ask) / tv }
                                         else { mid_p }
                                     };
-                                    let evt_ms = last_depth.as_ref().map_or(0, |d| d.event_time) as u64;
                                     let vol_100 = tracking.vol_100ms(now_ms);
                                     ring.push(BinanceState {
-                                        timestamp:         if evt_ms > 0 { evt_ms } else { now_ms as u64 },
+                                        timestamp:         now_ms as u64, // local time for accurate lookback
                                         mid_price:         mid_p,
                                         micro_price:       mic_p,
                                         total_liquidity:   total_liq,

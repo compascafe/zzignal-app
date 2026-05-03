@@ -309,8 +309,7 @@ async fn process_sessions(state: Arc<AppState>) {
         state.t5_manager.on_session_start(session.id, session.scheduled_end);
         state.t3_manager.on_session_start(session.id, session.scheduled_end);
 
-        // Clear ring buffer and drain tick channel to prevent residual events leaking
-        state.binance_ring.clear();
+        // Drain tick channel to prevent residual events leaking (ring persists for warm lookbacks)
         state.tick_drain.store(true, std::sync::atomic::Ordering::Release);
 
         if let Err(e) = repository::start_session_recording(&state, session.id, btc_price).await {
