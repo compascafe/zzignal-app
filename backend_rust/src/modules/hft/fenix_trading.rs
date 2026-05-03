@@ -120,9 +120,12 @@ impl FenixTradingManager {
 
     /// On each tick: check entry for each strategy independently.
     /// Returns: Vec of (code, active, entry_price, unrealized_pnl, skip_reason)
-    /// skip_reason: 0=none, 1=trend blocked, 2=spread blocked
+    /// skip_reason: 0=none, 1=trend blocked, 2=spread blocked, 3=volume blocked
     pub fn on_tick(&self, session_id: i32, poly_mid: f64, poly_bid: f64, poly_ask: f64,
-                   predicted_bias: &str, poly_spread: f64) -> Vec<(String, u8, f64, f64, u8)>
+                   predicted_bias: &str, poly_spread: f64,
+                   binance_vol_100ms: f64, trades_per_second: f64,
+                   poly_imbalance: f64, price_velocity: f64,
+    ) -> Vec<(String, u8, f64, f64, u8)>
     {
         let mut sessions = self.sessions.lock().unwrap();
         let trades = sessions.entry(session_id).or_insert_with(|| {
@@ -138,7 +141,14 @@ impl FenixTradingManager {
             if in_range {
                 trades[i].ticks_in_range += 1;
 
-                if !trades[i].entered && trades[i].ticks_in_range >= def.confirm_ticks {
+                // ── Volume trigger: high activity → faster entry (reduce confirm by 1) ─
+                let effective_confirm = if trades_per_second >= 1.5 && binance_vol_100ms > 0.5 {
+                    def.confirm_ticks.saturating_sub(1).max(1)
+                } else {
+                    def.confirm_ticks
+                };
+
+                if !trades[i].entered && trades[i].ticks_in_range >= effective_confirm {
                     // ── Filter 4: spread gate ──────────────────────────────
                     if poly_spread > 0.02 {
                         trades[i].ticks_in_range = 0;
@@ -146,12 +156,18 @@ impl FenixTradingManager {
                         continue;
                     }
 
+                    // ── Filter 5: volume gate ─────────────────────────────
+                    if binance_vol_100ms < 0.3 && trades_per_second < 1.0 {
+                        trades[i].ticks_in_range = 0;
+                        results.push((def.code.to_string(), 0u8, 0.0, 0.0, 3u8)); // skip=volume
+                        continue;
+                    }
+
                     // ── Direction: MAJORITY, MOMENTUM, UP, DOWN ────────────
-                    let dir_up = match def.direction {
+                    let mut dir_up = match def.direction {
                         "UP"       => true,
                         "DOWN"     => false,
                         "MOMENTUM" => {
-                            // Last MOMENTUM_WINDOW poly_mid slope
                             let rp = &trades[i].recent_prices;
                             if rp.len() >= 4 {
                                 let slope = rp[..].windows(2)
@@ -159,22 +175,28 @@ impl FenixTradingManager {
                                     .sum::<f64>();
                                 slope > 0.0
                             } else {
-                                poly_mid > 0.5 // fallback
+                                poly_mid > 0.5
                             }
                         }
                         _          => poly_mid > 0.5,
                     };
 
+                    // ── Volume direction bias: override if strong signal ───
+                    // Strong imbalance + BTC velocity aligns → confident direction
+                    if poly_imbalance > 1.2 && price_velocity > 2.0 {
+                        dir_up = true;  // buying pressure + BTC rising
+                    } else if poly_imbalance < 0.8 && price_velocity < -2.0 {
+                        dir_up = false; // selling pressure + BTC falling
+                    }
+
                     // ── Filter 1: macro trend gate ─────────────────────────
                     if !bias_up && !bias_down {
                         // No bias → allow entry (warmup phase)
                     } else if dir_up && bias_down {
-                        // Trying UP when macro says DOWN → skip
                         trades[i].ticks_in_range = 0;
                         results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8)); // skip=trend
                         continue;
                     } else if !dir_up && bias_up {
-                        // Trying DOWN when macro says UP → skip
                         trades[i].ticks_in_range = 0;
                         results.push((def.code.to_string(), 0u8, 0.0, 0.0, 1u8)); // skip=trend
                         continue;
@@ -183,9 +205,10 @@ impl FenixTradingManager {
                     trades[i].entered = true;
                     trades[i].direction_up = dir_up;
                     trades[i].entry_price = if dir_up { poly_ask } else { poly_bid };
-                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (spread={:.4} bias={})",
+                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (spread={:.4} bias={} vol={:.2} tps={:.1} imb={:.2})",
                         session_id, def.name, if dir_up {"UP"} else {"DOWN"},
-                        trades[i].entry_price, poly_spread, predicted_bias);
+                        trades[i].entry_price, poly_spread, predicted_bias,
+                        binance_vol_100ms, trades_per_second, poly_imbalance);
                 }
             } else {
                 if !trades[i].entered {

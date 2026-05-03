@@ -724,7 +724,7 @@ async fn capture_combined(
             }
         }
         // ─── Fenix Trading: paper-trading simulation ──────────────────────────
-        let fenix_trades = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask, &rec.predicted_bias, rec.poly_spread);
+        let fenix_trades = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask, &rec.predicted_bias, rec.poly_spread, rec.binance_vol_100ms, rec.trades_per_second, rec.poly_imbalance, rec.price_velocity);
         for (code, active, entry, pnl, skip) in fenix_trades {
             match code.as_str() {
                 "fenix35"   => { rec.fenix35_trade = active; rec.fenix35_entry = entry; rec.fenix35_pnl = pnl; rec.fenix35_skip = skip; }
