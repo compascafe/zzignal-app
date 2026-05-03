@@ -6,6 +6,8 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+use std::time::Duration;
+
 mod modules;
 
 use std::sync::{mpsc, Arc, Mutex};
@@ -133,6 +135,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .block_on(crate::modules::core::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
             })
             .expect("spawn worker");
+    }
+
+    // CSV safety flush task — ensures BufWriter data reaches disk every 15s
+    {
+        let sm2       = Arc::clone(&state.session_manager);
+        let mut shutdown2 = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(15));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => { sm2.flush_all(); }
+                    _ = shutdown2.recv() => {
+                        sm2.flush_all();
+                        info!("CSV flush: final flush on shutdown");
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     // Binance depth stream (HFT)
