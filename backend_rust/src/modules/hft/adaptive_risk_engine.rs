@@ -536,11 +536,11 @@ impl AdaptiveRiskEngine {
     }
 
     /// Reset per-session warmup state (called at session start).
+    /// Preserves warmup's predicted_bias — needed by CP-only layer until ticks update it.
     pub fn reset_session_warmup(&mut self) {
         self.macro_snap.live_tick_count = 0;
         self.macro_snap.warmup_ready = false;
         self.macro_snap.last_macd_hist = 0.0;
-        self.macro_snap.predicted_bias = String::new();
     }
 
     /// Apply pre-computed warmup results — fast, lock‑friendly (no I/O).
@@ -812,23 +812,26 @@ impl AdaptiveRiskEngine {
         }
 
         // ─── Layer 5: CP-only signal (thin-book fallback) ────────────────────
-        // When CP detects an anomaly but spread blocks other layers,
-        // emit a low-confidence signal based on engine bias alone.
         if master == 0 && cp_valid == 1 && data_valid && !spoofing {
-            let bias = &self.macro_snap.predicted_bias;
+            let mut bias = self.macro_snap.predicted_bias.clone();
+            // Fallback: derive bias from macro slope if warmup bias is empty
+            if bias.is_empty() {
+                bias = if self.macro_snap.macro_slope > 0.0001 { "UP".into() }
+                    else if self.macro_snap.macro_slope < -0.0001 { "DOWN".into() }
+                    else { String::new() };
+            }
             if bias == "UP" && price_velocity > -0.01 {
-                master = 9; // CP-UP
+                master = 9;
                 self.macro_snap.predicted_bias = "UP".into();
             } else if bias == "DOWN" && price_velocity < 0.01 {
-                master = 10; // CP-DOWN
+                master = 10;
                 self.macro_snap.predicted_bias = "DOWN".into();
             }
         }
 
-        // ─── Warmup gate: suppress all signals until indicators stabilise ────
+        // ─── Warmup gate: suppress signals until indicators stabilise, keep bias ──
         if !self.macro_snap.warmup_ready {
             master = 0;
-            self.macro_snap.predicted_bias = String::new();
         }
 
         // ─── Encoded cp_valid: bits 0=cp_valid, 1=hunting, 2=feedback, 3-4=layer ──
