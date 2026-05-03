@@ -168,6 +168,17 @@ pub struct CsvRecord {
     pub fenix45_trade:          u8,
     pub fenix40_trade:          u8,
     pub fenix4550_trade:        u8,
+    // ─── Fenix live PnL per strategy ───────────────────────────────────────
+    pub fenix35_entry:          f64,
+    pub fenix35_pnl:            f64,
+    pub fenix30_entry:          f64,
+    pub fenix30_pnl:            f64,
+    pub fenix45_entry:          f64,
+    pub fenix45_pnl:            f64,
+    pub fenix40_entry:          f64,
+    pub fenix40_pnl:            f64,
+    pub fenix4550_entry:        f64,
+    pub fenix4550_pnl:          f64,
 }
 
 impl Default for CsvRecord {
@@ -261,6 +272,11 @@ impl Default for CsvRecord {
             fenix45_trade:           0,
             fenix40_trade:           0,
             fenix4550_trade:         0,
+            fenix35_entry:           0.0, fenix35_pnl: 0.0,
+            fenix30_entry:           0.0, fenix30_pnl: 0.0,
+            fenix45_entry:           0.0, fenix45_pnl: 0.0,
+            fenix40_entry:           0.0, fenix40_pnl: 0.0,
+            fenix4550_entry:         0.0, fenix4550_pnl: 0.0,
         }
     }
 }

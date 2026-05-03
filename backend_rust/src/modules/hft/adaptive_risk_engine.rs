@@ -686,11 +686,11 @@ impl AdaptiveRiskEngine {
         self.macro_snap.volatility_1h = volatility;
 
         // Graduated cp_valid: deviation_ratio = |price - sma| / (sma * quantile_price)
-        // cp_valid=1 when ratio > 0.25 (mild anomaly), previously required > 1.0 (extreme)
+        // cp_valid=1 when ratio > 0.15 (relaxed anomaly threshold)
         let deviation_ratio = if bollinger_sma > 0.0 && cp_range > 0.0 {
             (binance_price - bollinger_sma).abs() / cp_range
         } else { 0.0 };
-        let cp_valid: u8 = if deviation_ratio > 0.25 { 1 } else { 0 };
+        let cp_valid: u8 = if deviation_ratio > 0.15 { 1 } else { 0 };
 
         let spread_ok = poly_spread > 0.0 && poly_spread <= 0.05;
         // data_valid: poly_imbalance can be 0 (all liquidity on one side), don't block

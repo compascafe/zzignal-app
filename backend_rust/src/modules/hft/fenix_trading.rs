@@ -1,18 +1,13 @@
-//! Fenix Trading — Paper-trading simulation for mid-range strategies
+//! Fenix Trading — Paper-trading with independent strategies
 //!
-//! 5 strategies, $20 virtual capital each:
-//!   Fenix 35-65: poly_mid [0.35, 0.65] → direction by majority (>0.5 = UP)
-//!   Fenix 30-50: poly_mid [0.30, 0.50] → predicts DOWN
-//!   Fenix 45-55: poly_mid [0.45, 0.55] → direction by majority
-//!   Fenix 40-50: poly_mid [0.40, 0.50] → predicts DOWN
-//!   Fenix 45-50: poly_mid [0.45, 0.50] → predicts DOWN
+//! 5 strategies, $20 virtual each, DIFFERENT confirmation gates:
+//!   Fenix 35-65: [0.35, 0.65] majority → confirm 1 tick (aggressive)
+//!   Fenix 30-50: [0.30, 0.50] DOWN    → confirm 3 ticks
+//!   Fenix 45-55: [0.45, 0.55] majority → confirm 5 ticks
+//!   Fenix 40-50: [0.40, 0.50] DOWN    → confirm 7 ticks (conservative)
+//!   Fenix 45-50: [0.45, 0.50] DOWN    → confirm 10 ticks (very conservative)
 //!
-//! Trading rules:
-//!   - Enter when price stays in range for ≥ 3 consecutive ticks (confirmation)
-//!   - UP positions: buy at ask, settle at 1.0 (win) or 0.0 (lose)
-//!   - DOWN positions: sell at bid, settle at 0.0 (win) or 1.0 (lose)
-//!   - Max 1 position per session per strategy
-//!   - PnL tracked cumulatively
+//! CSV: fenixXX_trade (active), fenixXX_entry (entry price), fenixXX_pnl (live PnL)
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -25,19 +20,20 @@ use tracing::info;
 
 #[derive(Debug, Clone)]
 struct FenixDef {
-    name:      &'static str,
-    code:      &'static str,
-    min:       f64,
-    max:       f64,
-    direction: &'static str, // "UP", "DOWN", "MAJORITY"
+    name:          &'static str,
+    code:          &'static str,
+    min:           f64,
+    max:           f64,
+    direction:     &'static str,
+    confirm_ticks: u32,  // ticks in range before entry
 }
 
 static FENIX_DEFS: &[FenixDef] = &[
-    FenixDef { name: "Fenix 35-65", code: "fenix35", min: 0.35, max: 0.65, direction: "MAJORITY" },
-    FenixDef { name: "Fenix 30-50", code: "fenix30", min: 0.30, max: 0.50, direction: "DOWN" },
-    FenixDef { name: "Fenix 45-55", code: "fenix45", min: 0.45, max: 0.55, direction: "MAJORITY" },
-    FenixDef { name: "Fenix 40-50", code: "fenix40", min: 0.40, max: 0.50, direction: "DOWN" },
-    FenixDef { name: "Fenix 45-50", code: "fenix4550", min: 0.45, max: 0.50, direction: "DOWN" },
+    FenixDef { name: "Fenix 35-65", code: "fenix35", min: 0.35, max: 0.65, direction: "MAJORITY", confirm_ticks: 1 },
+    FenixDef { name: "Fenix 30-50", code: "fenix30", min: 0.30, max: 0.50, direction: "DOWN",     confirm_ticks: 3 },
+    FenixDef { name: "Fenix 45-55", code: "fenix45", min: 0.45, max: 0.55, direction: "MAJORITY", confirm_ticks: 5 },
+    FenixDef { name: "Fenix 40-50", code: "fenix40", min: 0.40, max: 0.50, direction: "DOWN",     confirm_ticks: 7 },
+    FenixDef { name: "Fenix 45-50", code: "fenix4550", min: 0.45, max: 0.50, direction: "DOWN",     confirm_ticks: 10 },
 ];
 
 // ─── Per-Strategy Session State ────────────────────────────────────────────
@@ -61,6 +57,7 @@ pub struct FenixStats {
     pub code:           String,
     pub range:          String,
     pub direction:      String,
+    pub confirm_ticks:  u32,
     pub capital:        f64,
     pub balance:        f64,
     pub trades:         u64,
@@ -79,7 +76,7 @@ impl FenixStats {
         Self {
             name: def.name.into(), code: def.code.into(),
             range: format!("[{:.2}, {:.2}]", def.min, def.max),
-            direction: def.direction.into(),
+            direction: def.direction.into(), confirm_ticks: def.confirm_ticks,
             capital: 20.0, balance: 20.0, trades: 0, wins: 0,
             accuracy: 0.0, total_pnl: 0.0, avg_pnl: 0.0,
             best_pnl: 0.0, worst_pnl: 0.0, sessions_tracked: 0,
@@ -91,9 +88,7 @@ impl FenixStats {
 // ─── Fenix Trading Manager ─────────────────────────────────────────────────
 
 pub struct FenixTradingManager {
-    /// Per-session state: session_id → [5 strategies]
     sessions: Mutex<HashMap<i32, Vec<FenixSessionTrade>>>,
-    /// Cumulative stats per strategy
     stats:    Mutex<Vec<FenixStats>>,
 }
 
@@ -105,8 +100,9 @@ impl FenixTradingManager {
         }
     }
 
-    /// Called on every tick. Checks each Fenix strategy for entry conditions.
-    pub fn on_tick(&self, session_id: i32, poly_mid: f64, poly_bid: f64, poly_ask: f64) -> Vec<(String, u8, f64)> {
+    /// On each tick: check entry for each strategy independently.
+    /// Returns: Vec of (code, active, entry_price, unrealized_pnl)
+    pub fn on_tick(&self, session_id: i32, poly_mid: f64, poly_bid: f64, poly_ask: f64) -> Vec<(String, u8, f64, f64)> {
         let mut sessions = self.sessions.lock().unwrap();
         let trades = sessions.entry(session_id).or_insert_with(|| {
             FENIX_DEFS.iter().map(|_| FenixSessionTrade::default()).collect()
@@ -117,25 +113,41 @@ impl FenixTradingManager {
             let in_range = poly_mid >= def.min && poly_mid <= def.max;
             if in_range {
                 trades[i].ticks_in_range += 1;
-            }
 
-            // Entry condition: 3+ ticks in range, not yet entered
-            if !trades[i].entered && trades[i].ticks_in_range >= 3 {
-                let dir_up = match def.direction {
-                    "UP"       => true,
-                    "DOWN"     => false,
-                    _          => poly_mid > 0.5,
-                };
-                trades[i].entered = true;
-                trades[i].direction_up = dir_up;
-                trades[i].entry_price = if dir_up { poly_ask } else { poly_bid };
-                info!("[FenixTrading] Session #{} {} ENTER: {}@{:.4}",
-                    session_id, def.name, if dir_up {"UP"} else {"DOWN"}, trades[i].entry_price);
+                // Entry: reached confirmation threshold, not yet entered
+                if !trades[i].entered && trades[i].ticks_in_range >= def.confirm_ticks {
+                    let dir_up = match def.direction {
+                        "UP"       => true,
+                        "DOWN"     => false,
+                        _          => poly_mid > 0.5,
+                    };
+                    trades[i].entered = true;
+                    trades[i].direction_up = dir_up;
+                    trades[i].entry_price = if dir_up { poly_ask } else { poly_bid };
+                    info!("[FenixTrading] #{} {} ENTER {}@{:.4} (confirm={} ticks)",
+                        session_id, def.name, if dir_up {"UP"} else {"DOWN"},
+                        trades[i].entry_price, def.confirm_ticks);
+                }
+            } else {
+                // Reset counter when price exits range (before entry only)
+                if !trades[i].entered {
+                    trades[i].ticks_in_range = 0;
+                }
             }
 
             let active = if trades[i].entered && !trades[i].settled { 1u8 } else { 0u8 };
             let entry = if active == 1 { trades[i].entry_price } else { 0.0 };
-            results.push((def.code.to_string(), active, entry));
+
+            // Live PnL: if we closed right now at current mid
+            let live_pnl = if active == 1 {
+                if trades[i].direction_up {
+                    poly_mid - trades[i].entry_price
+                } else {
+                    trades[i].entry_price - poly_mid
+                }
+            } else { 0.0 };
+
+            results.push((def.code.to_string(), active, entry, live_pnl));
         }
         results
     }
@@ -178,31 +190,15 @@ impl FenixTradingManager {
             stats[i].last_10.push(correct);
             if stats[i].last_10.len() > 10 { stats[i].last_10.remove(0); }
 
-            info!("[FenixTrading] Session #{} {} SETTLED: {}@{:.4} → {} pnl={:.4} bal={:.2}",
+            info!("[FenixTrading] #{} {} SETTLED: {}@{}→{} pnl={:.4} bal=${:.2}",
                 session_id, def.name,
                 if trade.direction_up {"UP"} else {"DOWN"}, trade.entry_price,
                 if correct {"✓"} else {"✗"}, pnl, stats[i].balance);
         }
-        // Count session even for non-entered strategies
-        for s in stats.iter_mut() {
-            s.sessions_tracked += 1;
-        }
+        for s in stats.iter_mut() { s.sessions_tracked += 1; }
     }
 
     pub fn export_json(&self) -> String {
-        let stats = self.stats.lock().unwrap().clone();
-        serde_json::to_string_pretty(&stats).unwrap_or_default()
-    }
-
-    pub fn accuracy(&self, idx: usize) -> f64 {
-        self.stats.lock().unwrap().get(idx).map(|s| s.accuracy).unwrap_or(0.0)
-    }
-
-    pub fn best_strategy(&self) -> Option<(String, f64)> {
-        let stats = self.stats.lock().unwrap();
-        stats.iter()
-            .filter(|s| s.trades > 0)
-            .max_by(|a, b| a.total_pnl.partial_cmp(&b.total_pnl).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|s| (s.name.clone(), s.total_pnl))
+        serde_json::to_string_pretty(&*self.stats.lock().unwrap()).unwrap_or_default()
     }
 }
