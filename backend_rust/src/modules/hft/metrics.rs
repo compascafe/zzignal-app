@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use chrono::Utc;
 use tracing::info;
@@ -731,9 +732,17 @@ pub fn check_volume_spike(
     }
 }
 
+static LAST_GAP_ALERT_MS: AtomicI64 = AtomicI64::new(0);
+
 /// Emit yellow console alert when price gap ratio exceeds threshold.
+/// Rate-limited to 1 alert every 5 seconds.
 pub fn check_gap_alert(gap_pct: f64) {
     if gap_pct.abs() > 0.05 {
-        info!("\x1b[33m[INSIGHT] Gap detectado - Polymarket con retraso: {:.4}%\x1b[0m", gap_pct);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let last_ms = LAST_GAP_ALERT_MS.load(Ordering::Relaxed);
+        if now_ms - last_ms >= 5_000 {
+            LAST_GAP_ALERT_MS.store(now_ms, Ordering::Relaxed);
+            info!("\x1b[33m[INSIGHT] Gap detectado - Polymarket con retraso: {:.4}%\x1b[0m", gap_pct);
+        }
     }
 }
