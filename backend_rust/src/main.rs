@@ -402,6 +402,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let wisdom = eng.export_wisdom();
             let json = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
             let _ = std::fs::write("wisdom_state.json", &json);
+            // ─── Wisdom v2 + v3: T-5 + T-3 Strategies ──────────────────────
+            let wisdom2 = sig_state.t5_manager.export_wisdom2();
+            let _ = std::fs::write("wisdom2_state.json", &wisdom2);
+            let wisdom3 = sig_state.t3_manager.export_wisdom3();
+            let _ = std::fs::write("wisdom3_state.json", &wisdom3);
             sig_state.session_manager.flush_all();
             info!("Graceful shutdown complete.");
             let _ = shutdown_sig.send(());
@@ -448,6 +453,22 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             *state.book_up.write().await = Some(b.clone());
             capture_combined(state, "up", &b.bids, &b.asks, EventType::BookUpdate, "", 0.0, 0.0).await;
             capture_book_db(state, "up", &b.bids, &b.asks).await;
+            // ─── T-5 + T-3 Strategies: track poly price ────────────────────
+            let poly_mid = if let (Some(bid), Some(ask)) = (b.bids.first(), b.asks.first()) {
+                (bid.price + ask.price) / 2.0
+            } else { 0.0 };
+            if poly_mid > 0.0 {
+                let btc = state.btc_price.read().await.unwrap_or(0.0);
+                let sid = state.recording_sessions.read().await.first().copied().unwrap_or(0);
+                state.t5_manager.on_tick(Utc::now(), sid, poly_mid,
+                    b.bids.first().map(|l| l.price).unwrap_or(0.0),
+                    b.asks.first().map(|l| l.price).unwrap_or(0.0), btc);
+                state.t5_manager.track_volatility(sid, poly_mid);
+                state.t3_manager.on_tick(Utc::now(), sid, poly_mid,
+                    b.bids.first().map(|l| l.price).unwrap_or(0.0),
+                    b.asks.first().map(|l| l.price).unwrap_or(0.0));
+                state.t3_manager.track_volatility(sid, poly_mid);
+            }
         }
         AppMsg::BookDown(b) => {
             *state.book_down.write().await = Some(b.clone());
@@ -641,6 +662,15 @@ async fn capture_combined(
         rec.dynamic_rsi = ctx.dynamic_rsi;
         rec.vfi_confidence = ctx.vfi_confidence;
         rec.db_accuracy_factor = ctx.db_accuracy_factor;
+        // ─── T-5 Certainty Strategy (Wisdom v2) ────────────────────────────
+        let (t5_pred, t5_entry, _t5_correct) = state.t5_manager.get_prediction(active_sid);
+        rec.t5_prediction = t5_pred;
+        rec.t5_entry_price = t5_entry;
+        // ─── T-3 Aggressive Strategy (Wisdom v3) ────────────────────────────
+        let (t3_pred, t3_entry, t3_active) = state.t3_manager.get_prediction(active_sid);
+        rec.t3_prediction = t3_pred;
+        rec.t3_entry_price = t3_entry;
+        rec.t3_active = if t3_active { 1 } else { 0 };
     }
 
     // Per-session CSV file (multi-writer: each session gets its own file)

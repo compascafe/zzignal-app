@@ -42,6 +42,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/wisdom/export",   get(export_wisdom))
         .route("/api/wisdom/export-bulk",get(export_wisdom_bulk))
         .route("/api/wisdom/import",   post(import_wisdom))
+
+        // ─── Wisdom v2: T-5 Certainty Strategy ─────────────────────────────
+        .route("/api/wisdom2",         get(get_wisdom2))
+
+        // ─── Wisdom v3: T-3 Aggressive Strategy ────────────────────────────
+        .route("/api/wisdom3",         get(get_wisdom3))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -326,6 +332,18 @@ async fn get_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
         "volatility_1h":      ctx.volatility_1h,
         "signal_priority":    ctx.signal_priority,
     }))
+}
+
+async fn get_wisdom2(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let json_str = s.t5_manager.export_wisdom2();
+    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
+    Json(value)
+}
+
+async fn get_wisdom3(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let json_str = s.t3_manager.export_wisdom3();
+    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
+    Json(value)
 }
 
 async fn export_wisdom(State(s): State<Arc<AppState>>) -> Response {

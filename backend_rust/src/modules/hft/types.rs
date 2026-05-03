@@ -120,6 +120,14 @@ pub struct CsvRecord {
     pub dynamic_rsi:            f64,   // Rolling RSI(14) updated each minute during session
     pub vfi_confidence:         f64,   // VFI volume strength ratio (0-1 normalized)
     pub db_accuracy_factor:     f64,   // Risk multiplier from historical memory (1.0 = neutral, >1 = widen)
+    // ─── T-5 Certainty Strategy (Wisdom v2) ─────────────────────────────────
+    pub t5_prediction:          String,// "UP", "DOWN", or "" — T-5 prediction
+    pub t5_entry_price:         f64,   // price at T-5 capture point
+    pub t5_correct:             u8,    // 1 = correct, filled at session close
+    // ─── T-3 Aggressive Strategy (Wisdom v3) ───────────────────────────────
+    pub t3_prediction:          String,
+    pub t3_entry_price:         f64,
+    pub t3_active:              u8,    // 1 = trade active
 }
 
 impl Default for CsvRecord {
@@ -187,6 +195,12 @@ impl Default for CsvRecord {
             dynamic_rsi:           0.0,
             vfi_confidence:        0.0,
             db_accuracy_factor:    1.0,
+            t5_prediction:         String::new(),
+            t5_entry_price:        0.0,
+            t5_correct:            0,
+            t3_prediction:         String::new(),
+            t3_entry_price:        0.0,
+            t3_active:             0,
         }
     }
 }

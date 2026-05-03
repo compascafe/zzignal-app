@@ -19,7 +19,7 @@ fn fast_format_csv_line(r: &CsvRecord) -> String {
         out,
         "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
          {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\
-         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+         {},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
         r.ts_local, r.ts_exchange, r.event_type.as_str(), r.latencia_ms,
         r.binance_price, r.binance_micro_price, r.binance_imbalance,
         r.binance_vol_100ms, r.binance_vol_24h,
@@ -42,6 +42,8 @@ fn fast_format_csv_line(r: &CsvRecord) -> String {
         r.macro_slope, r.vfi_value, r.macd_hist,
         r.predicted_bias, r.is_feedback_adjusted,
         r.dynamic_rsi, r.vfi_confidence, r.db_accuracy_factor,
+        r.t5_prediction, r.t5_entry_price, r.t5_correct,
+        r.t3_prediction, r.t3_entry_price, r.t3_active,
     );
     out
 }
@@ -97,7 +99,7 @@ impl SessionManager {
              bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
              technical_confluence,trend_direction,signal_label,\
              realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor"
+                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active"
         );
 
         let mut writers = self.writers.lock().unwrap();
@@ -149,7 +151,7 @@ impl SessionManager {
                  bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
                  technical_confluence,trend_direction,signal_label,\
                  realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor"
+                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active"
             );
         }
 

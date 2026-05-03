@@ -168,6 +168,34 @@ async fn process_sessions(state: Arc<AppState>) {
             _ => "tie".to_string(),
         };
 
+        // ─── T-5 Certainty Strategy: resolve prediction ──────────────────────
+        let final_poly = if actual_outcome == "up" { 1.0 } else if actual_outcome == "down" { 0.0 } else { 0.5 };
+        let t5_result = state.t5_manager.on_session_close(session.id, &actual_outcome, final_poly);
+        if let Some(ref snap) = t5_result {
+            if !snap.prediction.is_empty() {
+                let csv_path = state.session_manager.session_path(session.id);
+                if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&csv_path) {
+                    use std::io::Write;
+                    let _ = writeln!(file, "# T5_RESULT: session_id={} prediction={} actual={} correct={} pnl={:.4} entry={:.4} exit={:?} vol={:.6}",
+                        session.id, snap.prediction, snap.actual_outcome, snap.correct, snap.virtual_pnl,
+                        snap.entry_price, snap.exit_price, snap.volatility_2min);
+                }
+            }
+        }
+        // ─── T-3 Aggressive Strategy: resolve prediction ────────────────────
+        let t3_result = state.t3_manager.on_session_close(session.id, &actual_outcome, final_poly);
+        if let Some(ref snap) = t3_result {
+            if !snap.prediction.is_empty() {
+                let csv_path = state.session_manager.session_path(session.id);
+                if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&csv_path) {
+                    use std::io::Write;
+                    let _ = writeln!(file, "# T3_RESULT: session_id={} prediction={} actual={} correct={} pnl={:.4} entry={:.4} exit={:?}",
+                        session.id, snap.prediction, snap.actual_outcome, snap.correct, snap.virtual_pnl,
+                        snap.entry_price, snap.exit_price);
+                }
+            }
+        }
+
         // ─── STOP in DB (always, before any other writes) ────────────────────
         if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
             warn!("stop_session #{} FAILED: {}", session.id, e);
@@ -272,6 +300,10 @@ async fn process_sessions(state: Arc<AppState>) {
         if let Err(e) = state.session_manager.start_session(session.id) {
             warn!("SessionManager start #{}: {}", session.id, e);
         }
+
+        // ─── T-5 + T-3 Strategies: register session ───────────────────────
+        state.t5_manager.on_session_start(session.id, session.scheduled_end);
+        state.t3_manager.on_session_start(session.id, session.scheduled_end);
 
         // Clear ring buffer and drain tick channel to prevent residual events leaking
         state.binance_ring.clear();

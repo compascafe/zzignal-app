@@ -14,6 +14,8 @@ use crate::modules::hft::executor::StrategyManager;
 use crate::modules::hft::session_manager::SessionManager;
 use crate::modules::hft::adaptive_risk_engine::AdaptiveRiskEngine;
 use crate::modules::hft::adaptive_risk_engine::MacroContext;
+use crate::modules::hft::t5_strategy::T5Manager;
+use crate::modules::hft::t3_strategy::T3Manager;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -69,6 +71,12 @@ pub struct AppState {
     /// Shared dynamic macro context (RSI, VFI confidence, accuracy factor) — updated each minute
     pub macro_ctx: Arc<RwLock<MacroContext>>,
 
+    /// T-5 Certainty Strategy — Wisdom v2 (demo paper-trading)
+    pub t5_manager: Arc<T5Manager>,
+
+    /// T-3 Aggressive Strategy — Wisdom v3 (demo paper-trading)
+    pub t3_manager: Arc<T3Manager>,
+
     /// Latency tracking (ms) for health endpoint
     pub latency_binance: RwLock<u64>,
     pub latency_poly:    RwLock<u64>,
@@ -123,6 +131,8 @@ impl AppState {
             tick_drain:        Arc::new(AtomicBool::new(false)),
             adaptive_engine:   Arc::new(tokio::sync::Mutex::new(AdaptiveRiskEngine::new())),
             macro_ctx:         Arc::new(RwLock::new(MacroContext::default())),
+            t5_manager:        Arc::new(T5Manager::new()),
+            t3_manager:        Arc::new(T3Manager::new()),
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
             #[cfg(feature = "premium-patterns")]
