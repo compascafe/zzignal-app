@@ -293,23 +293,32 @@ impl SessionManager {
 
     /// Push a CsvRecord to the session specified by record.session_id.
     /// Pre-formats the CSV line OUTSIDE the writer lock to minimise mutex hold time.
-    /// Data stays in BufWriter(50 MiB) + OS page cache — safety flush every 500 rows.
+    /// Data stays in BufWriter(50 MiB) + OS page cache — flush every 100 rows + 15s background.
     pub fn push(&self, record: &CsvRecord) -> bool {
         let sid = record.session_id;
-        if sid == 0 { return false; }
+        if sid == 0 {
+            warn!("CSV push: sid=0, skipping");
+            return false;
+        }
 
-        // Pre-format the CSV line outside the lock — avoids holding the mutex
-        // while formatting 60 float/string fields.
+        // Pre-format the CSV line outside the lock
         let line = fast_format_csv_line(record);
+        if line.is_empty() {
+            warn!("CSV push: fast_format_csv_line returned empty for sid={}", sid);
+            return false;
+        }
         let is_trade = matches!(record.event_type, EventType::Trade);
 
         let mut writers = self.writers.lock().unwrap();
         let sw = match writers.get_mut(&sid) {
             Some(w) => w,
-            None => return false,
+            None => {
+                warn!("CSV push: no writer for sid={} (active: {:?})", sid,
+                    writers.keys().collect::<Vec<_>>());
+                return false;
+            }
         };
 
-        // Write pre-formatted line + newline (single write! call = single buffer copy)
         let _ = sw.writer.write_all(line.as_bytes());
         let _ = sw.writer.write_all(b"\n");
 
@@ -320,10 +329,10 @@ impl SessionManager {
         }
 
         sw.row_count += 1;
-        // Periodic safety flush every 500 rows (~30s at 16 rows/s) — protects against crash,
-        // but keeps 99% of data in RAM via BufWriter(10MB).
-        if sw.row_count % 500 == 0 {
+        if sw.row_count % 100 == 0 {
             let _ = sw.writer.flush();
+            info!("CSV flush: sid={} rows={} ticks={} trades={}",
+                sid, sw.row_count, sw.tick_count, sw.trade_count);
         }
         true
     }
