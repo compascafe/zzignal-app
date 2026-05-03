@@ -119,6 +119,7 @@ impl FenixStats {
             range: format!("[{:.2}, {:.2}]", def.min, def.max),
             confirm_ticks: def.confirm_ticks,
             capital: 20.0, balance: 20.0, session_pnl: 0.0, session_balance: 20.0,
+            trades: 0, wins: 0,
             accuracy: 0.0, total_pnl: 0.0, avg_pnl: 0.0,
             best_pnl: 0.0, worst_pnl: 0.0, sessions_tracked: 0,
             last_10: Vec::with_capacity(10),
