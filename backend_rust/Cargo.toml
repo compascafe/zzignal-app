@@ -1,6 +1,6 @@
 [package]
 name        = "polymarket-backend"
-version = "0.2.4"   # force clean rebuild + session alignment bulletproof
+version = "0.2.5"   # ring latency fix + csv flush + strategy framework + 94 cols
 edition     = "2021"
 rust-version = "1.91"   # MSRV
 default-run = "polymarket-backend"
