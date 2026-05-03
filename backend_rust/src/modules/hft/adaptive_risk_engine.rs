@@ -1006,17 +1006,20 @@ impl AdaptiveRiskEngine {
                 (self.macro_snap.sma50 - self.macro_snap.sma200) / self.macro_snap.sma200 * 100.0
             } else { 0.0 };
         }
-        // Warmup gate: 50+ live ticks AND MACD histogram must be stable (|Δ| < 50%)
+        // Warmup gate: 50+ live ticks AND MACD histogram must be stable ONCE
         if self.macro_snap.live_tick_count >= 50 && prices.len() >= 16 {
-            let prev_hist = self.macro_snap.last_macd_hist;
-            let curr_hist = self.macro_snap.macd_hist;
-            if prev_hist == 0.0 || curr_hist == 0.0 {
-                self.macro_snap.warmup_ready = false;
-            } else {
-                let delta_ratio = ((curr_hist - prev_hist).abs() / prev_hist.abs()).min(1.0);
-                self.macro_snap.warmup_ready = delta_ratio < 0.5;
+            if !self.macro_snap.warmup_ready {
+                let prev_hist = self.macro_snap.last_macd_hist;
+                let curr_hist = self.macro_snap.macd_hist;
+                if prev_hist != 0.0 && curr_hist != 0.0 {
+                    let delta_ratio = ((curr_hist - prev_hist).abs() / prev_hist.abs()).min(1.0);
+                    if delta_ratio < 0.5 {
+                        self.macro_snap.warmup_ready = true;
+                        info!("AdaptiveRiskEngine: warmup READY (MACD stable)");
+                    }
+                }
             }
-            self.macro_snap.last_macd_hist = curr_hist;
+            self.macro_snap.last_macd_hist = self.macro_snap.macd_hist;
         }
         ctx.dynamic_rsi
     }
@@ -1051,6 +1054,25 @@ impl AdaptiveRiskEngine {
         // Reset momentum flag when RSI returns to neutral zone
         if ctx.dynamic_rsi > 35.0 && ctx.dynamic_rsi < 65.0 {
             ctx.momentum_flipped = false;
+        }
+        // ── Fallback: MACD+RSI consensus overrides stale bias ──────────────
+        if self.macro_snap.warmup_ready && !ctx.momentum_flipped {
+            let macd_up = self.macro_snap.macd_hist > 0.5;
+            let rsi_up = ctx.dynamic_rsi > 50.0;
+            let rsi_down = ctx.dynamic_rsi < 50.0;
+            let current = &self.macro_snap.predicted_bias;
+            if macd_up && rsi_up && current == "DOWN" {
+                self.macro_snap.predicted_bias = "UP".into();
+                ctx.weighted_bias = "UP".into();
+                ctx.predicted_bias = "UP".into();
+                return true;
+            }
+            if !macd_up && rsi_down && current == "UP" {
+                self.macro_snap.predicted_bias = "DOWN".into();
+                ctx.weighted_bias = "DOWN".into();
+                ctx.predicted_bias = "DOWN".into();
+                return true;
+            }
         }
         false
     }
