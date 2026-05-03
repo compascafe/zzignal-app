@@ -203,9 +203,8 @@ impl FenixTradingManager {
 
             // ── Entry check: price near favorable edge + direction confirmed ─
 
-            // Is market active? (volume + two-sided)
-            let market_active = poly_bid_vol_all > 10.0 && poly_ask_vol_all > 10.0
-                             && poly_bid > 0.0 && poly_ask > 0.0;
+            let market_active = (poly_bid_vol_all > 5.0 || poly_ask_vol_all > 5.0)
+                             && (poly_bid > 0.0 || poly_ask > 0.0);
 
             if !market_active {
                 t.ticks_near = 0;
