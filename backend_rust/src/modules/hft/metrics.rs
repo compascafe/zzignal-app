@@ -175,15 +175,28 @@ impl TrackingState {
     }
 
     /// Compute price velocity: slope of Binance mid price over 1s window (USD/s).
-    /// Uses the RingBuffer for direct look-back — no separate price history needed.
+    /// Primary: RingBuffer look-back. Fallback: price_history (VecDeque from record_price_sample).
     pub fn price_velocity(&self, ring: &PriceRingBuffer, now_ms: i64, current_price: f64) -> f64 {
+        // Primary: ring buffer look-back
         let target_ts = (now_ms as u64).saturating_sub(1000);
         if let Some(past) = ring.get_closest_to(target_ts) {
             if past.timestamp > 0 && past.mid_price > 0.0 {
                 let dt_ms = ((now_ms as u64).saturating_sub(past.timestamp)).max(1) as f64;
                 let dp = current_price - past.mid_price;
-                return dp / (dt_ms / 1000.0); // USD per second
+                return dp / (dt_ms / 1000.0);
             }
+        }
+        // Fallback: use price_history from record_price_sample (always populated by Binance ticks)
+        let hist = self.price_history.lock().unwrap();
+        if hist.len() < 2 { return 0.0; }
+        let cutoff = now_ms - 1000;
+        // Find oldest entry still within 1s window
+        let oldest = hist.iter().filter(|(ts, _)| *ts >= cutoff).min_by_key(|(ts, _)| *ts);
+        let newest = hist.back();
+        if let (Some((t1, p1)), Some(&(t2, p2))) = (oldest, newest) {
+            let dt_ms = (t2 - t1).max(1) as f64;
+            let dp = p2 - p1;
+            return dp / (dt_ms / 1000.0);
         }
         0.0
     }
@@ -432,7 +445,16 @@ pub fn build_book_update(
 
     let pb_bid  = poly_bids.first().map(|l| l.price).unwrap_or(0.0);
     let pb_ask  = poly_asks.first().map(|l| l.price).unwrap_or(0.0);
-    let pb_mid  = if pb_bid > 0.0 && pb_ask > 0.0 { (pb_bid + pb_ask) / 2.0 } else { 0.0 };
+    // Poly mid: use one-sided fallback for thin order books (common on Polymarket)
+    let pb_mid  = if pb_bid > 0.0 && pb_ask > 0.0 {
+        (pb_bid + pb_ask) / 2.0
+    } else if pb_bid > 0.0 {
+        pb_bid
+    } else if pb_ask > 0.0 {
+        pb_ask
+    } else {
+        0.0
+    };
     let pb_sprd = spread(pb_bid, pb_ask);
     let pb_bid_vol = sum_vol(poly_bids, 0);
     let pb_ask_vol = sum_vol(poly_asks, 0);
