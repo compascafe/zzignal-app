@@ -208,6 +208,12 @@ pub struct CsvRecord {
     pub fenix4550_exit:         u8,
     // ─── Fenix delta + velocity composite signal ──────────────────────────
     pub fenix_signal:           u8,    // 0=none, 1=UP, 2=DOWN (delta+velocity)
+    // ─── Market Pressure metrics ──────────────────────────────────────────
+    pub pressure_bid_floor:     f64,   // lowest bid price with vol > 10
+    pub pressure_ask_ceiling:   f64,   // highest ask price with vol > 10
+    pub pressure_band:          f64,   // ask_ceiling - bid_floor (effective spread)
+    pub pressure_index:         f64,   // (mid - floor) / band → 0=DOWN, 1=UP
+    pub pressure_skew:          f64,   // (bid_vol - ask_vol) / total within band
 }
 
 impl Default for CsvRecord {
@@ -322,6 +328,11 @@ impl Default for CsvRecord {
             fenix40_exit:            0,
             fenix4550_exit:          0,
             fenix_signal:            0,
+            pressure_bid_floor:      0.0,
+            pressure_ask_ceiling:    0.0,
+            pressure_band:           0.0,
+            pressure_index:          0.5,
+            pressure_skew:           0.0,
         }
     }
 }

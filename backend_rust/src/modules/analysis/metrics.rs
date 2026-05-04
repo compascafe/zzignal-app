@@ -92,6 +92,80 @@ pub fn compute_top_metrics(tob: &TopOfBook) -> OrderbookMetrics {
     }
 }
 
+// ─── Market Pressure ───────────────────────────────────────────────────────
+
+/// Market Pressure metrics: effective spread, pressure index, volume skew.
+/// Filters out dust orders (vol < MIN_VOL) to find where real liquidity sits.
+pub struct PressureMetrics {
+    pub bid_floor:     f64,  // lowest bid price with meaningful volume
+    pub ask_ceiling:   f64,  // highest ask price with meaningful volume
+    pub band:          f64,  // effective spread: ceiling - floor
+    pub index:         f64,  // (mid - floor) / band: 0=DOWN pressure, 1=UP pressure
+    pub skew:          f64,  // (bid_vol - ask_vol) / total within band: + buy, - sell
+}
+
+/// Compute pressure metrics from full orderbook depth.
+///
+/// Steps:
+///   1. Find bid_floor = lowest bid price with size >= min_vol (default 10)
+///   2. Find ask_ceiling = highest ask price with size >= min_vol
+///   3. band = ask_ceiling - bid_floor (if valid, else 0)
+///   4. index = (mid - bid_floor) / band (clamped to [0,1])
+///   5. skew = (bid_vol_in_band - ask_vol_in_band) / total_vol_in_band
+pub fn compute_pressure(
+    bids: &[PriceLevel], asks: &[PriceLevel],
+    mid: f64, min_vol: f64,
+) -> PressureMetrics {
+    // Bid floor: lowest (worst) price that still has meaningful size
+    let bid_floor = bids.iter()
+        .filter(|l| l.size >= min_vol)
+        .map(|l| l.price)
+        .fold(f64::NAN, f64::min); // lowest price = furthest from 1.0
+
+    // Ask ceiling: highest (worst) price that still has meaningful size
+    let ask_ceiling = asks.iter()
+        .filter(|l| l.size >= min_vol)
+        .map(|l| l.price)
+        .fold(f64::NAN, f64::max); // highest price = furthest from 0.0
+
+    if bid_floor.is_nan() || ask_ceiling.is_nan() || ask_ceiling <= bid_floor {
+        return PressureMetrics {
+            bid_floor: if bid_floor.is_nan() { 0.0 } else { bid_floor },
+            ask_ceiling: if ask_ceiling.is_nan() { 1.0 } else { ask_ceiling },
+            band: 0.0, index: 0.5, skew: 0.0,
+        };
+    }
+
+    let band = ask_ceiling - bid_floor;
+
+    // Pressure index: where is mid within the band?
+    let index = if band > 0.0 {
+        ((mid - bid_floor) / band).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+
+    // Volume skew within the band
+    let bid_vol_in_band: f64 = bids.iter()
+        .filter(|l| l.price >= bid_floor)
+        .map(|l| l.size)
+        .sum();
+    let ask_vol_in_band: f64 = asks.iter()
+        .filter(|l| l.price <= ask_ceiling)
+        .map(|l| l.size)
+        .sum();
+    let total = bid_vol_in_band + ask_vol_in_band;
+    let skew = if total > 0.0 {
+        (bid_vol_in_band - ask_vol_in_band) / total
+    } else {
+        0.0
+    };
+
+    PressureMetrics {
+        bid_floor, ask_ceiling, band, index, skew,
+    }
+}
+
 // ─── Metric Snapshots ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

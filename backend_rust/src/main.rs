@@ -23,6 +23,7 @@ use crate::modules::core::persistence as db;
 use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType, PolyDepthFrame};
 use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::{self, TrackingState};
+use crate::modules::analysis::metrics as analysis_metrics;
 use crate::modules::hft::binance_depth::BinanceTickEvent;
 use crate::modules::hft::adaptive_risk_engine::warmup_fetch_and_compute;
 use crate::modules::hft::perf;
@@ -678,6 +679,16 @@ async fn capture_combined(
         .or_else(|| state.session_manager.active_ids().last().copied())
         .unwrap_or(0);
     rec.session_id = active_sid;
+
+    // ─── Market Pressure: effective spread + pressure index + volume skew ──
+    {
+        let pressure = analysis_metrics::compute_pressure(poly_bids, poly_asks, rec.poly_mid, 10.0);
+        rec.pressure_bid_floor   = pressure.bid_floor;
+        rec.pressure_ask_ceiling = pressure.ask_ceiling;
+        rec.pressure_band        = pressure.band;
+        rec.pressure_index       = pressure.index;
+        rec.pressure_skew        = pressure.skew;
+    }
 
     let t_start = std::time::Instant::now();
 
