@@ -121,6 +121,7 @@ impl AppState {
         tracking_state:  Arc<TrackingState>,
         tick_tx:         mpsc::UnboundedSender<BinanceTickEvent>,
     ) -> Arc<Self> {
+        let cmd_tx_clone = cmd_tx.clone();
         Arc::new(Self {
             status:            RwLock::new("Initializing".into()),
             market:            RwLock::new(None),
@@ -159,7 +160,7 @@ impl AppState {
             pnr_manager:       Arc::new(PnrManager::new()),
             insight_manager:   Arc::new(InsightManager::new()),
             fenix_trading:     Arc::new(FenixTradingManager::new()),
-            odiseo_trading:    Arc::new(OdiseoTradingManager::new()),
+            odiseo_trading:    Arc::new(OdiseoTradingManager::new(Some(cmd_tx_clone))),
             poly_depth_history: RwLock::new(VecDeque::with_capacity(300)),
             diagnostic_mode: AtomicBool::new(true),  // solo Odiseo activo
             latency_binance:   RwLock::new(0),

@@ -12,8 +12,11 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use serde::Serialize;
 use tracing::info;
+
+use crate::modules::core::worker::{CmdMsg, OrderSide, Outcome as WorkerOutcome};
 
 #[derive(Debug, Clone)]
 struct OdiseoDef {
@@ -57,9 +60,10 @@ impl OdiseoStats { fn new(d:&OdiseoDef)->Self { Self {
     accuracy:0.0,total_pnl:0.0,avg_pnl:0.0,best:0.0,worst:0.0,sessions:0,last_10:Vec::with_capacity(10),
 }}}
 
-pub struct OdiseoTradingManager { sessions:Mutex<HashMap<i32,OdiseoSessionState>>, stats:Mutex<Vec<OdiseoStats>> }
+pub struct OdiseoTradingManager { sessions:Mutex<HashMap<i32,OdiseoSessionState>>, stats:Mutex<Vec<OdiseoStats>>, pub live_mode:AtomicBool, cmd_tx:Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>> }
 impl OdiseoTradingManager {
-    pub fn new()->Self { Self { sessions:Mutex::new(HashMap::new()), stats:Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()) } }
+    pub fn new(cmd_tx: Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>) -> Self { Self { sessions:Mutex::new(HashMap::new()), stats:Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode:AtomicBool::new(false), cmd_tx } }
+    pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
 
     pub fn on_tick(&self, session_id:i32, seconds_left:i32,
                    bid_vol:f64, ask_vol:f64, imb:f64, vel:f64,
@@ -100,6 +104,17 @@ impl OdiseoTradingManager {
                 let fill = if reason==1 { def.tp_price } else { px };
                 pos.exit_price = fill; pos.virtual_pnl = (fill - pos.entry_price) * pos.size;
                 info!("[Odiseo] #{} {} EXIT r={} @{:.4} pnl={:.4}", sid, code, reason, fill, pos.virtual_pnl);
+                // ── Live: place real exit order ──
+                if self.live_mode.load(Ordering::Relaxed) {
+                    if let Some(ref tx) = self.cmd_tx {
+                        let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
+                        if reason == 1 {
+                            let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Sell, outcome, price: def.tp_price, size: pos.size });
+                        } else {
+                            let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: (fill * pos.size).max(1.0) });
+                        }
+                    }
+                }
             }
         }
         if pos.settled { r.push((code,0,pos.entry_price,pos.size,pos.virtual_pnl,pos.exit_price,pos.exit_reason,20.0+pos.virtual_pnl)); return; }
@@ -110,6 +125,13 @@ impl OdiseoTradingManager {
             pos.max_price = px; pos.prev_vol = if is_up{av}else{bv};
             *sig |= if is_up{1}else{2};
             info!("[Odiseo] #{} {} ENTER @{:.4} sz={:.0}", sid, code, px, pos.size);
+            // ── Live: place real entry order ──
+            if self.live_mode.load(Ordering::Relaxed) {
+                if let Some(ref tx) = self.cmd_tx {
+                    let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
+                    let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Buy, outcome, price: px, size: pos.size });
+                }
+            }
         }
 
         if pos.entered && !pos.settled {

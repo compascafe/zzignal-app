@@ -60,6 +60,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/fenix",           get(get_fenix))
         // ─── Odiseo Trading ────────────────────────────────────────────────
         .route("/api/odiseo",          get(get_odiseo))
+        .route("/api/odiseo/live",     post(post_odiseo_live))
+        .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -389,6 +391,26 @@ async fn get_odiseo(State(s): State<Arc<AppState>>) -> Json<Value> {
     let json_str = s.odiseo_trading.export_json();
     let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
     Json(value)
+}
+
+async fn get_odiseo_status(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let live = s.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed);
+    let stats = s.odiseo_trading.export_json();
+    let stats_val: Value = serde_json::from_str(&stats).unwrap_or(json!([]));
+    Json(json!({
+        "live_mode": live,
+        "status": if live { "LIVE" } else { "PAPER" },
+        "variants": stats_val,
+    }))
+}
+
+#[derive(Deserialize)]
+struct OdiseoLiveBody { enable: bool }
+
+async fn post_odiseo_live(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoLiveBody>) -> Json<Value> {
+    s.odiseo_trading.set_live_mode(body.enable);
+    let live = s.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed);
+    Json(json!({"live_mode": live, "status": if live { "LIVE" } else { "PAPER" }}))
 }
 
 async fn export_wisdom(State(s): State<Arc<AppState>>) -> Response {
