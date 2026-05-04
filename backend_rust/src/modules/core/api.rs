@@ -88,6 +88,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Performance counters
         .route("/api/perf",            get(get_perf))
         .route("/api/perf/reset",      post(reset_perf))
+        // Live CSV export (in-memory buffer, no DB required)
+        .route("/api/csv/live",        get(export_live_csv))
         // WebSocket
         .route("/ws",                  get(ws_handler))
         .with_state(Arc::clone(&state));
@@ -474,6 +476,182 @@ async fn export_wisdom_bulk() -> Response {
      [("Content-Type", "application/zip"),
       ("Content-Disposition", "attachment; filename=\"wisdom_bulk.zip\"")],
      zip_buf).into_response()
+}
+
+// ─── Live CSV Export (from in-memory buffer — no DB required) ──────────────────
+
+async fn export_live_csv(
+    State(s): State<Arc<AppState>>,
+    Query(params): Query<LiveCsvParams>,
+) -> Response {
+    use std::fmt::Write;
+    use crate::modules::hft::types::{CsvRecord, EventType};
+
+    let mem = s.mem_hft.read().await;
+    let total = mem.len();
+    let limit = params.limit.unwrap_or(5000).min(total).max(1);
+    let session_filter = params.session_id;
+
+    // Filter: optionally by session_id, always take last `limit`
+    let filtered: Vec<&CsvRecord> = if let Some(sid) = session_filter {
+        mem.iter().filter(|r| r.session_id == sid).collect()
+    } else {
+        mem.iter().collect()
+    };
+    let rows: Vec<&CsvRecord> = filtered.iter().rev().take(limit).rev().copied().collect();
+
+    // Build CSV header (125 columns matching fast_format_csv_line)
+    let mut csv = String::with_capacity(rows.len() * 512);
+    let _ = writeln!(csv, "# zzignal-app live CSV export — {} rows (buffer: {} total)", rows.len(), total);
+    let _ = writeln!(csv, "# exported_at={}", chrono::Utc::now().to_rfc3339());
+    let _ = writeln!(csv, "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,trade_price,trade_size,is_informed,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,fenix_signal,pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew");
+
+    for r in &rows {
+        let mut fields: Vec<String> = Vec::with_capacity(130);
+        fields.push(r.ts_local.clone());
+        fields.push(r.ts_exchange.clone());
+        fields.push(r.event_type.as_str().to_string());
+        fields.push(r.latencia_ms.to_string());
+        fields.push(r.binance_price.to_string());
+        fields.push(r.binance_micro_price.to_string());
+        fields.push(r.binance_imbalance.to_string());
+        fields.push(r.binance_vol_100ms.to_string());
+        fields.push(r.binance_vol_24h.to_string());
+        fields.push(r.poly_bid.to_string());
+        fields.push(r.poly_ask.to_string());
+        fields.push(r.poly_mid.to_string());
+        fields.push(r.poly_spread.to_string());
+        fields.push(r.poly_bid_vol_all.to_string());
+        fields.push(r.poly_ask_vol_all.to_string());
+        fields.push(r.poly_imbalance.to_string());
+        fields.push(r.trade_side.clone());
+        fields.push(r.trade_price.to_string());
+        fields.push(r.trade_size.to_string());
+        fields.push(r.is_informed.to_string());
+        fields.push(r.imba_status.clone());
+        fields.push(r.imba_side.clone());
+        fields.push(r.imba_entry_price.to_string());
+        fields.push(r.imba_exit_price.to_string());
+        fields.push(r.imba_trade_pnl.to_string());
+        fields.push(r.imba_balance.to_string());
+        fields.push(r.liqb_status.clone());
+        fields.push(r.liqb_side.clone());
+        fields.push(r.liqb_entry_price.to_string());
+        fields.push(r.liqb_exit_price.to_string());
+        fields.push(r.liqb_trade_pnl.to_string());
+        fields.push(r.liqb_balance.to_string());
+        fields.push(r.trades_per_second.to_string());
+        fields.push(r.price_velocity.to_string());
+        fields.push(r.poly_liquidity_delta.to_string());
+        fields.push(r.absorption_ratio.to_string());
+        fields.push(r.price_gap_ratio.to_string());
+        fields.push(r.spoofing_flag.to_string());
+        fields.push(r.tape_speed_flag.to_string());
+        fields.push(r.gap_alert_flag.to_string());
+        fields.push(r.bollinger_sma.to_string());
+        fields.push(r.bollinger_upper.to_string());
+        fields.push(r.bollinger_lower.to_string());
+        fields.push(r.mean_reversion_signal.to_string());
+        fields.push(r.technical_confluence.to_string());
+        fields.push(r.trend_direction.to_string());
+        fields.push(r.signal_label.clone());
+        fields.push(r.realized_volatility.to_string());
+        fields.push(r.high_volatility_event.to_string());
+        fields.push(r.bollinger_position.to_string());
+        fields.push(r.master_signal.to_string());
+        fields.push(r.cp_uncertainty_range.to_string());
+        fields.push(r.cp_valid_signal.to_string());
+        fields.push(r.macro_slope.to_string());
+        fields.push(r.vfi_value.to_string());
+        fields.push(r.macd_hist.to_string());
+        fields.push(r.predicted_bias.clone());
+        fields.push(r.is_feedback_adjusted.to_string());
+        fields.push(r.dynamic_rsi.to_string());
+        fields.push(r.vfi_confidence.to_string());
+        fields.push(r.db_accuracy_factor.to_string());
+        fields.push(r.t5_prediction.clone());
+        fields.push(r.t5_entry_price.to_string());
+        fields.push(r.t5_correct.to_string());
+        fields.push(r.t3_prediction.clone());
+        fields.push(r.t3_entry_price.to_string());
+        fields.push(r.t3_active.to_string());
+        fields.push(r.pnr_active.to_string());
+        fields.push(r.pnr_seconds_left.to_string());
+        fields.push(r.pnr_price.to_string());
+        fields.push(r.pnr_return_up.to_string());
+        fields.push(r.pnr_return_down.to_string());
+        fields.push(r.pnr_volatility_1m.to_string());
+        fields.push(r.pnr_confidence.to_string());
+        fields.push(r.pnr_trend.to_string());
+        fields.push(r.pnr_spread_pct.to_string());
+        fields.push(r.cerbero70_active.to_string());
+        fields.push(r.cerbero70_price.to_string());
+        fields.push(r.cerbero70_dir.to_string());
+        fields.push(r.cerbero80_active.to_string());
+        fields.push(r.cerbero80_price.to_string());
+        fields.push(r.cerbero80_dir.to_string());
+        fields.push(r.cerbero90_active.to_string());
+        fields.push(r.cerbero90_price.to_string());
+        fields.push(r.cerbero90_dir.to_string());
+        fields.push(r.fenix35_active.to_string());
+        fields.push(r.fenix35_price.to_string());
+        fields.push(r.fenix35_dir.to_string());
+        fields.push(r.fenix30_active.to_string());
+        fields.push(r.fenix30_price.to_string());
+        fields.push(r.fenix30_dir.to_string());
+        fields.push(r.fenix45_active.to_string());
+        fields.push(r.fenix45_price.to_string());
+        fields.push(r.fenix45_dir.to_string());
+        fields.push(r.fenix35_trade.to_string());
+        fields.push(r.fenix30_trade.to_string());
+        fields.push(r.fenix45_trade.to_string());
+        fields.push(r.fenix40_trade.to_string());
+        fields.push(r.fenix4550_trade.to_string());
+        fields.push(r.fenix35_skip.to_string());
+        fields.push(r.fenix30_skip.to_string());
+        fields.push(r.fenix45_skip.to_string());
+        fields.push(r.fenix40_skip.to_string());
+        fields.push(r.fenix4550_skip.to_string());
+        fields.push(r.fenix35_entry.to_string());
+        fields.push(r.fenix35_pnl.to_string());
+        fields.push(r.fenix30_entry.to_string());
+        fields.push(r.fenix30_pnl.to_string());
+        fields.push(r.fenix45_entry.to_string());
+        fields.push(r.fenix45_pnl.to_string());
+        fields.push(r.fenix40_entry.to_string());
+        fields.push(r.fenix40_pnl.to_string());
+        fields.push(r.fenix4550_entry.to_string());
+        fields.push(r.fenix4550_pnl.to_string());
+        fields.push(r.fenix35_target.to_string());
+        fields.push(r.fenix30_target.to_string());
+        fields.push(r.fenix45_target.to_string());
+        fields.push(r.fenix40_target.to_string());
+        fields.push(r.fenix4550_target.to_string());
+        fields.push(r.fenix35_exit.to_string());
+        fields.push(r.fenix30_exit.to_string());
+        fields.push(r.fenix45_exit.to_string());
+        fields.push(r.fenix40_exit.to_string());
+        fields.push(r.fenix4550_exit.to_string());
+        fields.push(r.fenix_signal.to_string());
+        fields.push(r.pressure_bid_floor.to_string());
+        fields.push(r.pressure_ask_ceiling.to_string());
+        fields.push(r.pressure_band.to_string());
+        fields.push(r.pressure_index.to_string());
+        fields.push(r.pressure_skew.to_string());
+        let _ = writeln!(csv, "{}", fields.join(","));
+    }
+
+    let filename = format!("zzignal_live_{}.csv", chrono::Utc::now().format("%Y%m%dT%H%M%S"));
+    (axum::http::StatusCode::OK,
+     [("Content-Type", "text/csv; charset=utf-8"),
+      ("Content-Disposition", &format!("attachment; filename=\"{}\"", filename))],
+     csv).into_response()
+}
+
+#[derive(Deserialize)]
+struct LiveCsvParams {
+    limit: Option<usize>,
+    session_id: Option<i32>,
 }
 
 async fn import_wisdom(State(s): State<Arc<AppState>>, Json(body): Json<Value>) -> Json<Value> {
