@@ -1,11 +1,12 @@
 //! Odiseo Strategies v2 — Last-trade-price momentum paper-trading (bidirectional)
 //!
-//! Entry: last_trade_price crosses threshold (0.90 / 0.93 / 0.95) for either UP or DOWN token.
-//! Take-profit: last_trade_price >= 0.985 (90/93) or 0.990 (95)
+//! UP entry:   last_trade_up   >= entry_threshold (market confirms UP via trades)
+//! DOWN entry: last_trade_down >= entry_threshold (market confirms DOWN via trades)
+//! Take-profit: trade_price >= tp_price
 //! Stop-loss layers:
 //!   1) Microstructure — volume crash >30% + imbalance inversion
-//!   2) Trend — trade price drops -0.03 from post-entry max + velocity against position
-//!   3) Hard — trade price <= hard SL
+//!   2) Trend — price drops -0.03 from post-entry max + velocity against
+//!   3) Hard — trade_price <= hard SL
 //!
 //! 3 variants × 2 directions. $20 virtual each. One entry per session per direction.
 
@@ -21,11 +22,11 @@ use tracing::info;
 struct OdiseoDef {
     name:            &'static str,
     code:            &'static str,
-    entry_threshold: f64,    // last_trade_price >= this → enter
-    tp_price:        f64,    // last_trade_price >= this → take profit
-    sl_hard:         f64,    // last_trade_price <= this → hard stop
-    sl_trend_delta:  f64,    // price drop from post-entry max for trend SL
-    sl_micro_drop:   f64,    // volume % drop for microstructure SL
+    entry_threshold: f64,    // last_trade >= this → enter
+    tp_price:        f64,    // last_trade >= this → take profit
+    sl_hard:         f64,    // last_trade <= this → hard stop
+    sl_trend_delta:  f64,
+    sl_micro_drop:   f64,
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
@@ -127,7 +128,7 @@ impl OdiseoTradingManager {
     /// Per variant: 2 tuples (UP, DOWN), each: (code_dir, active, entry, size, pnl, exit_price, exit_reason, balance)
     /// signal: 1=UP entry, 2=DOWN entry, 3=both
     pub fn on_tick(&self, session_id: i32,
-                   poly_mid: f64, poly_bid: f64, poly_ask: f64,
+                   poly_bid: f64, poly_ask: f64,
                    poly_bid_vol_all: f64, poly_ask_vol_all: f64,
                    poly_imbalance: f64, price_velocity: f64,
                    last_trade_up: Option<f64>, last_trade_down: Option<f64>,
@@ -146,7 +147,7 @@ impl OdiseoTradingManager {
 
             // ── UP direction ──────────────────────────────────────────
             self.process_direction(true, t, def, session_id,
-                poly_mid, poly_bid, poly_ask,
+                poly_bid, poly_ask,
                 poly_bid_vol_all, poly_ask_vol_all,
                 poly_imbalance, price_velocity,
                 last_trade_up,
@@ -154,7 +155,7 @@ impl OdiseoTradingManager {
 
             // ── DOWN direction ────────────────────────────────────────
             self.process_direction(false, t, def, session_id,
-                poly_mid, poly_bid, poly_ask,
+                poly_bid, poly_ask,
                 poly_bid_vol_all, poly_ask_vol_all,
                 poly_imbalance, price_velocity,
                 last_trade_down,
@@ -166,7 +167,7 @@ impl OdiseoTradingManager {
     #[allow(clippy::too_many_arguments)]
     fn process_direction(&self, is_up: bool, t: &mut OdiseoSessionTrade,
                          def: &OdiseoDef, session_id: i32,
-                         poly_mid: f64, _poly_bid: f64, _poly_ask: f64,
+                         _poly_bid: f64, _poly_ask: f64,
                          poly_bid_vol_all: f64, poly_ask_vol_all: f64,
                          poly_imbalance: f64, price_velocity: f64,
                          last_trade: Option<f64>,
