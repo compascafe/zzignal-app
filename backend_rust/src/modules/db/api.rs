@@ -829,14 +829,20 @@ struct CsvFallbackRow {
 
 /// Try to read the per-session CSV file from disk (written by SessionManager).
 /// Flushes the writer first to ensure buffered data is on disk, then returns the full file content.
-/// Returns None if file doesn't exist or is empty after trim.
+/// Returns None if file doesn't exist, is empty, or has no data rows (header-only).
 fn read_session_csv_disk(session_manager: &crate::modules::hft::session_manager::SessionManager, id: i32) -> Option<String> {
     // Flush BufWriter to disk before reading — data may be buffered in RAM
     let _ = session_manager.flush(id);
     let path = session_manager.session_path(id);
     let raw = std::fs::read_to_string(&path).ok()?;
     let trimmed = raw.trim_end().to_string();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
+    if trimmed.is_empty() { return None; }
+    // Count non-comment, non-header data rows — if zero, treat as empty (fallback to DB/mem)
+    let data_lines = trimmed.lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with("ts_local"))
+        .filter(|l| !l.trim().is_empty())
+        .count();
+    if data_lines == 0 { None } else { Some(trimmed) }
 }
 
 async fn export_session(
