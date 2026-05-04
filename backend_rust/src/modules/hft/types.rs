@@ -3,6 +3,16 @@ use crate::modules::core::worker::PriceLevel;
 
 pub use crate::modules::hft::ring_buffer::{BinanceState, PriceRingBuffer};
 
+/// Snapshot completo del orderbook de Polymarket (todos los niveles).
+/// Se captura en cada BOOK_UPDATE y se almacena en un buffer circular en AppState.
+#[derive(Debug, Clone, Serialize)]
+pub struct PolyDepthFrame {
+    pub ts_unix_ms:  i64,             // timestamp local (unix ms)
+    pub side:        u8,              // 0 = UP, 1 = DOWN
+    pub bids:        Vec<PriceLevel>, // todos los niveles bid
+    pub asks:        Vec<PriceLevel>, // todos los niveles ask
+}
+
 /// Snapshot completo del order book de Binance (top 20 niveles)
 #[derive(Debug, Clone)]
 pub struct BinanceDepth {

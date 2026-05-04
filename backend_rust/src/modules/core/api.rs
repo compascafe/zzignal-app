@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
 use sysinfo::System;
+use tracing::info;
 
 use crate::modules::core::persistence as db;
 use crate::modules::core::state::AppState;
@@ -60,6 +61,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
+        // Depth history — orderbook completo en memoria (todos los niveles)
+        .route("/api/depth/latest",    get(get_depth_latest))
+        .route("/api/depth/history",   get(get_depth_history))
+        .route("/api/depth/session",   get(get_depth_session))
+        // Diagnostic mode toggle
+        .route("/api/mode",            get(get_mode))
+        .route("/api/mode/diagnostic", post(post_diagnostic_mode))
         // Candles (live desde estado en memoria)
         .route("/api/candles",         get(get_candles))
         .route("/api/candles/interval",post(set_interval))
@@ -847,6 +855,170 @@ async fn handle_ws_cmd(text: &str, state: &AppState) {
         }
         _ => {}
     }
+}
+
+// ─── Depth History Handlers ────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DepthQuery {
+    side: Option<String>,
+    levels: Option<usize>,
+    limit: Option<usize>,
+}
+
+async fn get_depth_latest(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<DepthQuery>,
+) -> Response {
+    let side = match q.side.as_deref() {
+        Some("up") => 0u8,
+        Some("down") => 1u8,
+        _ => return (axum::http::StatusCode::BAD_REQUEST, "?side=up|down required").into_response(),
+    };
+    let max_levels = q.levels.unwrap_or(50);
+
+    let history = state.poly_depth_history.read().await;
+    let frame = history.iter().rev().find(|f| f.side == side);
+
+    match frame {
+        None => Json(json!({ "found": false, "reason": "no_frames_yet" })).into_response(),
+        Some(f) => {
+            let bids: Vec<_> = f.bids.iter().take(max_levels).map(|l| {
+                serde_json::json!({"price": l.price, "size": l.size})
+            }).collect();
+            let asks: Vec<_> = f.asks.iter().take(max_levels).map(|l| {
+                serde_json::json!({"price": l.price, "size": l.size})
+            }).collect();
+            Json(json!({
+                "found": true,
+                "side": if side == 0 { "up" } else { "down" },
+                "ts_unix_ms": f.ts_unix_ms,
+                "total_bid_levels": f.bids.len(),
+                "total_ask_levels": f.asks.len(),
+                "bids": bids,
+                "asks": asks,
+            })).into_response()
+        }
+    }
+}
+
+async fn get_depth_history(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<DepthQuery>,
+) -> Response {
+    let side_filter: Option<u8> = match q.side.as_deref() {
+        Some("up") => Some(0),
+        Some("down") => Some(1),
+        Some(other) => return (axum::http::StatusCode::BAD_REQUEST,
+            format!("?side=up|down (got '{other}')")).into_response(),
+        None => None,
+    };
+    let limit = q.limit.unwrap_or(50).min(300);
+    let max_levels = q.levels.unwrap_or(20);
+
+    let history = state.poly_depth_history.read().await;
+    let frames: Vec<_> = history.iter()
+        .rev()
+        .filter(|f| side_filter.map_or(true, |s| f.side == s))
+        .take(limit)
+        .map(|f| {
+            let bids: Vec<_> = f.bids.iter().take(max_levels).map(|l| {
+                serde_json::json!({"price": l.price, "size": l.size})
+            }).collect();
+            let asks: Vec<_> = f.asks.iter().take(max_levels).map(|l| {
+                serde_json::json!({"price": l.price, "size": l.size})
+            }).collect();
+            serde_json::json!({
+                "ts_unix_ms": f.ts_unix_ms,
+                "side": if f.side == 0 { "up" } else { "down" },
+                "levels": { "bids": bids, "asks": asks },
+                "total_bid_levels": f.bids.len(),
+                "total_ask_levels": f.asks.len(),
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "total_frames_in_buffer": history.len(),
+        "returned": frames.len(),
+        "frames": frames,
+    })).into_response()
+}
+
+async fn get_depth_session(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<DepthQuery>,
+) -> Response {
+    let side: u8 = match q.side.as_deref() {
+        Some("up") => 0,
+        Some("down") => 1,
+        _ => return (axum::http::StatusCode::BAD_REQUEST, "?side=up|down required").into_response(),
+    };
+    let limit = q.limit.unwrap_or(2000).min(5000);
+    let max_levels = q.levels.unwrap_or(10);
+
+    let history = state.poly_depth_history.write().await;
+    let frames: Vec<_> = history.iter()
+        .rev()
+        .filter(|f| f.side == side)
+        .take(limit)
+        .map(|f| {
+            let bids: Vec<_> = f.bids.iter().take(max_levels).map(|l| {
+                serde_json::json!({"price": l.price, "size": l.size})
+            }).collect();
+            let asks: Vec<_> = f.asks.iter().take(max_levels).map(|l| {
+                serde_json::json!({"price": l.price, "size": l.size})
+            }).collect();
+            let best_bid = f.bids.first().map(|l| l.price).unwrap_or(0.0);
+            let best_ask = f.asks.first().map(|l| l.price).unwrap_or(0.0);
+            let mid = if best_bid > 0.0 && best_ask > 0.0 {
+                (best_bid + best_ask) / 2.0
+            } else if best_bid > 0.0 { best_bid } else { best_ask };
+            let spread = if best_bid > 0.0 && best_ask > 0.0 { best_ask - best_bid } else { 0.0 };
+            let bid_vol: f64 = f.bids.iter().map(|l| l.size).sum();
+            let ask_vol: f64 = f.asks.iter().map(|l| l.size).sum();
+            serde_json::json!({
+                "ts": f.ts_unix_ms,
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "mid": mid,
+                "spread": spread,
+                "bid_vol": bid_vol,
+                "ask_vol": ask_vol,
+                "bid_levels": f.bids.len(),
+                "ask_levels": f.asks.len(),
+                "bids": bids,
+                "asks": asks,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "side": if side == 0 { "up" } else { "down" },
+        "total_frames": frames.len(),
+        "frames": frames,
+    })).into_response()
+}
+
+async fn get_mode(State(state): State<Arc<AppState>>) -> Response {
+    let diagnostic = state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed);
+    Json(json!({
+        "diagnostic_mode": diagnostic,
+        "strategies_active": !diagnostic,
+    })).into_response()
+}
+
+async fn post_diagnostic_mode(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let enable = body.get("enable").and_then(|v| v.as_bool()).unwrap_or(true);
+    state.diagnostic_mode.store(enable, std::sync::atomic::Ordering::Relaxed);
+    info!("Diagnostic mode: {}", if enable { "ON" } else { "OFF" });
+    Json(json!({
+        "diagnostic_mode": enable,
+        "strategies_active": !enable,
+    })).into_response()
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

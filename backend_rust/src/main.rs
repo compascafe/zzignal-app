@@ -20,7 +20,7 @@ use crate::modules::core::worker::{AppMsg, BtcPriceProvider, CandleInterval, Cmd
 use crate::modules::core::credentials::ClobCredentials;
 use crate::modules::core::state::AppState;
 use crate::modules::core::persistence as db;
-use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType};
+use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType, PolyDepthFrame};
 use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::{self, TrackingState};
 use crate::modules::hft::binance_depth::BinanceTickEvent;
@@ -476,6 +476,8 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
 
         AppMsg::BookUp(b) => {
             *state.book_up.write().await = Some(b.clone());
+            // ─── Capturar snapshot completo del orderbook en memoria ─────
+            push_depth_frame(state, 0, &b.bids, &b.asks).await;
             capture_combined(state, "up", &b.bids, &b.asks, EventType::BookUpdate, "", 0.0, 0.0).await;
             capture_book_db(state, "up", &b.bids, &b.asks).await;
             // ─── T-5 + T-3 Strategies: track poly price ────────────────────
@@ -496,6 +498,8 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         }
         AppMsg::BookDown(b) => {
             *state.book_down.write().await = Some(b.clone());
+            // ─── Capturar snapshot completo del orderbook en memoria ─────
+            push_depth_frame(state, 1, &b.bids, &b.asks).await;
             capture_combined(state, "down", &b.bids, &b.asks, EventType::BookUpdate, "", 0.0, 0.0).await;
             capture_book_db(state, "down", &b.bids, &b.asks).await;
         }
@@ -604,6 +608,21 @@ async fn capture_book_db(state: &AppState, side: &str, bids: &[PriceLevel], asks
     }
 }
 
+/// Guarda el snapshot completo del orderbook de Polymarket en memoria (buffer circular).
+async fn push_depth_frame(state: &AppState, side: u8, bids: &[PriceLevel], asks: &[PriceLevel]) {
+    let mut history = state.poly_depth_history.write().await;
+    let frame = PolyDepthFrame {
+        ts_unix_ms: Utc::now().timestamp_millis(),
+        side,
+        bids: bids.to_vec(),
+        asks: asks.to_vec(),
+    };
+    if history.len() >= 300 {
+        history.pop_front();
+    }
+    history.push_back(frame);
+}
+
 /// Captura combinada: BOOK_UPDATE y TRADE usan el mismo pipeline CSV + DB.
 async fn capture_combined(
     state: &AppState, _side: &str,
@@ -660,7 +679,9 @@ async fn capture_combined(
         .unwrap_or(0);
     rec.session_id = active_sid;
 
-    // ─── Adaptive Risk Engine: macro fields + master signal ──────────────────
+    let t_start = std::time::Instant::now();
+
+    // ─── HEALTH SIGNALS: siempre activos, incluso en modo diagnóstico ──────
     {
         let mut eng = state.adaptive_engine.lock().await;
         rec.macro_slope = eng.macro_slope();
@@ -681,21 +702,25 @@ async fn capture_combined(
         rec.master_signal = master;
         rec.cp_uncertainty_range = cp_range;
         rec.cp_valid_signal = cp_valid;
-        // ─── Dynamic macro context (from shared state) ────────────────────
-        let ctx = state.macro_ctx.read().await;
-        rec.dynamic_rsi = ctx.dynamic_rsi;
-        rec.vfi_confidence = ctx.vfi_confidence;
-        rec.db_accuracy_factor = ctx.db_accuracy_factor;
-        // ─── T-5 Certainty Strategy (Wisdom v2) ────────────────────────────
+    }
+    // ─── Dynamic macro context ────────────────────────────────────────────
+    let ctx = state.macro_ctx.read().await;
+    rec.dynamic_rsi = ctx.dynamic_rsi;
+    rec.vfi_confidence = ctx.vfi_confidence;
+    rec.db_accuracy_factor = ctx.db_accuracy_factor;
+
+    // ─── ESTRATEGIAS — solo en modo normal ────────────────────────────────
+    if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
+        // ─── T-5 Certainty Strategy (Wisdom v2) ──────────────────────────
         let (t5_pred, t5_entry, _t5_correct) = state.t5_manager.get_prediction(active_sid);
         rec.t5_prediction = t5_pred;
         rec.t5_entry_price = t5_entry;
-        // ─── T-3 Aggressive Strategy (Wisdom v3) ────────────────────────────
+        // ─── T-3 Aggressive Strategy (Wisdom v3) ──────────────────────────
         let (t3_pred, t3_entry, t3_active) = state.t3_manager.get_prediction(active_sid);
         rec.t3_prediction = t3_pred;
         rec.t3_entry_price = t3_entry;
         rec.t3_active = if t3_active { 1 } else { 0 };
-        // ─── PNR: Point of No Return indicators (last 5 min analysis) ────────
+        // ─── PNR ─────────────────────────────────────────────────────────
         let secs_left = state.t5_manager.seconds_left(active_sid);
         if secs_left >= 0 && secs_left <= 300 {
             rec.pnr_active = 1;
@@ -708,11 +733,10 @@ async fn capture_combined(
             rec.pnr_trend = if rec.predicted_bias.contains("UP") { 1 }
                 else if rec.predicted_bias.contains("DOWN") { -1 } else { 0 };
             rec.pnr_spread_pct = if rec.poly_mid > 0.0 { rec.poly_spread / rec.poly_mid } else { 0.0 };
-            // Feed to Hydra No Return accumulator
             state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
                 rec.pnr_price, rec.pnr_return_up, rec.pnr_return_down);
         }
-        // ─── Insight Strategies: Cerbero + Fenix ─────────────────────────────
+        // ─── Insight Strategies: Cerbero + Fenix ─────────────────────────
         let insights = state.insight_manager.on_tick(active_sid, rec.poly_mid);
         for (code, active, dir) in insights {
             match code.as_str() {
@@ -725,7 +749,7 @@ async fn capture_combined(
                 _ => {}
             }
         }
-        // ─── Fenix Trading: paper-trading simulation ──────────────────────────
+        // ─── Fenix Trading ───────────────────────────────────────────────
         let (fenix_trades, fenix_signal) = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask, &rec.predicted_bias, rec.poly_spread, rec.binance_vol_100ms, rec.trades_per_second, rec.poly_imbalance, rec.price_velocity, rec.poly_bid_vol_all, rec.poly_ask_vol_all);
         rec.fenix_signal = fenix_signal;
         for (code, active, entry, pnl, skip, target, exit) in fenix_trades {
@@ -738,16 +762,17 @@ async fn capture_combined(
                 _ => {}
             }
         }
-    }
+    } // end diagnostic_mode guard
+
+    // ─── Perf: processing time (micros) ──────────────────────────────────
+    let _proc_us = t_start.elapsed().as_micros() as u64;
 
     // Per-session CSV file (multi-writer: each session gets its own file)
     state.session_manager.push(&rec);
 
     // Strategy Manager: evaluate both shadow strategies (A: Imbalance, B: Liquidity)
-    let result = state.strategy_manager.lock().unwrap().evaluate(&rec);
-
-    // Update the in-memory record with strategy fields
-    {
+    if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
+        let result = state.strategy_manager.lock().unwrap().evaluate(&rec);
         let mut mem = state.mem_hft.write().await;
         if let Some(last) = mem.last_mut() {
             last.imba_status = result.imba.status;

@@ -1,5 +1,6 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use sqlx::PgPool;
 
@@ -10,6 +11,7 @@ use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::TrackingState;
 use crate::modules::hft::binance_depth::BinanceTickEvent;
 use crate::modules::hft::types::CsvRecord;
+use crate::modules::hft::types::PolyDepthFrame;
 use crate::modules::hft::executor::StrategyManager;
 use crate::modules::hft::session_manager::SessionManager;
 use crate::modules::hft::adaptive_risk_engine::AdaptiveRiskEngine;
@@ -89,6 +91,12 @@ pub struct AppState {
     /// Fenix Trading — paper-trading simulation ($20 per strategy)
     pub fenix_trading: Arc<FenixTradingManager>,
 
+    /// Historial de snapshots completos del orderbook de Polymarket (buffer circular, últimos 300)
+    pub poly_depth_history: RwLock<VecDeque<PolyDepthFrame>>,
+
+    /// Modo diagnóstico: solo captura datos crudos + health, sin estrategias.
+    pub diagnostic_mode: std::sync::atomic::AtomicBool,
+
     /// Latency tracking (ms) for health endpoint
     pub latency_binance: RwLock<u64>,
     pub latency_poly:    RwLock<u64>,
@@ -148,6 +156,8 @@ impl AppState {
             pnr_manager:       Arc::new(PnrManager::new()),
             insight_manager:   Arc::new(InsightManager::new()),
             fenix_trading:     Arc::new(FenixTradingManager::new()),
+            poly_depth_history: RwLock::new(VecDeque::with_capacity(300)),
+            diagnostic_mode: AtomicBool::new(false),
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
             #[cfg(feature = "premium-patterns")]
