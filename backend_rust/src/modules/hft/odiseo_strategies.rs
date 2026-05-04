@@ -31,11 +31,11 @@ struct OdiseoDef {
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
-    OdiseoDef { name:"Odiseo 90", code:"odiseo90", entry_threshold:0.90, tp_price:0.97, sl_hard:0.87, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 93", code:"odiseo93", entry_threshold:0.93, tp_price:0.97, sl_hard:0.89, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 95", code:"odiseo95", entry_threshold:0.95, tp_price:0.985, sl_hard:0.89, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 94", code:"odiseo94", entry_threshold:0.94, tp_price:0.985, sl_hard:0.89, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 96-97", code:"odiseo96", entry_threshold:0.96, tp_price:0.97, sl_hard:0.89, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:true },
+    OdiseoDef { name:"Odiseo 90", code:"odiseo90", entry_threshold:0.90, tp_price:0.985, sl_hard:0.88, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 93", code:"odiseo93", entry_threshold:0.93, tp_price:0.985, sl_hard:0.915, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 95", code:"odiseo95", entry_threshold:0.95, tp_price:0.985, sl_hard:0.94, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 94", code:"odiseo94", entry_threshold:0.94, tp_price:0.985, sl_hard:0.925, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 96", code:"odiseo96", entry_threshold:0.96, tp_price:0.985, sl_hard:0.955, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:true },
 ];
 
 #[derive(Debug, Clone, Default)]
