@@ -60,10 +60,24 @@ impl OdiseoStats { fn new(d:&OdiseoDef)->Self { Self {
     accuracy:0.0,total_pnl:0.0,avg_pnl:0.0,best:0.0,worst:0.0,sessions:0,last_10:Vec::with_capacity(10),
 }}}
 
-pub struct OdiseoTradingManager { sessions:Mutex<HashMap<i32,OdiseoSessionState>>, stats:Mutex<Vec<OdiseoStats>>, pub live_mode:AtomicBool, cmd_tx:Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>> }
+pub struct OdiseoTradingManager {
+    sessions:   Mutex<HashMap<i32, OdiseoSessionState>>,
+    stats:      Mutex<Vec<OdiseoStats>>,
+    pub live_mode: AtomicBool,
+    pub enabled: Vec<AtomicBool>,  // per-variant ON/OFF
+    cmd_tx:     Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>,
+}
+
 impl OdiseoTradingManager {
-    pub fn new(cmd_tx: Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>) -> Self { Self { sessions:Mutex::new(HashMap::new()), stats:Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode:AtomicBool::new(false), cmd_tx } }
+    pub fn new(cmd_tx: Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>) -> Self {
+        let n = ODISEO_DEFS.len();
+        let mut enabled = Vec::with_capacity(n);
+        for _ in 0..n { enabled.push(AtomicBool::new(true)); }
+        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, cmd_tx }
+    }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
+    pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
+    pub fn is_enabled(&self, idx:usize) -> bool { idx < self.enabled.len() && self.enabled[idx].load(Ordering::Relaxed) }
 
     pub fn on_tick(&self, session_id:i32, seconds_left:i32,
                    bid_vol:f64, ask_vol:f64, imb:f64, vel:f64,
@@ -78,6 +92,11 @@ impl OdiseoTradingManager {
         let mut results = Vec::with_capacity(10);
         let in_last_10 = seconds_left >= 0 && seconds_left <= 600;
         for (i, def) in ODISEO_DEFS.iter().enumerate() {
+            if !self.is_enabled(i) {
+                results.push((format!("{}_up",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
+                results.push((format!("{}_down",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
+                continue;
+            }
             if def.only_last_10min && !in_last_10 {
                 results.push((format!("{}_up",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
                 results.push((format!("{}_down",def.code),0,0.0,0.0,0.0,0.0,0,20.0));

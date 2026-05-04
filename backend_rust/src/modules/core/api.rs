@@ -61,6 +61,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // ─── Odiseo Trading ────────────────────────────────────────────────
         .route("/api/odiseo",          get(get_odiseo))
         .route("/api/odiseo/live",     post(post_odiseo_live))
+        .route("/api/odiseo/variant",  post(post_odiseo_variant))
         .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
@@ -396,12 +397,26 @@ async fn get_odiseo(State(s): State<Arc<AppState>>) -> Json<Value> {
 async fn get_odiseo_status(State(s): State<Arc<AppState>>) -> Json<Value> {
     let live = s.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed);
     let stats = s.odiseo_trading.export_json();
-    let stats_val: Value = serde_json::from_str(&stats).unwrap_or(json!([]));
+    let mut stats_arr: Vec<Value> = serde_json::from_str(&stats).unwrap_or_default();
+    // Inject per-variant enabled state
+    for (i, v) in stats_arr.iter_mut().enumerate() {
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("enabled".into(), json!(s.odiseo_trading.is_enabled(i)));
+        }
+    }
     Json(json!({
         "live_mode": live,
         "status": if live { "LIVE" } else { "PAPER" },
-        "variants": stats_val,
+        "variants": stats_arr,
     }))
+}
+
+#[derive(Deserialize)]
+struct OdiseoVariantBody { index: usize, enable: bool }
+
+async fn post_odiseo_variant(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoVariantBody>) -> Json<Value> {
+    s.odiseo_trading.set_variant(body.index, body.enable);
+    Json(json!({"ok": true, "index": body.index, "enabled": s.odiseo_trading.is_enabled(body.index)}))
 }
 
 #[derive(Deserialize)]
