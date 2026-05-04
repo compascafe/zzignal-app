@@ -692,8 +692,8 @@ async fn capture_combined(
 
     let t_start = std::time::Instant::now();
 
-    // ─── HEALTH SIGNALS: siempre activos, incluso en modo diagnóstico ──────
-    {
+    // ─── HEALTH SIGNALS: solo fuera de modo diagnóstico ──────────────────
+    if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
         let mut eng = state.adaptive_engine.lock().await;
         rec.macro_slope = eng.macro_slope();
         rec.vfi_value = eng.vfi_value();
