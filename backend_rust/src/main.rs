@@ -775,16 +775,13 @@ async fn capture_combined(
         }
     } // end diagnostic_mode guard — solo Odiseo corre fuera
 
-    // ─── Odiseo Trading (last-trade-price momentum, 3-layer SL) ──────────
-    // Odiseo corre SIEMPRE, independiente del diagnostic_mode
+    // ─── Odiseo Trading (limit-order logic, whale-jump protection) ───────
+    // Corre SIEMPRE, independiente del diagnostic_mode
     {
-        let lt_up = *state.last_trade_up.read().await;
-        let lt_down = *state.last_trade_down.read().await;
         let (odiseo_trades, odiseo_signal) = state.odiseo_trading.on_tick(
             active_sid, rec.poly_bid, rec.poly_ask,
             rec.poly_bid_vol_all, rec.poly_ask_vol_all,
             rec.poly_imbalance, rec.price_velocity,
-            lt_up, lt_down,
         );
         rec.odiseo_signal = odiseo_signal;
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {

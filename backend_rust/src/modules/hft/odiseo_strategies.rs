@@ -1,13 +1,16 @@
-//! Odiseo Strategies v2 — Last-trade-price momentum paper-trading (bidirectional)
+//! Odiseo Strategies v3 — Limit-order logic with whale-jump protection
 //!
-//! UP entry:   last_trade_up   >= entry_threshold (market confirms UP via trades)
-//! DOWN entry: last_trade_down >= entry_threshold (market confirms DOWN via trades)
-//! Take-profit: trade_price >= tp_price
-//! Stop-loss layers:
-//!   1) Microstructure — volume crash >30% + imbalance inversion
-//!   2) Trend — price drops -0.03 from post-entry max + velocity against
-//!   3) Hard — trade_price <= hard SL
+//! Entry: best_ask >= entry_threshold → PLACE LIMIT BUY at tp_price.
+//!        Only fills if best_ask <= tp_price (protection against whale jumps).
+//! TP:    best_bid >= tp_price → LIMIT SELL at tp_price (take profit).
+//! SL:    3-layer stop loss, last layer = MARKET SELL at any price.
 //!
+//!   Layer 1 (TP): best_bid >= tp_price → exit with profit
+//!   Layer 2 (Micro): volume crash >30% + imbalance inversion → market exit
+//!   Layer 3 (Trend): best_bid drops -0.03 from post-entry max + velocity < 0 → market exit
+//!   Layer 4 (Hard): best_bid <= sl_hard → market exit
+//!
+//! Both UP and DOWN use the same symmetric logic (LONG on respective token).
 //! 3 variants × 2 directions. $20 virtual each. One entry per session per direction.
 
 use std::collections::HashMap;
@@ -22,16 +25,19 @@ use tracing::info;
 struct OdiseoDef {
     name:            &'static str,
     code:            &'static str,
-    entry_threshold: f64,    // last_trade >= this → enter
-    tp_price:        f64,    // last_trade >= this → take profit
-    sl_hard:         f64,    // last_trade <= this → hard stop
-    sl_trend_delta:  f64,
-    sl_micro_drop:   f64,
+    entry_threshold: f64,    // best_ask >= this → consider entry
+    tp_price:        f64,    // limit buy price = limit sell price = take-profit
+    sl_hard:         f64,    // best_bid <= this → hard stop (market sell)
+    sl_trend_delta:  f64,    // best_bid drop from post-entry max for trend SL
+    sl_micro_drop:   f64,    // volume % drop for microstructure SL
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
+    // entry=0.90: limit buy @ 0.985, SL hard @ 0.84
     OdiseoDef { name: "Odiseo 90", code: "odiseo90", entry_threshold: 0.90, tp_price: 0.985, sl_hard: 0.84, sl_trend_delta: 0.03, sl_micro_drop: 0.30 },
+    // entry=0.93: limit buy @ 0.985, SL hard @ 0.87
     OdiseoDef { name: "Odiseo 93", code: "odiseo93", entry_threshold: 0.93, tp_price: 0.985, sl_hard: 0.87, sl_trend_delta: 0.03, sl_micro_drop: 0.30 },
+    // entry=0.95: limit buy @ 0.990, SL hard @ 0.90
     OdiseoDef { name: "Odiseo 95", code: "odiseo95", entry_threshold: 0.95, tp_price: 0.990, sl_hard: 0.90, sl_trend_delta: 0.03, sl_micro_drop: 0.30 },
 ];
 
@@ -40,14 +46,14 @@ static ODISEO_DEFS: &[OdiseoDef] = &[
 #[derive(Debug, Clone, Default)]
 struct OdiseoPosition {
     entered:         bool,
-    entry_price:     f64,     // trade price at entry
+    entry_price:     f64,     // best_ask at entry (what we paid)
     size:            f64,     // contracts = $20 / entry_price
     settled:         bool,
     exit_price:      f64,
     exit_reason:     u8,      // 0=none, 1=TP, 2=SL-micro, 3=SL-trend, 4=SL-hard
     virtual_pnl:     f64,
-    max_price:       f64,     // post-entry high of trade price (for trend SL)
-    prev_vol:        f64,     // previous volume for micro SL detection
+    max_bid:         f64,     // post-entry high of best_bid (for trend SL)
+    prev_vol:        f64,     // previous volume for micro SL
 }
 
 #[derive(Debug, Clone, Default)]
@@ -55,8 +61,6 @@ struct OdiseoSessionTrade {
     up:   OdiseoPosition,
     down: OdiseoPosition,
 }
-
-// ─── Per-Session State ─────────────────────────────────────────────────────
 
 struct OdiseoSessionState {
     trades: Vec<OdiseoSessionTrade>,
@@ -122,16 +126,14 @@ impl OdiseoTradingManager {
         }
     }
 
-    /// last_trade_up/down: current last trade price for each token (from state).
-    /// None if no trade has occurred yet for that side.
+    /// Entry uses best_ask (what we PAY). Exit uses best_bid (what we GET).
+    /// Limit buy at tp_price: only enters if best_ask is between entry_threshold and tp_price.
     /// Returns: (strategy_trades, odiseo_signal)
-    /// Per variant: 2 tuples (UP, DOWN), each: (code_dir, active, entry, size, pnl, exit_price, exit_reason, balance)
     /// signal: 1=UP entry, 2=DOWN entry, 3=both
     pub fn on_tick(&self, session_id: i32,
-                   poly_bid: f64, poly_ask: f64,
-                   poly_bid_vol_all: f64, poly_ask_vol_all: f64,
+                   best_bid: f64, best_ask: f64,
+                   bid_vol: f64, ask_vol: f64,
                    poly_imbalance: f64, price_velocity: f64,
-                   last_trade_up: Option<f64>, last_trade_down: Option<f64>,
     ) -> (Vec<(String, u8, f64, f64, f64, f64, u8, f64)>, u8)
     {
         let mut sessions = self.sessions.lock().unwrap();
@@ -145,20 +147,14 @@ impl OdiseoTradingManager {
         for (i, def) in ODISEO_DEFS.iter().enumerate() {
             let t = &mut state.trades[i];
 
-            // ── UP direction ──────────────────────────────────────────
             self.process_direction(true, t, def, session_id,
-                poly_bid, poly_ask,
-                poly_bid_vol_all, poly_ask_vol_all,
+                best_bid, best_ask, bid_vol, ask_vol,
                 poly_imbalance, price_velocity,
-                last_trade_up,
                 &mut odiseo_signal, &mut results);
 
-            // ── DOWN direction ────────────────────────────────────────
             self.process_direction(false, t, def, session_id,
-                poly_bid, poly_ask,
-                poly_bid_vol_all, poly_ask_vol_all,
+                best_bid, best_ask, bid_vol, ask_vol,
                 poly_imbalance, price_velocity,
-                last_trade_down,
                 &mut odiseo_signal, &mut results);
         }
         (results, odiseo_signal)
@@ -167,10 +163,9 @@ impl OdiseoTradingManager {
     #[allow(clippy::too_many_arguments)]
     fn process_direction(&self, is_up: bool, t: &mut OdiseoSessionTrade,
                          def: &OdiseoDef, session_id: i32,
-                         _poly_bid: f64, _poly_ask: f64,
-                         poly_bid_vol_all: f64, poly_ask_vol_all: f64,
+                         best_bid: f64, best_ask: f64,
+                         bid_vol: f64, ask_vol: f64,
                          poly_imbalance: f64, price_velocity: f64,
-                         last_trade: Option<f64>,
                          signal: &mut u8,
                          results: &mut Vec<(String, u8, f64, f64, f64, f64, u8, f64)>)
     {
@@ -178,27 +173,28 @@ impl OdiseoTradingManager {
         let pos = if is_up { &mut t.up } else { &mut t.down };
         let code = format!("{}_{}", def.code, dir_label);
 
-        let trade_price = match last_trade {
-            Some(p) if p > 0.0 => p,
-            _ => {
-                results.push((code, 0u8, 0.0, 0.0, 0.0, 0.0, 0u8, 20.0));
-                return;
-            }
-        };
+        // Market must have both sides to be tradeable
+        if best_bid <= 0.0 && best_ask <= 0.0 {
+            results.push((code, 0u8, 0.0, 0.0, 0.0, 0.0, 0u8, 20.0));
+            return;
+        }
 
-        // ── Exit checks ───────────────────────────────────────────────
+        // ── Exit checks (only if entered and not settled) ───────────────
         if pos.entered && !pos.settled {
-            let exit_reason = self.check_exit(pos, def, trade_price,
-                if is_up { poly_ask_vol_all } else { poly_bid_vol_all },
+            let exit_reason = self.check_exit(pos, def, best_bid,
+                if is_up { ask_vol } else { bid_vol },
                 poly_imbalance, price_velocity);
 
             if exit_reason > 0 {
                 pos.settled = true;
                 pos.exit_reason = exit_reason;
-                pos.exit_price = trade_price;
-                pos.virtual_pnl = (trade_price - pos.entry_price) * pos.size;
+                // Exit fill: if TP (reason=1), we get tp_price (limit sell filled).
+                // If SL (reason≥2), we get best_bid (market sell at whatever bid is available).
+                let exit_fill = if exit_reason == 1 { def.tp_price } else { best_bid };
+                pos.exit_price = exit_fill;
+                pos.virtual_pnl = (exit_fill - pos.entry_price) * pos.size;
                 info!("[Odiseo] #{} {} EXIT reason={} @ {:.4} entry={:.4} pnl={:.4} sz={:.0}",
-                    session_id, code, exit_reason, trade_price, pos.entry_price, pos.virtual_pnl, pos.size);
+                    session_id, code, exit_reason, exit_fill, pos.entry_price, pos.virtual_pnl, pos.size);
             }
         }
 
@@ -209,31 +205,34 @@ impl OdiseoTradingManager {
             return;
         }
 
-        // ── Entry check: last_trade_price crosses threshold ───────────
-        if !pos.entered && trade_price >= def.entry_threshold {
+        // ── Entry check: limit buy at tp_price ─────────────────────────
+        // Only enter if best_ask is between entry_threshold AND tp_price.
+        // If ask jumped above tp_price (whale), limit wouldn't fill → no entry.
+        if !pos.entered && best_ask >= def.entry_threshold && best_ask <= def.tp_price {
             pos.entered = true;
-            pos.entry_price = trade_price;
+            pos.entry_price = best_ask;
             pos.size = (20.0 / pos.entry_price).floor().max(1.0);
-            pos.max_price = trade_price;
-            pos.prev_vol = if is_up { poly_ask_vol_all } else { poly_bid_vol_all };
+            pos.max_bid = best_bid;
+            pos.prev_vol = if is_up { ask_vol } else { bid_vol };
 
             if is_up { *signal |= 1; } else { *signal |= 2; }
 
-            info!("[Odiseo] #{} {} ENTER {} @ {:.4} sz={:.0} trade_px={:.4}",
+            info!("[Odiseo] #{} {} ENTER {} @ {:.4} sz={:.0} tp={:.4} bid={:.4} ask={:.4}",
                 session_id, code, if is_up {"UP"} else {"DOWN"},
-                pos.entry_price, pos.size, trade_price);
+                pos.entry_price, pos.size, def.tp_price, best_bid, best_ask);
         }
 
-        // ── Update tracking for active positions ──────────────────────
+        // ── Update tracking for active positions ───────────────────────
         if pos.entered && !pos.settled {
-            if trade_price > pos.max_price { pos.max_price = trade_price; }
-            pos.prev_vol = if is_up { poly_ask_vol_all } else { poly_bid_vol_all };
+            if best_bid > pos.max_bid { pos.max_bid = best_bid; }
+            pos.prev_vol = if is_up { ask_vol } else { bid_vol };
         }
 
-        // ── Live PnL + balance ───────────────────────────────────────
+        // ── Live PnL + balance ─────────────────────────────────────────
         let active = if pos.entered && !pos.settled { 1u8 } else { 0u8 };
         let live_pnl = if active == 1 {
-            (trade_price - pos.entry_price) * pos.size
+            // Mark-to-market at best_bid (what we'd get if we sold now)
+            (best_bid - pos.entry_price) * pos.size
         } else if pos.settled {
             pos.virtual_pnl
         } else {
@@ -247,29 +246,26 @@ impl OdiseoTradingManager {
             balance));
     }
 
-    /// Check all 3 exit layers. Returns exit_reason (0=none, 1=TP, 2=micro, 3=trend, 4=hard).
+    /// Check all exit layers against best_bid (what we'd GET when selling).
     fn check_exit(&self, pos: &OdiseoPosition, def: &OdiseoDef,
-                  trade_price: f64, vol: f64,
+                  best_bid: f64, vol: f64,
                   poly_imbalance: f64, price_velocity: f64,
     ) -> u8 {
-        // Layer 1: Take-profit
-        if trade_price >= def.tp_price { return 1; }
+        // Layer 1: Limit sell at TP — best_bid >= tp_price means our limit WOULD fill
+        if best_bid >= def.tp_price { return 1; }
 
         // Layer 2: Microstructure — volume crash + imbalance inversion
         if pos.prev_vol > 0.0 {
             let vol_drop = (pos.prev_vol - vol) / pos.prev_vol;
-            if vol_drop > def.sl_micro_drop {
-                // Imbalance inversion: if we're LONG, imbalance going negative = exit
-                if poly_imbalance < -0.5 { return 2; }
-            }
+            if vol_drop > def.sl_micro_drop && poly_imbalance < -0.5 { return 2; }
         }
 
-        // Layer 3: Trend reversal — trade price dropped from max + velocity against
-        let price_drop = pos.max_price - trade_price;
-        if price_drop > def.sl_trend_delta && price_velocity < 0.0 { return 3; }
+        // Layer 3: Trend reversal — best_bid dropped from max + BTC velocity against
+        let bid_drop = pos.max_bid - best_bid;
+        if bid_drop > def.sl_trend_delta && price_velocity < 0.0 { return 3; }
 
-        // Layer 4: Hard stop
-        if trade_price <= def.sl_hard { return 4; }
+        // Layer 4: Hard stop — market sell at whatever bid
+        if best_bid <= def.sl_hard { return 4; }
 
         0
     }
