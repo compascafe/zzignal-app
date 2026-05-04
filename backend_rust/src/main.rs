@@ -789,6 +789,7 @@ async fn capture_combined(
         let lt_down = *state.last_trade_down.read().await;
         let (odiseo_trades, odiseo_signal) = state.odiseo_trading.on_tick(
             active_sid,
+            state.t5_manager.seconds_left(active_sid) as i32,
             rec.poly_bid_vol_all, rec.poly_ask_vol_all,
             rec.poly_imbalance, rec.price_velocity,
             lt_up, lt_down,
@@ -802,6 +803,10 @@ async fn capture_combined(
                 "odiseo93_down" => { rec.odiseo93_down_active = active; rec.odiseo93_down_entry_price = entry; rec.odiseo93_down_size = size; rec.odiseo93_down_pnl = pnl; rec.odiseo93_down_exit_price = exit_price; rec.odiseo93_down_exit_reason = exit_reason; rec.odiseo93_down_balance = balance; }
                 "odiseo95_up"   => { rec.odiseo95_up_active = active; rec.odiseo95_up_entry_price = entry; rec.odiseo95_up_size = size; rec.odiseo95_up_pnl = pnl; rec.odiseo95_up_exit_price = exit_price; rec.odiseo95_up_exit_reason = exit_reason; rec.odiseo95_up_balance = balance; }
                 "odiseo95_down" => { rec.odiseo95_down_active = active; rec.odiseo95_down_entry_price = entry; rec.odiseo95_down_size = size; rec.odiseo95_down_pnl = pnl; rec.odiseo95_down_exit_price = exit_price; rec.odiseo95_down_exit_reason = exit_reason; rec.odiseo95_down_balance = balance; }
+                "odiseo94_up"   => { rec.odiseo94_up_active = active; rec.odiseo94_up_entry_price = entry; rec.odiseo94_up_size = size; rec.odiseo94_up_pnl = pnl; rec.odiseo94_up_exit_price = exit_price; rec.odiseo94_up_exit_reason = exit_reason; rec.odiseo94_up_balance = balance; }
+                "odiseo94_down" => { rec.odiseo94_down_active = active; rec.odiseo94_down_entry_price = entry; rec.odiseo94_down_size = size; rec.odiseo94_down_pnl = pnl; rec.odiseo94_down_exit_price = exit_price; rec.odiseo94_down_exit_reason = exit_reason; rec.odiseo94_down_balance = balance; }
+                "odiseo96_up"   => { rec.odiseo96_up_active = active; rec.odiseo96_up_entry_price = entry; rec.odiseo96_up_size = size; rec.odiseo96_up_pnl = pnl; rec.odiseo96_up_exit_price = exit_price; rec.odiseo96_up_exit_reason = exit_reason; rec.odiseo96_up_balance = balance; }
+                "odiseo96_down" => { rec.odiseo96_down_active = active; rec.odiseo96_down_entry_price = entry; rec.odiseo96_down_size = size; rec.odiseo96_down_pnl = pnl; rec.odiseo96_down_exit_price = exit_price; rec.odiseo96_down_exit_reason = exit_reason; rec.odiseo96_down_balance = balance; }
                 _ => {}
             }
         }

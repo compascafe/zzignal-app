@@ -264,7 +264,37 @@ pub struct CsvRecord {
     pub odiseo95_down_exit_reason:   u8,
     pub odiseo95_down_balance:       f64,
     pub odiseo_signal:          u8,    // 0=none, 1=UP entry, 2=DOWN entry, 3=both
-    // ─── Last Trade Price (capturado en cada tick para análisis) ──────────
+    // ─── Odiseo 94-97 (solo últimos 10 min) ──────────────────────────────
+    pub odiseo94_up_active:        u8,
+    pub odiseo94_up_entry_price:   f64,
+    pub odiseo94_up_size:          f64,
+    pub odiseo94_up_pnl:           f64,
+    pub odiseo94_up_exit_price:    f64,
+    pub odiseo94_up_exit_reason:   u8,
+    pub odiseo94_up_balance:       f64,
+    pub odiseo94_down_active:        u8,
+    pub odiseo94_down_entry_price:   f64,
+    pub odiseo94_down_size:          f64,
+    pub odiseo94_down_pnl:           f64,
+    pub odiseo94_down_exit_price:    f64,
+    pub odiseo94_down_exit_reason:   u8,
+    pub odiseo94_down_balance:       f64,
+    // ─── Odiseo 96-97 (solo últimos 10 min) ──────────────────────────────
+    pub odiseo96_up_active:        u8,
+    pub odiseo96_up_entry_price:   f64,
+    pub odiseo96_up_size:          f64,
+    pub odiseo96_up_pnl:           f64,
+    pub odiseo96_up_exit_price:    f64,
+    pub odiseo96_up_exit_reason:   u8,
+    pub odiseo96_up_balance:       f64,
+    pub odiseo96_down_active:        u8,
+    pub odiseo96_down_entry_price:   f64,
+    pub odiseo96_down_size:          f64,
+    pub odiseo96_down_pnl:           f64,
+    pub odiseo96_down_exit_price:    f64,
+    pub odiseo96_down_exit_reason:   u8,
+    pub odiseo96_down_balance:       f64,
+    // ─── Last Trade Price ─────────────────────────────────────────────────
     pub last_trade_up:          f64,   // último precio de trade del token UP
     pub last_trade_down:        f64,   // último precio de trade del token DOWN
 }
@@ -405,6 +435,18 @@ impl Default for CsvRecord {
             odiseo95_down_pnl:        0.0, odiseo95_down_exit_price: 0.0, odiseo95_down_exit_reason: 0,
             odiseo95_down_balance:    20.0,
             odiseo_signal:           0,
+            odiseo94_up_active:       0, odiseo94_up_entry_price: 0.0, odiseo94_up_size: 0.0,
+            odiseo94_up_pnl:          0.0, odiseo94_up_exit_price: 0.0, odiseo94_up_exit_reason: 0,
+            odiseo94_up_balance:      20.0,
+            odiseo94_down_active:     0, odiseo94_down_entry_price: 0.0, odiseo94_down_size: 0.0,
+            odiseo94_down_pnl:        0.0, odiseo94_down_exit_price: 0.0, odiseo94_down_exit_reason: 0,
+            odiseo94_down_balance:    20.0,
+            odiseo96_up_active:       0, odiseo96_up_entry_price: 0.0, odiseo96_up_size: 0.0,
+            odiseo96_up_pnl:          0.0, odiseo96_up_exit_price: 0.0, odiseo96_up_exit_reason: 0,
+            odiseo96_up_balance:      20.0,
+            odiseo96_down_active:     0, odiseo96_down_entry_price: 0.0, odiseo96_down_size: 0.0,
+            odiseo96_down_pnl:        0.0, odiseo96_down_exit_price: 0.0, odiseo96_down_exit_reason: 0,
+            odiseo96_down_balance:    20.0,
             last_trade_up:           0.0,
             last_trade_down:         0.0,
         }

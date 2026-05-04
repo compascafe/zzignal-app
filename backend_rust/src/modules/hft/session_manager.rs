@@ -199,8 +199,14 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "# [171] odiseo95_down_exit_reason= 0=none 1=TP 2=SL-micro 3=SL-trend 4=SL-hard");
     let _ = writeln!(w, "# [172] odiseo95_down_balance    = $20 + cum PnL");
     let _ = writeln!(w, "# [173] odiseo_signal            = 0=none 1=UP_entry 2=DOWN_entry 3=both");
-    let _ = writeln!(w, "# [174] last_trade_up           = last trade price UP token (evoluciona tick a tick)");
-    let _ = writeln!(w, "# [175] last_trade_down         = last trade price DOWN token");
+    let _ = writeln!(w, "# ─── Odiseo 94-97 (solo ultimos 10 min) ──────────────────────────────");
+    let _ = writeln!(w, "# [174-180] odiseo94_up_*        = active/entry/size/pnl/exit/reason/bal");
+    let _ = writeln!(w, "# [181-187] odiseo94_down_*      = active/entry/size/pnl/exit/reason/bal");
+    let _ = writeln!(w, "# ─── Odiseo 96-97 (solo ultimos 10 min) ──────────────────────────────");
+    let _ = writeln!(w, "# [188-194] odiseo96_up_*        = active/entry/size/pnl/exit/reason/bal");
+    let _ = writeln!(w, "# [195-201] odiseo96_down_*      = active/entry/size/pnl/exit/reason/bal");
+    let _ = writeln!(w, "# [202] last_trade_up           = last trade price UP token");
+    let _ = writeln!(w, "# [203] last_trade_down         = last trade price DOWN token");
     let _ = writeln!(w, "# ─────────────────────────────────────────────────────────────────────");
 
 }
@@ -384,6 +390,34 @@ fn fast_format_csv_line(r: &CsvRecord) -> String {
     fields.push(r.odiseo95_down_exit_reason.to_string());
     fields.push(r.odiseo95_down_balance.to_string());
     fields.push(r.odiseo_signal.to_string());
+    fields.push(r.odiseo94_up_active.to_string());
+    fields.push(r.odiseo94_up_entry_price.to_string());
+    fields.push(r.odiseo94_up_size.to_string());
+    fields.push(r.odiseo94_up_pnl.to_string());
+    fields.push(r.odiseo94_up_exit_price.to_string());
+    fields.push(r.odiseo94_up_exit_reason.to_string());
+    fields.push(r.odiseo94_up_balance.to_string());
+    fields.push(r.odiseo94_down_active.to_string());
+    fields.push(r.odiseo94_down_entry_price.to_string());
+    fields.push(r.odiseo94_down_size.to_string());
+    fields.push(r.odiseo94_down_pnl.to_string());
+    fields.push(r.odiseo94_down_exit_price.to_string());
+    fields.push(r.odiseo94_down_exit_reason.to_string());
+    fields.push(r.odiseo94_down_balance.to_string());
+    fields.push(r.odiseo96_up_active.to_string());
+    fields.push(r.odiseo96_up_entry_price.to_string());
+    fields.push(r.odiseo96_up_size.to_string());
+    fields.push(r.odiseo96_up_pnl.to_string());
+    fields.push(r.odiseo96_up_exit_price.to_string());
+    fields.push(r.odiseo96_up_exit_reason.to_string());
+    fields.push(r.odiseo96_up_balance.to_string());
+    fields.push(r.odiseo96_down_active.to_string());
+    fields.push(r.odiseo96_down_entry_price.to_string());
+    fields.push(r.odiseo96_down_size.to_string());
+    fields.push(r.odiseo96_down_pnl.to_string());
+    fields.push(r.odiseo96_down_exit_price.to_string());
+    fields.push(r.odiseo96_down_exit_reason.to_string());
+    fields.push(r.odiseo96_down_balance.to_string());
     fields.push(r.last_trade_up.to_string());
     fields.push(r.last_trade_down.to_string());
     fields.join(",")
@@ -443,7 +477,7 @@ impl SessionManager {
              bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
              technical_confluence,trend_direction,signal_label,\
              realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,fenix_signal,pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew,odiseo90_up_active,odiseo90_up_entry_price,odiseo90_up_size,odiseo90_up_pnl,odiseo90_up_exit_price,odiseo90_up_exit_reason,odiseo90_up_balance,odiseo90_down_active,odiseo90_down_entry_price,odiseo90_down_size,odiseo90_down_pnl,odiseo90_down_exit_price,odiseo90_down_exit_reason,odiseo90_down_balance,odiseo93_up_active,odiseo93_up_entry_price,odiseo93_up_size,odiseo93_up_pnl,odiseo93_up_exit_price,odiseo93_up_exit_reason,odiseo93_up_balance,odiseo93_down_active,odiseo93_down_entry_price,odiseo93_down_size,odiseo93_down_pnl,odiseo93_down_exit_price,odiseo93_down_exit_reason,odiseo93_down_balance,odiseo95_up_active,odiseo95_up_entry_price,odiseo95_up_size,odiseo95_up_pnl,odiseo95_up_exit_price,odiseo95_up_exit_reason,odiseo95_up_balance,odiseo95_down_active,odiseo95_down_entry_price,odiseo95_down_size,odiseo95_down_pnl,odiseo95_down_exit_price,odiseo95_down_exit_reason,odiseo95_down_balance,odiseo_signal,last_trade_up,last_trade_down"
+                              cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,fenix_signal,pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew,odiseo90_up_active,odiseo90_up_entry_price,odiseo90_up_size,odiseo90_up_pnl,odiseo90_up_exit_price,odiseo90_up_exit_reason,odiseo90_up_balance,odiseo90_down_active,odiseo90_down_entry_price,odiseo90_down_size,odiseo90_down_pnl,odiseo90_down_exit_price,odiseo90_down_exit_reason,odiseo90_down_balance,odiseo93_up_active,odiseo93_up_entry_price,odiseo93_up_size,odiseo93_up_pnl,odiseo93_up_exit_price,odiseo93_up_exit_reason,odiseo93_up_balance,odiseo93_down_active,odiseo93_down_entry_price,odiseo93_down_size,odiseo93_down_pnl,odiseo93_down_exit_price,odiseo93_down_exit_reason,odiseo93_down_balance,odiseo95_up_active,odiseo95_up_entry_price,odiseo95_up_size,odiseo95_up_pnl,odiseo95_up_exit_price,odiseo95_up_exit_reason,odiseo95_up_balance,odiseo95_down_active,odiseo95_down_entry_price,odiseo95_down_size,odiseo95_down_pnl,odiseo95_down_exit_price,odiseo95_down_exit_reason,odiseo95_down_balance,odiseo_signal,odiseo94_up_active,odiseo94_up_entry_price,odiseo94_up_size,odiseo94_up_pnl,odiseo94_up_exit_price,odiseo94_up_exit_reason,odiseo94_up_balance,odiseo94_down_active,odiseo94_down_entry_price,odiseo94_down_size,odiseo94_down_pnl,odiseo94_down_exit_price,odiseo94_down_exit_reason,odiseo94_down_balance,odiseo96_up_active,odiseo96_up_entry_price,odiseo96_up_size,odiseo96_up_pnl,odiseo96_up_exit_price,odiseo96_up_exit_reason,odiseo96_up_balance,odiseo96_down_active,odiseo96_down_entry_price,odiseo96_down_size,odiseo96_down_pnl,odiseo96_down_exit_price,odiseo96_down_exit_reason,odiseo96_down_balance,last_trade_up,last_trade_down"
         );
 
         let mut writers = self.writers.lock().unwrap();
@@ -495,7 +529,7 @@ impl SessionManager {
                  bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
                  technical_confluence,trend_direction,signal_label,\
                  realized_volatility,high_volatility_event,bollinger_position,master_signal,\
-                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,fenix_signal,pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew,odiseo90_up_active,odiseo90_up_entry_price,odiseo90_up_size,odiseo90_up_pnl,odiseo90_up_exit_price,odiseo90_up_exit_reason,odiseo90_up_balance,odiseo90_down_active,odiseo90_down_entry_price,odiseo90_down_size,odiseo90_down_pnl,odiseo90_down_exit_price,odiseo90_down_exit_reason,odiseo90_down_balance,odiseo93_up_active,odiseo93_up_entry_price,odiseo93_up_size,odiseo93_up_pnl,odiseo93_up_exit_price,odiseo93_up_exit_reason,odiseo93_up_balance,odiseo93_down_active,odiseo93_down_entry_price,odiseo93_down_size,odiseo93_down_pnl,odiseo93_down_exit_price,odiseo93_down_exit_reason,odiseo93_down_balance,odiseo95_up_active,odiseo95_up_entry_price,odiseo95_up_size,odiseo95_up_pnl,odiseo95_up_exit_price,odiseo95_up_exit_reason,odiseo95_up_balance,odiseo95_down_active,odiseo95_down_entry_price,odiseo95_down_size,odiseo95_down_pnl,odiseo95_down_exit_price,odiseo95_down_exit_reason,odiseo95_down_balance,odiseo_signal,last_trade_up,last_trade_down"
+                     cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,cerbero70_active,cerbero70_price,cerbero70_dir,cerbero80_active,cerbero80_price,cerbero80_dir,cerbero90_active,cerbero90_price,cerbero90_dir,fenix35_active,fenix35_price,fenix35_dir,fenix30_active,fenix30_price,fenix30_dir,fenix45_active,fenix45_price,fenix45_dir,fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,fenix4550_entry,fenix4550_pnl,fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,fenix_signal,pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew,odiseo90_up_active,odiseo90_up_entry_price,odiseo90_up_size,odiseo90_up_pnl,odiseo90_up_exit_price,odiseo90_up_exit_reason,odiseo90_up_balance,odiseo90_down_active,odiseo90_down_entry_price,odiseo90_down_size,odiseo90_down_pnl,odiseo90_down_exit_price,odiseo90_down_exit_reason,odiseo90_down_balance,odiseo93_up_active,odiseo93_up_entry_price,odiseo93_up_size,odiseo93_up_pnl,odiseo93_up_exit_price,odiseo93_up_exit_reason,odiseo93_up_balance,odiseo93_down_active,odiseo93_down_entry_price,odiseo93_down_size,odiseo93_down_pnl,odiseo93_down_exit_price,odiseo93_down_exit_reason,odiseo93_down_balance,odiseo95_up_active,odiseo95_up_entry_price,odiseo95_up_size,odiseo95_up_pnl,odiseo95_up_exit_price,odiseo95_up_exit_reason,odiseo95_up_balance,odiseo95_down_active,odiseo95_down_entry_price,odiseo95_down_size,odiseo95_down_pnl,odiseo95_down_exit_price,odiseo95_down_exit_reason,odiseo95_down_balance,odiseo_signal,odiseo94_up_active,odiseo94_up_entry_price,odiseo94_up_size,odiseo94_up_pnl,odiseo94_up_exit_price,odiseo94_up_exit_reason,odiseo94_up_balance,odiseo94_down_active,odiseo94_down_entry_price,odiseo94_down_size,odiseo94_down_pnl,odiseo94_down_exit_price,odiseo94_down_exit_reason,odiseo94_down_balance,odiseo96_up_active,odiseo96_up_entry_price,odiseo96_up_size,odiseo96_up_pnl,odiseo96_up_exit_price,odiseo96_up_exit_reason,odiseo96_up_balance,odiseo96_down_active,odiseo96_down_entry_price,odiseo96_down_size,odiseo96_down_pnl,odiseo96_down_exit_price,odiseo96_down_exit_reason,odiseo96_down_balance,last_trade_up,last_trade_down"
             );
         }
 
