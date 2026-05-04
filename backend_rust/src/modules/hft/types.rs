@@ -264,6 +264,9 @@ pub struct CsvRecord {
     pub odiseo95_down_exit_reason:   u8,
     pub odiseo95_down_balance:       f64,
     pub odiseo_signal:          u8,    // 0=none, 1=UP entry, 2=DOWN entry, 3=both
+    // ─── Last Trade Price (capturado en cada tick para análisis) ──────────
+    pub last_trade_up:          f64,   // último precio de trade del token UP
+    pub last_trade_down:        f64,   // último precio de trade del token DOWN
 }
 
 impl Default for CsvRecord {
@@ -402,6 +405,8 @@ impl Default for CsvRecord {
             odiseo95_down_pnl:        0.0, odiseo95_down_exit_price: 0.0, odiseo95_down_exit_reason: 0,
             odiseo95_down_balance:    20.0,
             odiseo_signal:           0,
+            last_trade_up:           0.0,
+            last_trade_down:         0.0,
         }
     }
 }

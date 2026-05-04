@@ -720,6 +720,14 @@ async fn capture_combined(
     rec.vfi_confidence = ctx.vfi_confidence;
     rec.db_accuracy_factor = ctx.db_accuracy_factor;
 
+    // ─── Last Trade Prices (para tracking de evolución real en CSV) ──────
+    {
+        let lt_up = state.last_trade_up.read().await;
+        let lt_down = state.last_trade_down.read().await;
+        rec.last_trade_up = lt_up.unwrap_or(0.0);
+        rec.last_trade_down = lt_down.unwrap_or(0.0);
+    }
+
     // ─── ESTRATEGIAS — solo en modo normal ────────────────────────────────
     if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
         // ─── T-5 Certainty Strategy (Wisdom v2) ──────────────────────────
@@ -775,13 +783,15 @@ async fn capture_combined(
         }
     } // end diagnostic_mode guard — solo Odiseo corre fuera
 
-    // ─── Odiseo Trading (limit-order logic, whale-jump protection) ───────
-    // Corre SIEMPRE, independiente del diagnostic_mode
+    // ─── Odiseo Trading v4 (last-trade + anti-whale limit-buy) ──────────
     {
+        let lt_up = *state.last_trade_up.read().await;
+        let lt_down = *state.last_trade_down.read().await;
         let (odiseo_trades, odiseo_signal) = state.odiseo_trading.on_tick(
-            active_sid, rec.poly_bid, rec.poly_ask,
+            active_sid,
             rec.poly_bid_vol_all, rec.poly_ask_vol_all,
             rec.poly_imbalance, rec.price_velocity,
+            lt_up, lt_down,
         );
         rec.odiseo_signal = odiseo_signal;
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
