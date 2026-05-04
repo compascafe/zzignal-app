@@ -126,7 +126,15 @@ impl OdiseoTradingManager {
     {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
-        let px = match lt { Some(p) if p>0.0 => p, _ => { r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return; }};
+        let px = match lt { Some(p) if p>0.0 => p, _ => {
+            // Si ya hay posición abierta, mantenemos último estado (no resetear)
+            if pos.entered && !pos.settled {
+                let pnl = (pos.entry_price - pos.entry_price) * pos.size; // 0
+                r.push((code.clone(), 1u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
+                return;
+            }
+            r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
+        }};
 
         if pos.entered && !pos.settled {
             let reason = self.check_exit(pos, def, px, if is_up{av}else{bv}, imb, vel);
