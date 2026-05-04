@@ -214,6 +214,56 @@ pub struct CsvRecord {
     pub pressure_band:          f64,   // ask_ceiling - bid_floor (effective spread)
     pub pressure_index:         f64,   // (mid - floor) / band → 0=DOWN, 1=UP
     pub pressure_skew:          f64,   // (bid_vol - ask_vol) / total within band
+    // ─── Odiseo Strategies — bidirectional momentum paper-trading ────────
+    // Odiseo 90 UP
+    pub odiseo90_up_active:        u8,
+    pub odiseo90_up_entry_price:   f64,
+    pub odiseo90_up_size:          f64,
+    pub odiseo90_up_pnl:           f64,
+    pub odiseo90_up_exit_price:    f64,
+    pub odiseo90_up_exit_reason:   u8,    // 0=none, 1=TP, 2=SL-micro, 3=SL-trend, 4=SL-hard
+    pub odiseo90_up_balance:       f64,
+    // Odiseo 90 DOWN
+    pub odiseo90_down_active:        u8,
+    pub odiseo90_down_entry_price:   f64,
+    pub odiseo90_down_size:          f64,
+    pub odiseo90_down_pnl:           f64,
+    pub odiseo90_down_exit_price:    f64,
+    pub odiseo90_down_exit_reason:   u8,
+    pub odiseo90_down_balance:       f64,
+    // Odiseo 93 UP
+    pub odiseo93_up_active:        u8,
+    pub odiseo93_up_entry_price:   f64,
+    pub odiseo93_up_size:          f64,
+    pub odiseo93_up_pnl:           f64,
+    pub odiseo93_up_exit_price:    f64,
+    pub odiseo93_up_exit_reason:   u8,
+    pub odiseo93_up_balance:       f64,
+    // Odiseo 93 DOWN
+    pub odiseo93_down_active:        u8,
+    pub odiseo93_down_entry_price:   f64,
+    pub odiseo93_down_size:          f64,
+    pub odiseo93_down_pnl:           f64,
+    pub odiseo93_down_exit_price:    f64,
+    pub odiseo93_down_exit_reason:   u8,
+    pub odiseo93_down_balance:       f64,
+    // Odiseo 95 UP
+    pub odiseo95_up_active:        u8,
+    pub odiseo95_up_entry_price:   f64,
+    pub odiseo95_up_size:          f64,
+    pub odiseo95_up_pnl:           f64,
+    pub odiseo95_up_exit_price:    f64,
+    pub odiseo95_up_exit_reason:   u8,
+    pub odiseo95_up_balance:       f64,
+    // Odiseo 95 DOWN
+    pub odiseo95_down_active:        u8,
+    pub odiseo95_down_entry_price:   f64,
+    pub odiseo95_down_size:          f64,
+    pub odiseo95_down_pnl:           f64,
+    pub odiseo95_down_exit_price:    f64,
+    pub odiseo95_down_exit_reason:   u8,
+    pub odiseo95_down_balance:       f64,
+    pub odiseo_signal:          u8,    // 0=none, 1=UP entry, 2=DOWN entry, 3=both
 }
 
 impl Default for CsvRecord {
@@ -333,6 +383,25 @@ impl Default for CsvRecord {
             pressure_band:           0.0,
             pressure_index:          0.5,
             pressure_skew:           0.0,
+            odiseo90_up_active:       0, odiseo90_up_entry_price: 0.0, odiseo90_up_size: 0.0,
+            odiseo90_up_pnl:          0.0, odiseo90_up_exit_price: 0.0, odiseo90_up_exit_reason: 0,
+            odiseo90_up_balance:      20.0,
+            odiseo90_down_active:     0, odiseo90_down_entry_price: 0.0, odiseo90_down_size: 0.0,
+            odiseo90_down_pnl:        0.0, odiseo90_down_exit_price: 0.0, odiseo90_down_exit_reason: 0,
+            odiseo90_down_balance:    20.0,
+            odiseo93_up_active:       0, odiseo93_up_entry_price: 0.0, odiseo93_up_size: 0.0,
+            odiseo93_up_pnl:          0.0, odiseo93_up_exit_price: 0.0, odiseo93_up_exit_reason: 0,
+            odiseo93_up_balance:      20.0,
+            odiseo93_down_active:     0, odiseo93_down_entry_price: 0.0, odiseo93_down_size: 0.0,
+            odiseo93_down_pnl:        0.0, odiseo93_down_exit_price: 0.0, odiseo93_down_exit_reason: 0,
+            odiseo93_down_balance:    20.0,
+            odiseo95_up_active:       0, odiseo95_up_entry_price: 0.0, odiseo95_up_size: 0.0,
+            odiseo95_up_pnl:          0.0, odiseo95_up_exit_price: 0.0, odiseo95_up_exit_reason: 0,
+            odiseo95_up_balance:      20.0,
+            odiseo95_down_active:     0, odiseo95_down_entry_price: 0.0, odiseo95_down_size: 0.0,
+            odiseo95_down_pnl:        0.0, odiseo95_down_exit_price: 0.0, odiseo95_down_exit_reason: 0,
+            odiseo95_down_balance:    20.0,
+            odiseo_signal:           0,
         }
     }
 }

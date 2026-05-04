@@ -21,6 +21,7 @@ use crate::modules::hft::t3_strategy::T3Manager;
 use crate::modules::hft::pnr_strategy::PnrManager;
 use crate::modules::hft::insight_strategies::InsightManager;
 use crate::modules::hft::fenix_trading::FenixTradingManager;
+use crate::modules::hft::odiseo_strategies::OdiseoTradingManager;
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -90,6 +91,8 @@ pub struct AppState {
 
     /// Fenix Trading — paper-trading simulation ($20 per strategy)
     pub fenix_trading: Arc<FenixTradingManager>,
+    /// Odiseo Trading — bid-floor momentum paper-trading (bidirectional, 3-layer SL)
+    pub odiseo_trading: Arc<OdiseoTradingManager>,
 
     /// Historial de snapshots completos del orderbook de Polymarket (buffer circular, últimos 300)
     pub poly_depth_history: RwLock<VecDeque<PolyDepthFrame>>,
@@ -156,6 +159,7 @@ impl AppState {
             pnr_manager:       Arc::new(PnrManager::new()),
             insight_manager:   Arc::new(InsightManager::new()),
             fenix_trading:     Arc::new(FenixTradingManager::new()),
+            odiseo_trading:    Arc::new(OdiseoTradingManager::new()),
             poly_depth_history: RwLock::new(VecDeque::with_capacity(300)),
             diagnostic_mode: AtomicBool::new(false),
             latency_binance:   RwLock::new(0),

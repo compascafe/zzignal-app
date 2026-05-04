@@ -773,6 +773,25 @@ async fn capture_combined(
                 _ => {}
             }
         }
+        // ─── Odiseo Trading (bidirectional, 3-layer SL) ───────────────────
+        let (odiseo_trades, odiseo_signal) = state.odiseo_trading.on_tick(
+            active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask,
+            rec.poly_bid_vol_all, rec.poly_ask_vol_all,
+            rec.poly_imbalance, rec.price_velocity,
+            rec.pressure_bid_floor, rec.pressure_ask_ceiling,
+        );
+        rec.odiseo_signal = odiseo_signal;
+        for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
+            match code.as_str() {
+                "odiseo90_up"   => { rec.odiseo90_up_active = active; rec.odiseo90_up_entry_price = entry; rec.odiseo90_up_size = size; rec.odiseo90_up_pnl = pnl; rec.odiseo90_up_exit_price = exit_price; rec.odiseo90_up_exit_reason = exit_reason; rec.odiseo90_up_balance = balance; }
+                "odiseo90_down" => { rec.odiseo90_down_active = active; rec.odiseo90_down_entry_price = entry; rec.odiseo90_down_size = size; rec.odiseo90_down_pnl = pnl; rec.odiseo90_down_exit_price = exit_price; rec.odiseo90_down_exit_reason = exit_reason; rec.odiseo90_down_balance = balance; }
+                "odiseo93_up"   => { rec.odiseo93_up_active = active; rec.odiseo93_up_entry_price = entry; rec.odiseo93_up_size = size; rec.odiseo93_up_pnl = pnl; rec.odiseo93_up_exit_price = exit_price; rec.odiseo93_up_exit_reason = exit_reason; rec.odiseo93_up_balance = balance; }
+                "odiseo93_down" => { rec.odiseo93_down_active = active; rec.odiseo93_down_entry_price = entry; rec.odiseo93_down_size = size; rec.odiseo93_down_pnl = pnl; rec.odiseo93_down_exit_price = exit_price; rec.odiseo93_down_exit_reason = exit_reason; rec.odiseo93_down_balance = balance; }
+                "odiseo95_up"   => { rec.odiseo95_up_active = active; rec.odiseo95_up_entry_price = entry; rec.odiseo95_up_size = size; rec.odiseo95_up_pnl = pnl; rec.odiseo95_up_exit_price = exit_price; rec.odiseo95_up_exit_reason = exit_reason; rec.odiseo95_up_balance = balance; }
+                "odiseo95_down" => { rec.odiseo95_down_active = active; rec.odiseo95_down_entry_price = entry; rec.odiseo95_down_size = size; rec.odiseo95_down_pnl = pnl; rec.odiseo95_down_exit_price = exit_price; rec.odiseo95_down_exit_reason = exit_reason; rec.odiseo95_down_balance = balance; }
+                _ => {}
+            }
+        }
     } // end diagnostic_mode guard
 
     // ─── Perf: processing time (micros) ──────────────────────────────────
