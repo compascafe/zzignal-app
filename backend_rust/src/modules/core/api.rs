@@ -62,6 +62,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/odiseo",          get(get_odiseo))
         .route("/api/odiseo/live",     post(post_odiseo_live))
         .route("/api/odiseo/variant",  post(post_odiseo_variant))
+        .route("/api/odiseo/budget",   post(post_odiseo_budget))
         .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
@@ -402,6 +403,7 @@ async fn get_odiseo_status(State(s): State<Arc<AppState>>) -> Json<Value> {
     for (i, v) in stats_arr.iter_mut().enumerate() {
         if let Some(obj) = v.as_object_mut() {
             obj.insert("enabled".into(), json!(s.odiseo_trading.is_enabled(i)));
+            obj.insert("budget".into(), json!(s.odiseo_trading.get_budget(i)));
         }
     }
     Json(json!({
@@ -417,6 +419,14 @@ struct OdiseoVariantBody { index: usize, enable: bool }
 async fn post_odiseo_variant(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoVariantBody>) -> Json<Value> {
     s.odiseo_trading.set_variant(body.index, body.enable);
     Json(json!({"ok": true, "index": body.index, "enabled": s.odiseo_trading.is_enabled(body.index)}))
+}
+
+#[derive(Deserialize)]
+struct OdiseoBudgetBody { index: usize, amount: f64 }
+
+async fn post_odiseo_budget(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoBudgetBody>) -> Json<Value> {
+    s.odiseo_trading.set_budget(body.index, body.amount);
+    Json(json!({"ok": true, "index": body.index, "budget": s.odiseo_trading.get_budget(body.index)}))
 }
 
 #[derive(Deserialize)]

@@ -71,7 +71,8 @@ pub struct OdiseoTradingManager {
     sessions:   Mutex<HashMap<i32, OdiseoSessionState>>,
     stats:      Mutex<Vec<OdiseoStats>>,
     pub live_mode: AtomicBool,
-    pub enabled: Vec<AtomicBool>,  // per-variant ON/OFF
+    pub enabled: Vec<AtomicBool>,
+    pub budgets: Mutex<Vec<f64>>,  // per-variant budget
     cmd_tx:     Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>,
 }
 
@@ -80,11 +81,14 @@ impl OdiseoTradingManager {
         let n = ODISEO_DEFS.len();
         let mut enabled = Vec::with_capacity(n);
         for _ in 0..n { enabled.push(AtomicBool::new(true)); }
-        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, cmd_tx }
+        let budgets = vec![20.0; n];
+        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), cmd_tx }
     }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
     pub fn is_enabled(&self, idx:usize) -> bool { idx < self.enabled.len() && self.enabled[idx].load(Ordering::Relaxed) }
+    pub fn set_budget(&self, idx:usize, amount:f64) { if let Some(b) = self.budgets.lock().unwrap().get_mut(idx) { *b = amount.max(1.0).min(1000.0); } }
+    pub fn get_budget(&self, idx:usize) -> f64 { self.budgets.lock().unwrap().get(idx).copied().unwrap_or(20.0) }
 
     pub fn on_tick(&self, session_id:i32, seconds_left:i32,
                    bid_vol:f64, ask_vol:f64, imb:f64, vel:f64,
@@ -95,8 +99,9 @@ impl OdiseoTradingManager {
         let state = sessions.entry(session_id).or_insert_with(|| OdiseoSessionState {
             trades: ODISEO_DEFS.iter().map(|_| OdiseoSessionTrade::default()).collect(),
         });
+        let budgets = self.budgets.lock().unwrap().clone();
         let mut sig = 0u8;
-        let mut results = Vec::with_capacity(10);
+        let mut results = Vec::with_capacity(24);
         let in_last_10 = seconds_left >= 0 && seconds_left <= 600;
         for (i, def) in ODISEO_DEFS.iter().enumerate() {
             if !self.is_enabled(i) {
@@ -109,19 +114,19 @@ impl OdiseoTradingManager {
                 results.push((format!("{}_down",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
                 continue;
             }
-            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results);
-            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results);
+            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i]);
+            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i]);
         }
         (results, sig)
     }
 
     fn process(&self, is_up:bool, t:&mut OdiseoSessionTrade, def:&OdiseoDef, sid:i32,
                bv:f64, av:f64, imb:f64, vel:f64, lt:Option<f64>, sig:&mut u8,
-               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>)
+               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64)
     {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
-        let px = match lt { Some(p) if p>0.0 => p, _ => { r.push((code,0,0.0,0.0,0.0,0.0,0,20.0)); return; }};
+        let px = match lt { Some(p) if p>0.0 => p, _ => { r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return; }};
 
         if pos.entered && !pos.settled {
             let reason = self.check_exit(pos, def, px, if is_up{av}else{bv}, imb, vel);
@@ -144,7 +149,7 @@ impl OdiseoTradingManager {
             }
         }
         if pos.settled {
-            let bal = 20.0 + pos.virtual_pnl;
+            let bal = budget + pos.virtual_pnl;
             r.push((code.clone(),0,pos.entry_price,pos.size,pos.virtual_pnl,pos.exit_price,pos.exit_reason,bal));
             if pos.exit_reason >= 2 { *pos = OdiseoPosition::default(); }
             else { return; }
@@ -152,7 +157,7 @@ impl OdiseoTradingManager {
 
         if !pos.entered && px >= def.entry_threshold && px <= def.tp_price {
             pos.entered = true; pos.entry_price = px;
-            pos.size = (20.0/px).floor().max(1.0);
+            pos.size = (budget/px).floor().max(1.0);
             pos.max_price = px; pos.prev_vol = if is_up{av}else{bv};
             *sig |= if is_up{1}else{2};
             info!("[Odiseo] #{} {} ENTER @{:.4} sz={:.0}", sid, code, px, pos.size);
@@ -172,7 +177,7 @@ impl OdiseoTradingManager {
 
         let active = if pos.entered && !pos.settled {1u8}else{0u8};
         let pnl = if active==1 {(px-pos.entry_price)*pos.size}else if pos.settled{pos.virtual_pnl}else{0.0};
-        r.push((code, active, pos.entry_price, pos.size, pnl, if pos.settled{pos.exit_price}else{0.0}, if pos.settled{pos.exit_reason}else{0u8}, 20.0+pnl));
+        r.push((code, active, pos.entry_price, pos.size, pnl, if pos.settled{pos.exit_price}else{0.0}, if pos.settled{pos.exit_reason}else{0u8}, budget+pnl));
     }
 
     fn check_exit(&self, pos:&OdiseoPosition, def:&OdiseoDef, px:f64, vol:f64, imb:f64, vel:f64) -> u8 {
