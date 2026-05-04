@@ -72,7 +72,8 @@ pub struct OdiseoTradingManager {
     stats:      Mutex<Vec<OdiseoStats>>,
     pub live_mode: AtomicBool,
     pub enabled: Vec<AtomicBool>,
-    pub budgets: Mutex<Vec<f64>>,  // per-variant budget
+    pub budgets: Mutex<Vec<f64>>,
+    pub reinvest: AtomicBool,  // reinvest profits into next session
     cmd_tx:     Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>,
 }
 
@@ -82,13 +83,14 @@ impl OdiseoTradingManager {
         let mut enabled = Vec::with_capacity(n);
         for _ in 0..n { enabled.push(AtomicBool::new(true)); }
         let budgets = vec![20.0; n];
-        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), cmd_tx }
+        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(false), cmd_tx }
     }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
     pub fn is_enabled(&self, idx:usize) -> bool { idx < self.enabled.len() && self.enabled[idx].load(Ordering::Relaxed) }
     pub fn set_budget(&self, idx:usize, amount:f64) { if let Some(b) = self.budgets.lock().unwrap().get_mut(idx) { *b = amount.max(1.0).min(1000.0); } }
     pub fn get_budget(&self, idx:usize) -> f64 { self.budgets.lock().unwrap().get(idx).copied().unwrap_or(20.0) }
+    pub fn set_reinvest(&self, on:bool) { self.reinvest.store(on, Ordering::Relaxed); }
 
     pub fn on_tick(&self, session_id:i32, seconds_left:i32,
                    bid_vol:f64, ask_vol:f64, imb:f64, vel:f64,
@@ -207,6 +209,7 @@ impl OdiseoTradingManager {
             pnl+=self.settle(&state.trades[i].up,true,au,tie,&mut stats[i],sid,def.name,"UP");
             pnl+=self.settle(&state.trades[i].down,false,ad,tie,&mut stats[i],sid,def.name,"DOWN");
             stats[i].session_pnl+=pnl;stats[i].session_balance+=pnl;stats[i].balance+=pnl;
+            if self.reinvest.load(Ordering::Relaxed) { let mut bd = self.budgets.lock().unwrap(); if let Some(b) = bd.get_mut(i) { *b = (*b + pnl).max(1.0).min(10000.0); } }
             stats[i].accuracy=if stats[i].trades_up+stats[i].trades_dn>0{(stats[i].wins_up+stats[i].wins_dn)as f64/(stats[i].trades_up+stats[i].trades_dn)as f64}else{0.0};
         }
         for s in stats.iter_mut(){s.sessions+=1;}

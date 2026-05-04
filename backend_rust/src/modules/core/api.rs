@@ -63,6 +63,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/odiseo/live",     post(post_odiseo_live))
         .route("/api/odiseo/variant",  post(post_odiseo_variant))
         .route("/api/odiseo/budget",   post(post_odiseo_budget))
+        .route("/api/odiseo/reinvest", post(post_odiseo_reinvest))
         .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
@@ -408,6 +409,7 @@ async fn get_odiseo_status(State(s): State<Arc<AppState>>) -> Json<Value> {
     }
     Json(json!({
         "live_mode": live,
+        "reinvest": s.odiseo_trading.reinvest.load(std::sync::atomic::Ordering::Relaxed),
         "status": if live { "LIVE" } else { "PAPER" },
         "variants": stats_arr,
     }))
@@ -427,6 +429,14 @@ struct OdiseoBudgetBody { index: usize, amount: f64 }
 async fn post_odiseo_budget(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoBudgetBody>) -> Json<Value> {
     s.odiseo_trading.set_budget(body.index, body.amount);
     Json(json!({"ok": true, "index": body.index, "budget": s.odiseo_trading.get_budget(body.index)}))
+}
+
+#[derive(Deserialize)]
+struct OdiseoReinvestBody { enable: bool }
+
+async fn post_odiseo_reinvest(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoReinvestBody>) -> Json<Value> {
+    s.odiseo_trading.set_reinvest(body.enable);
+    Json(json!({"ok": true, "reinvest": body.enable}))
 }
 
 #[derive(Deserialize)]
