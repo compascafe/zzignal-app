@@ -26,6 +26,7 @@ use polymarket_client_sdk_v2::types::Address;
 use polymarket_client_sdk_v2::gamma;
 use polymarket_client_sdk_v2::gamma::types::request::{EventBySlugRequest, MarketsRequest, PublicProfileRequest};
 use polymarket_client_sdk_v2::types::{Decimal, U256};
+use polymarket_client_sdk_v2::{POLYGON, contract_config, ContractConfig};
 use reqwest::Client as HttpClient;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc as tokio_mpsc};
@@ -34,14 +35,10 @@ use tracing::{error, info, warn};
 
 use crate::modules::core::credentials::ClobCredentials;
 
-// ─── Contracto Polygon (para approve USDC + CTF) ───────────────────────
+// ─── Contractos Polygon (para approve USDC + CTF) ───────────────────────
 
 /// RPC de Polygon para transacciones on-chain (approve USDC, CTF)
 const POLYGON_RPC: &str = "https://polygon-bor-rpc.publicnode.com";
-
-const USDC_CONTRACT: AlloyAddress = alloy::primitives::address!("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
-const CTF_EXCHANGE: AlloyAddress    = alloy::primitives::address!("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E");
-const CTF_ERC1155: AlloyAddress     = alloy::primitives::address!("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045");
 
 sol! {
     #[sol(rpc)]
@@ -1144,11 +1141,14 @@ async fn handle_cancel_order(
     }
 }
 
-/// Aprueba USDC + Conditional Tokens (ERC-1155) para el CTF Exchange en Polygon.
-/// Esto es necesario una sola vez por wallet. Después de las aprobaciones,
-/// llama a `update_balance_allowance` en el CLOB para refrescar el saldo.
+/// Aprueba USDC + Conditional Tokens (ERC-1155) para TODOS los contratos del CTF en Polygon.
+/// Siguiendo el ejemplo oficial `approvals.rs` del SDK:
+///   - Regular Exchange (V2) + Neg Risk Exchange (V2) + Neg Risk Adapter
+///   - Cada uno recibe ERC-20 approve (USDC) + ERC-1155 setApprovalForAll (CTF)
+/// Esto es necesario una sola vez por wallet.
 pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
     let signer = creds.build_signer()?;
+    info!("Approve wallet: {}", creds.wallet_address);
 
     let provider = ProviderBuilder::new()
         .wallet(signer)
@@ -1156,33 +1156,66 @@ pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
         .await
         .context("No se pudo conectar a Polygon RPC")?;
 
-    let usdc = IERC20::new(USDC_CONTRACT, provider.clone());
-    let ctf_erc1155 = IERC1155::new(CTF_ERC1155, provider.clone());
+    // Obtener configuraciones de contratos del SDK (regular + neg_risk)
+    let regular = contract_config(POLYGON, false)
+        .context("No se encontró config de contratos regular para Polygon")?;
+    let neg_risk = contract_config(POLYGON, true)
+        .context("No se encontró config de contratos neg-risk para Polygon")?;
 
-    // 1. ERC-20: aprobar USDC para que el CTF Exchange pueda gastar
-    info!("Approve USDC → CTF Exchange (wallet: {})", creds.wallet_address);
-    let tx = usdc
-        .approve(CTF_EXCHANGE, alloy::primitives::U256::MAX)
-        .send()
-        .await
-        .map_err(|e| anyhow!("Fallo al enviar approve USDC: {e}"))?
-        .watch()
-        .await
-        .context("Approve USDC: transacción no confirmada en 6 bloques")?;
-    info!("USDC approved: {tx}");
+    // Construir lista de targets: (nombre, exchange, conditional_tokens si diff)
+    let mut targets: Vec<(&str, AlloyAddress)> = Vec::new();
 
-    // 2. ERC-1155: setApprovalForAll para Conditional Tokens
-    info!("setApprovalForAll CTF → CTF Exchange");
-    let tx = ctf_erc1155
-        .setApprovalForAll(CTF_EXCHANGE, true)
-        .send()
-        .await
-        .map_err(|e| anyhow!("Fallo al enviar setApprovalForAll: {e}"))?
-        .watch()
-        .await
-        .context("setApprovalForAll: transacción no confirmada")?;
-    info!("CTF approved: {tx}");
+    // Regular exchange V2
+    if let Some(ex_v2) = regular.exchange_v2 {
+        targets.push(("CTF Exchange V2", ex_v2));
+    }
+    // Regular exchange
+    targets.push(("CTF Exchange", regular.exchange));
+    // Neg Risk Exchange V2
+    if let Some(ex_v2) = neg_risk.exchange_v2 {
+        targets.push(("Neg Risk Exchange V2", ex_v2));
+    }
+    // Neg Risk Exchange
+    targets.push(("Neg Risk Exchange", neg_risk.exchange));
+    // Neg Risk Adapter
+    if let Some(adapter) = neg_risk.neg_risk_adapter {
+        targets.push(("Neg Risk Adapter", adapter));
+    }
 
+    let usdc = IERC20::new(regular.collateral, provider.clone());
+    let ctf_token = IERC1155::new(regular.conditional_tokens, provider.clone());
+
+    for (name, target) in &targets {
+        info!("Approving {name} ({target:#x})");
+
+        // 1. ERC-20 USDC approve
+        match usdc
+            .approve(*target, alloy::primitives::U256::MAX)
+            .send()
+            .await
+        {
+            Ok(pending) => match pending.watch().await {
+                Ok(tx_hash) => info!("  USDC approved → {name}: {tx_hash}"),
+                Err(e) => warn!("  USDC approve {name} no confirmada: {e}"),
+            },
+            Err(e) => warn!("  USDC approve {name} falló: {e}"),
+        }
+
+        // 2. ERC-1155 setApprovalForAll
+        match ctf_token
+            .setApprovalForAll(*target, true)
+            .send()
+            .await
+        {
+            Ok(pending) => match pending.watch().await {
+                Ok(tx_hash) => info!("  CTF approved → {name}: {tx_hash}"),
+                Err(e) => warn!("  CTF approve {name} no confirmada: {e}"),
+            },
+            Err(e) => warn!("  CTF approve {name} falló: {e}"),
+        }
+    }
+
+    info!("Approvals completados para {} contratos", targets.len());
     Ok(())
 }
 
