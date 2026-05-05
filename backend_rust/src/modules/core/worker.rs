@@ -186,7 +186,7 @@ pub enum CmdMsg {
 }
 
 const CLOB_WS: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
-const CLOB_URL: &str = "https://clob-v2.polymarket.com";
+const CLOB_URL: &str = "https://clob.polymarket.com";
 
 // /// Intervalo de velas (tiempo + ticks)
 
