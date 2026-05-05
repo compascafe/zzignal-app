@@ -36,6 +36,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/btc/provider",    post(set_btc_provider))
         // USDC approve — activa el saldo en CLOB (requiere MATIC en wallet)
         .route("/api/approve",         post(post_approve))
+        // Wrap USDC.e → pUSD vía CollateralOnramp (CLOB V2)
+        .route("/api/wrap",            post(post_wrap))
         // Macro indicators (Adaptive Risk Engine)
         .route("/api/macro",           get(get_macro))
         // Wisdom & RL state
@@ -333,6 +335,46 @@ async fn post_approve(State(s): State<Arc<AppState>>) -> Json<Value> {
     };
     worker::set_approve_running(false);
     result
+}
+
+// ─── Wrap USDC.e → pUSD ──────────────────────────────────────────────────────
+
+async fn post_wrap(State(s): State<Arc<AppState>>) -> Json<Value> {
+    info!("POST /api/wrap — USDC.e → pUSD vía CollateralOnramp");
+
+    // Obtener proxy wallet desde Gamma API
+    let proxy = {
+        let gamma = polymarket_client_sdk_v2::gamma::Client::default();
+        let eoa: polymarket_client_sdk_v2::types::Address =
+            s.creds.wallet_address.parse().unwrap_or_default();
+        let req = polymarket_client_sdk_v2::gamma::types::request::PublicProfileRequest::builder()
+            .address(eoa).build();
+        match gamma.public_profile(&req).await {
+            Ok(p) => p.proxy_wallet.map(|a| format!("{a:#x}")),
+            Err(e) => {
+                let msg = format!("Gamma API falló: {e}");
+                tracing::error!("{msg}");
+                return Json(json!({"ok": false, "error": msg}));
+            }
+        }
+    };
+
+    let proxy = match proxy {
+        Some(p) => p,
+        None => return Json(json!({"ok": false, "error": "No se encontró proxy wallet"})),
+    };
+
+    match worker::wrap_usdc_to_pusd(&s.creds, &proxy).await {
+        Ok(()) => {
+            info!("Wrap completado. pUSD enviado a proxy {proxy}");
+            Json(json!({"ok": true, "message": format!("USDC.e → pUSD enviado a proxy {proxy}")}))
+        }
+        Err(e) => {
+            let msg = format!("Wrap falló: {e}");
+            tracing::error!("{msg}");
+            Json(json!({"ok": false, "error": msg}))
+        }
+    }
 }
 
 // ─── Adaptive Risk Engine: Macro Indicators ────────────────────────────────────

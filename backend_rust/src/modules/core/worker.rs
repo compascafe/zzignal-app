@@ -40,6 +40,9 @@ use crate::modules::core::credentials::ClobCredentials;
 /// RPC de Polygon para transacciones on-chain (approve USDC, CTF)
 const POLYGON_RPC: &str = "https://polygon-bor-rpc.publicnode.com";
 
+/// CollateralOnramp — convierte USDC.e → pUSD (CLOB V2)
+const COLLATERAL_ONRAMP: AlloyAddress = alloy::primitives::address!("0x93070a847efEf7F70739046A929D47a521F5B8ee");
+
 /// Flag atómico para evitar que el worker y el endpoint manual ejecuten approve al mismo tiempo.
 static APPROVE_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -60,6 +63,12 @@ sol! {
     #[sol(rpc)]
     interface IERC1155 {
         function setApprovalForAll(address operator, bool approved) external;
+    }
+
+    /// CollateralOnramp — USDC.e → pUSD (CLOB V2)
+    #[sol(rpc)]
+    interface ICollateralOnramp {
+        function wrap(address _asset, address _to, uint256 _amount) external;
     }
 }
 
@@ -1236,6 +1245,57 @@ pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
 
     info!("Approvals completados para {} contratos", targets.len());
     Ok(())
+}
+
+/// Convierte USDC.e → pUSD vía CollateralOnramp (CLOB V2 requiere pUSD como colateral).
+/// Envía el pUSD resultante directamente a la wallet proxy para que el CLOB lo reconozca.
+/// Requiere que el approve de USDC.e para el CollateralOnramp ya esté hecho.
+pub async fn wrap_usdc_to_pusd(creds: &ClobCredentials, proxy_wallet: &str) -> Result<()> {
+    let signer = creds.build_signer()?;
+    let proxy: AlloyAddress = proxy_wallet.parse().context("Proxy wallet inválida")?;
+
+    let provider = ProviderBuilder::new()
+        .wallet(signer)
+        .connect(POLYGON_RPC)
+        .await
+        .context("No se pudo conectar a Polygon RPC")?;
+
+    let usdc = IERC20::new(regular_collateral(), provider.clone());
+    let onramp = ICollateralOnramp::new(COLLATERAL_ONRAMP, provider.clone());
+
+    // 1. Approve CollateralOnramp para gastar USDC.e
+    info!("Approve USDC.e → CollateralOnramp (wallet: {})", creds.wallet_address);
+    let tx = usdc
+        .approve(COLLATERAL_ONRAMP, alloy::primitives::U256::MAX)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Fallo al enviar approve USDC para Onramp: {e}"))?
+        .watch()
+        .await
+        .context("Approve USDC Onramp: tx no confirmada")?;
+    info!("USDC approved → CollateralOnramp: {tx}");
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // 2. Wrap USDC.e → pUSD, enviando directo a la wallet proxy
+    let amount = alloy::primitives::U256::MAX; // wrap todo el balance
+    info!("Wrapping USDC.e → pUSD → proxy ({proxy:#x})");
+    let tx = onramp
+        .wrap(regular_collateral(), proxy, amount)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Fallo al enviar wrap: {e}"))?
+        .watch()
+        .await
+        .context("Wrap USDC → pUSD: tx no confirmada")?;
+    info!("Wrap completado: {tx}");
+
+    Ok(())
+}
+
+/// Dirección de USDC.e en Polygon (helper)
+fn regular_collateral() -> AlloyAddress {
+    alloy::primitives::address!("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
 }
 
 async fn fetch_and_send_balance(
