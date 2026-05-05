@@ -1188,27 +1188,33 @@ pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
     for (name, target) in &targets {
         info!("Approving {name} ({target:#x})");
 
-        // 1. ERC-20 USDC approve
+        // 1. ERC-20 USDC approve (secuencial, espera confirmación antes de seguir)
         match usdc
             .approve(*target, alloy::primitives::U256::MAX)
             .send()
             .await
         {
             Ok(pending) => match pending.watch().await {
-                Ok(tx_hash) => info!("  USDC approved → {name}: {tx_hash}"),
+                Ok(tx_hash) => {
+                    info!("  USDC approved → {name}: {tx_hash}");
+                    tokio::time::sleep(Duration::from_secs(3)).await; // dejar respirar al nonce
+                }
                 Err(e) => warn!("  USDC approve {name} no confirmada: {e}"),
             },
             Err(e) => warn!("  USDC approve {name} falló: {e}"),
         }
 
-        // 2. ERC-1155 setApprovalForAll
+        // 2. ERC-1155 setApprovalForAll (secuencial)
         match ctf_token
             .setApprovalForAll(*target, true)
             .send()
             .await
         {
             Ok(pending) => match pending.watch().await {
-                Ok(tx_hash) => info!("  CTF approved → {name}: {tx_hash}"),
+                Ok(tx_hash) => {
+                    info!("  CTF approved → {name}: {tx_hash}");
+                    tokio::time::sleep(Duration::from_secs(3)).await; // dejar respirar al nonce
+                }
                 Err(e) => warn!("  CTF approve {name} no confirmada: {e}"),
             },
             Err(e) => warn!("  CTF approve {name} falló: {e}"),
