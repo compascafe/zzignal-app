@@ -1149,10 +1149,9 @@ async fn handle_cancel_order(
 /// llama a `update_balance_allowance` en el CLOB para refrescar el saldo.
 pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
     let signer = creds.build_signer()?;
-    let chain_id = POLYGON_CHAIN_ID;
 
     let provider = ProviderBuilder::new()
-        .wallet(signer.with_chain_id(Some(chain_id)))
+        .wallet(signer)
         .connect(POLYGON_RPC)
         .await
         .context("No se pudo conectar a Polygon RPC")?;
