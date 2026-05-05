@@ -40,6 +40,17 @@ use crate::modules::core::credentials::ClobCredentials;
 /// RPC de Polygon para transacciones on-chain (approve USDC, CTF)
 const POLYGON_RPC: &str = "https://polygon-bor-rpc.publicnode.com";
 
+/// Flag atómico para evitar que el worker y el endpoint manual ejecuten approve al mismo tiempo.
+static APPROVE_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn is_approve_running() -> bool {
+    APPROVE_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn set_approve_running(v: bool) {
+    APPROVE_RUNNING.store(v, std::sync::atomic::Ordering::SeqCst);
+}
+
 sol! {
     #[sol(rpc)]
     interface IERC20 {
@@ -383,8 +394,9 @@ async fn run_cycle(
         Err(_) => 0.0,
     };
 
-    if raw_bal <= 0.0 {
+    if raw_bal <= 0.0 && !is_approve_running() {
         info!("Balance USDC raw=0 — ejecutando approve USDC + CTF...");
+        set_approve_running(true);
         match approve_usdc_for_ctf(creds).await {
             Ok(()) => {
                 info!("Approvals confirmados. Refrescando balance CLOB...");
@@ -393,6 +405,7 @@ async fn run_cycle(
             }
             Err(e) => warn!("Approve USDC falló: {e}"),
         }
+        set_approve_running(false);
     }
 
     fetch_and_send_balance(&clob_client, tx).await;

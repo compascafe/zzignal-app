@@ -315,8 +315,12 @@ async fn set_btc_provider(
 // ─── USDC Approve ────────────────────────────────────────────────────────────
 
 async fn post_approve(State(s): State<Arc<AppState>>) -> Json<Value> {
+    if worker::is_approve_running() {
+        return Json(json!({"ok": false, "error": "Approve ya está en ejecución. Espera a que termine."}));
+    }
     info!("POST /api/approve — ejecutando approve USDC + CTF manualmente");
-    match worker::approve_usdc_for_ctf(&s.creds).await {
+    worker::set_approve_running(true);
+    let result = match worker::approve_usdc_for_ctf(&s.creds).await {
         Ok(()) => {
             info!("Approve completado.");
             Json(json!({"ok": true, "message": "USDC approved for CTF Exchange. Refreshing balance..."}))
@@ -326,7 +330,9 @@ async fn post_approve(State(s): State<Arc<AppState>>) -> Json<Value> {
             tracing::error!("{msg}");
             Json(json!({"ok": false, "error": msg}))
         }
-    }
+    };
+    worker::set_approve_running(false);
+    result
 }
 
 // ─── Adaptive Risk Engine: Macro Indicators ────────────────────────────────────
