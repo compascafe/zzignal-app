@@ -58,6 +58,7 @@ sol! {
     #[sol(rpc)]
     interface IERC20 {
         function approve(address spender, uint256 value) external returns (bool);
+        function balanceOf(address account) external view returns (uint256);
     }
 
     #[sol(rpc)]
@@ -1263,10 +1264,23 @@ pub async fn wrap_usdc_to_pusd(creds: &ClobCredentials, proxy_wallet: &str) -> R
     let usdc = IERC20::new(regular_collateral(), provider.clone());
     let onramp = ICollateralOnramp::new(COLLATERAL_ONRAMP, provider.clone());
 
+    // Obtener EOA address
+    let eoa: AlloyAddress = creds.wallet_address.parse()
+        .context("EOA address inválida")?;
+
+    // Leer balance real de USDC.e
+    let balance = usdc.balanceOf(eoa).call().await
+        .context("No se pudo leer balance de USDC.e")?;
+    info!("USDC.e balance: {balance}");
+
+    if balance.is_zero() {
+        return Err(anyhow!("Balance USDC.e = 0. No hay nada que wrapear."));
+    }
+
     // 1. Approve CollateralOnramp para gastar USDC.e
     info!("Approve USDC.e → CollateralOnramp (wallet: {})", creds.wallet_address);
     let tx = usdc
-        .approve(COLLATERAL_ONRAMP, alloy::primitives::U256::MAX)
+        .approve(COLLATERAL_ONRAMP, balance)
         .send()
         .await
         .map_err(|e| anyhow!("Fallo al enviar approve USDC para Onramp: {e}"))?
@@ -1278,10 +1292,9 @@ pub async fn wrap_usdc_to_pusd(creds: &ClobCredentials, proxy_wallet: &str) -> R
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // 2. Wrap USDC.e → pUSD, enviando directo a la wallet proxy
-    let amount = alloy::primitives::U256::MAX; // wrap todo el balance
-    info!("Wrapping USDC.e → pUSD → proxy ({proxy:#x})");
+    info!("Wrapping {balance} USDC.e → pUSD → proxy ({proxy:#x})");
     let tx = onramp
-        .wrap(regular_collateral(), proxy, amount)
+        .wrap(regular_collateral(), proxy, balance)
         .send()
         .await
         .map_err(|e| anyhow!("Fallo al enviar wrap: {e}"))?
