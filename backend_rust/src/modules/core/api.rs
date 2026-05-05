@@ -17,7 +17,7 @@ use tracing::info;
 
 use crate::modules::core::persistence as db;
 use crate::modules::core::state::AppState;
-use crate::modules::core::worker::{BtcPriceProvider, CandleInterval, CmdMsg, OrderSide, Outcome};
+use crate::modules::core::worker::{self, BtcPriceProvider, CandleInterval, CmdMsg, OrderSide, Outcome};
 use crate::modules::db::api as db_api;
 use crate::modules::hft::perf;
 
@@ -34,6 +34,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/btc",             get(get_btc))
         .route("/api/btc/provider",    get(get_btc_provider))
         .route("/api/btc/provider",    post(set_btc_provider))
+        // USDC approve — activa el saldo en CLOB (requiere MATIC en wallet)
+        .route("/api/approve",         post(post_approve))
         // Macro indicators (Adaptive Risk Engine)
         .route("/api/macro",           get(get_macro))
         // Wisdom & RL state
@@ -308,6 +310,23 @@ async fn set_btc_provider(
     );
 
     Json(json!({"ok": true, "provider": provider.as_str()}))
+}
+
+// ─── USDC Approve ────────────────────────────────────────────────────────────
+
+async fn post_approve(State(s): State<Arc<AppState>>) -> Json<Value> {
+    info!("POST /api/approve — ejecutando approve USDC + CTF manualmente");
+    match worker::approve_usdc_for_ctf(&s.creds).await {
+        Ok(()) => {
+            info!("Approve completado.");
+            Json(json!({"ok": true, "message": "USDC approved for CTF Exchange. Refreshing balance..."}))
+        }
+        Err(e) => {
+            let msg = format!("Approve falló: {e}");
+            tracing::error!("{msg}");
+            Json(json!({"ok": false, "error": msg}))
+        }
+    }
 }
 
 // ─── Adaptive Risk Engine: Macro Indicators ────────────────────────────────────

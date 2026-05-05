@@ -84,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&binance_ring),
         Arc::clone(&tracking_state),
         tick_tx,
+        (*creds).clone(),
     );
 
     // ─── Import Wisdom from file (CLI: --import-wisdom <path>) ──────────────

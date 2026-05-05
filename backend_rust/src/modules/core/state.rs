@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use sqlx::PgPool;
 
+use crate::modules::core::credentials::ClobCredentials;
 use crate::modules::core::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
 use crate::modules::db::models::{RecordingSession, SessionSnapshot, SessionTrade};
 use crate::modules::hft::types::BinanceDepth;
@@ -45,6 +46,8 @@ pub struct AppState {
 
     pub cmd_tx:          mpsc::UnboundedSender<CmdMsg>,
     pub broadcast_tx:    broadcast::Sender<String>,
+
+    pub creds:           ClobCredentials,
 
     pub db:              Option<PgPool>,
 
@@ -120,6 +123,7 @@ impl AppState {
         binance_ring:    Arc<PriceRingBuffer>,
         tracking_state:  Arc<TrackingState>,
         tick_tx:         mpsc::UnboundedSender<BinanceTickEvent>,
+        creds:           ClobCredentials,
     ) -> Arc<Self> {
         let cmd_tx_clone = cmd_tx.clone();
         Arc::new(Self {
@@ -140,6 +144,7 @@ impl AppState {
             btc_provider_tx,
             cmd_tx,
             broadcast_tx,
+            creds,
             db,
             recording_sessions: RwLock::new(vec![]),
             mem_sessions:      RwLock::new(vec![]),

@@ -1152,7 +1152,7 @@ async fn handle_cancel_order(
 /// Aprueba USDC + Conditional Tokens (ERC-1155) para el CTF Exchange en Polygon.
 /// Esto es necesario una sola vez por wallet. Después de las aprobaciones,
 /// llama a `update_balance_allowance` en el CLOB para refrescar el saldo.
-async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
+pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
     let signer = creds.build_signer()?;
     let chain_id = POLYGON_CHAIN_ID;
 
