@@ -6,7 +6,10 @@
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use alloy::signers::local::PrivateKeySigner;
+use alloy::primitives::Address as AlloyAddress;
+use alloy::providers::ProviderBuilder;
+use alloy::signers::{Signer, local::PrivateKeySigner};
+use alloy::sol;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Timelike, Utc};
 use futures_util::{SinkExt, StreamExt};
@@ -30,6 +33,27 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
 use crate::modules::core::credentials::ClobCredentials;
+
+// ─── Contracto Polygon (para approve USDC + CTF) ───────────────────────
+
+const POLYGON_RPC: &str = "https://polygon-rpc.com";
+const POLYGON_CHAIN_ID: u64 = 137;
+
+const USDC_CONTRACT: AlloyAddress = alloy::primitives::address!("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
+const CTF_EXCHANGE: AlloyAddress    = alloy::primitives::address!("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E");
+const CTF_ERC1155: AlloyAddress     = alloy::primitives::address!("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045");
+
+sol! {
+    #[sol(rpc)]
+    interface IERC20 {
+        function approve(address spender, uint256 value) external returns (bool);
+    }
+
+    #[sol(rpc)]
+    interface IERC1155 {
+        function setApprovalForAll(address operator, bool approved) external;
+    }
+}
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
 
@@ -361,6 +385,24 @@ async fn run_cycle(
     };
 
     // 3. Balance USDC via CLOB (ahora con el funder correcto devuelve el saldo real)
+    let balance_req = BalanceAllowanceRequest::default();
+    let raw_bal = match clob_client.balance_allowance(balance_req.clone()).await {
+        Ok(b) => b.balance.to_string().parse::<f64>().unwrap_or(0.0),
+        Err(_) => 0.0,
+    };
+
+    if raw_bal <= 0.0 {
+        info!("Balance USDC raw=0 — ejecutando approve USDC + CTF...");
+        match approve_usdc_for_ctf(creds).await {
+            Ok(()) => {
+                info!("Approvals confirmados. Refrescando balance CLOB...");
+                let _ = clob_client.update_balance_allowance(balance_req).await;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+            Err(e) => warn!("Approve USDC falló: {e}"),
+        }
+    }
+
     fetch_and_send_balance(&clob_client, tx).await;
 
     // 4. Descubrir mercado
@@ -1105,6 +1147,49 @@ async fn handle_cancel_order(
             if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
         }
     }
+}
+
+/// Aprueba USDC + Conditional Tokens (ERC-1155) para el CTF Exchange en Polygon.
+/// Esto es necesario una sola vez por wallet. Después de las aprobaciones,
+/// llama a `update_balance_allowance` en el CLOB para refrescar el saldo.
+async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
+    let signer = creds.build_signer()?;
+    let chain_id = POLYGON_CHAIN_ID;
+
+    let provider = ProviderBuilder::new()
+        .wallet(signer.with_chain_id(Some(chain_id)))
+        .connect(POLYGON_RPC)
+        .await
+        .context("No se pudo conectar a Polygon RPC")?;
+
+    let usdc = IERC20::new(USDC_CONTRACT, provider.clone());
+    let ctf_erc1155 = IERC1155::new(CTF_ERC1155, provider.clone());
+
+    // 1. ERC-20: aprobar USDC para que el CTF Exchange pueda gastar
+    info!("Approve USDC → CTF Exchange");
+    let tx = usdc
+        .approve(CTF_EXCHANGE, alloy::primitives::U256::MAX)
+        .send()
+        .await
+        .context("Fallo al enviar approve USDC")?
+        .watch()
+        .await
+        .context("Approve USDC no se confirmó")?;
+    info!("USDC approved: {tx}");
+
+    // 2. ERC-1155: setApprovalForAll para Conditional Tokens
+    info!("setApprovalForAll CTF → CTF Exchange");
+    let tx = ctf_erc1155
+        .setApprovalForAll(CTF_EXCHANGE, true)
+        .send()
+        .await
+        .context("Fallo al enviar setApprovalForAll")?
+        .watch()
+        .await
+        .context("setApprovalForAll no se confirmó")?;
+    info!("CTF approved: {tx}");
+
+    Ok(())
 }
 
 async fn fetch_and_send_balance(
