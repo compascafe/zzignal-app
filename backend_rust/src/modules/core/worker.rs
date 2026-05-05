@@ -36,6 +36,7 @@ use crate::modules::core::credentials::ClobCredentials;
 
 // ─── Contracto Polygon (para approve USDC + CTF) ───────────────────────
 
+/// RPC de Polygon para transacciones on-chain (approve USDC, CTF)
 const POLYGON_RPC: &str = "https://polygon-bor-rpc.publicnode.com";
 
 const USDC_CONTRACT: AlloyAddress = alloy::primitives::address!("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
