@@ -37,7 +37,6 @@ use crate::modules::core::credentials::ClobCredentials;
 // ─── Contracto Polygon (para approve USDC + CTF) ───────────────────────
 
 const POLYGON_RPC: &str = "https://polygon-rpc.com";
-const POLYGON_CHAIN_ID: u64 = 137;
 
 const USDC_CONTRACT: AlloyAddress = alloy::primitives::address!("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174");
 const CTF_EXCHANGE: AlloyAddress    = alloy::primitives::address!("0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E");
@@ -1160,15 +1159,15 @@ pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
     let ctf_erc1155 = IERC1155::new(CTF_ERC1155, provider.clone());
 
     // 1. ERC-20: aprobar USDC para que el CTF Exchange pueda gastar
-    info!("Approve USDC → CTF Exchange");
+    info!("Approve USDC → CTF Exchange (wallet: {})", creds.wallet_address);
     let tx = usdc
         .approve(CTF_EXCHANGE, alloy::primitives::U256::MAX)
         .send()
         .await
-        .context("Fallo al enviar approve USDC")?
+        .map_err(|e| anyhow!("Fallo al enviar approve USDC: {e}"))?
         .watch()
         .await
-        .context("Approve USDC no se confirmó")?;
+        .context("Approve USDC: transacción no confirmada en 6 bloques")?;
     info!("USDC approved: {tx}");
 
     // 2. ERC-1155: setApprovalForAll para Conditional Tokens
@@ -1177,10 +1176,10 @@ pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
         .setApprovalForAll(CTF_EXCHANGE, true)
         .send()
         .await
-        .context("Fallo al enviar setApprovalForAll")?
+        .map_err(|e| anyhow!("Fallo al enviar setApprovalForAll: {e}"))?
         .watch()
         .await
-        .context("setApprovalForAll no se confirmó")?;
+        .context("setApprovalForAll: transacción no confirmada")?;
     info!("CTF approved: {tx}");
 
     Ok(())
