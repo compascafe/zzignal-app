@@ -361,12 +361,7 @@ async fn run_cycle(
     //    Si hay proxy wallet → SignatureType::Proxy + funder = proxy_addr
     //    El CLOB buscará el saldo USDC bajo esa dirección (donde está el dinero real).
     let api_key: Uuid = creds.api_key.parse().context("CLOB_API_KEY no es UUID")?;
-    let secret_padded = {
-        let s = &creds.api_secret;
-        let pad = (4 - s.len() % 4) % 4;
-        format!("{}{}", s, "=".repeat(pad))
-    };
-    let l2_creds = Credentials::new(api_key, secret_padded, creds.api_passphrase.clone());
+    let l2_creds = Credentials::new(api_key, creds.api_secret.clone(), creds.api_passphrase.clone());
 
     let base_builder = Client::new(CLOB_URL, Config::default())
         .context("Error creando cliente CLOB")?
