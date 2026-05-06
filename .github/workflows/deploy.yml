@@ -139,6 +139,7 @@ jobs:
           cp backend_rust/target/release/polymarket-backend deploy/
           cp monitor/target/release/zzignal-monitor deploy/
           cp monitor.sh deploy/
+          cp zzignal_aliases.sh deploy/
           tar -czf deploy.tar.gz -C deploy .
 
       - name: Deploy to Server
