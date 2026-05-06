@@ -361,7 +361,10 @@ async fn run_cycle(
 
     // 2. Autenticar CLOB.
     //    Cuenta creada con email (Magic Link) → SignatureType::Proxy
-    //    El SDK 0.6 deriva automáticamente el funder (proxy wallet) desde la EOA.
+    //    Wallet verificada on-chain (WalletDeployed event):
+    //    EOA 0xc91... → proxy 0x0000000000000000000000000000000000000000
+    //    El SDK derive_proxy_wallet() calcula mal (0xc38e...), usamos .funder() override.
+    let funder_address: AlloyAddress = alloy::primitives::address!("0x0000000000000000000000000000000000000000");
     let api_key: Uuid = creds.api_key.parse().context("CLOB_API_KEY no es UUID")?;
     let l2_creds = Credentials::new(api_key, creds.api_secret.clone(), creds.api_passphrase.clone());
 
@@ -371,14 +374,12 @@ async fn run_cycle(
         .credentials(l2_creds);
 
     let clob_client = base_builder
+        .funder(funder_address)
         .signature_type(SignatureType::Proxy)
         .authenticate().await
         .context("Fallo de autenticación (Proxy)")?;
 
-    // Log de la dirección de trading (funder) derivada automáticamente
-    let eoa_addr: Address = creds.wallet_address.parse().ok().unwrap_or_default();
-    let funder = polymarket_client_sdk_v2::derive_proxy_wallet(eoa_addr, polymarket_client_sdk_v2::POLYGON);
-    info!("EOA: {eoa_addr:#x} | Funder derivado (proxy): {funder:#x?}");
+    info!("EOA: {} | Funder: {funder_address:#x}", creds.wallet_address);
 
     // 3. Balance USDC via CLOB (ahora con el funder correcto devuelve el saldo real)
     let balance_req = BalanceAllowanceRequest::default();

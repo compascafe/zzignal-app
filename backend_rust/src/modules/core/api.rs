@@ -342,15 +342,8 @@ async fn post_approve(State(s): State<Arc<AppState>>) -> Json<Value> {
 async fn post_wrap(State(s): State<Arc<AppState>>) -> Json<Value> {
     info!("POST /api/wrap — USDC.e → pUSD vía CollateralOnramp");
 
-    // Derivar wallet Proxy (email/Magic) desde la EOA
-    let eoa: polymarket_client_sdk_v2::types::Address =
-        s.creds.wallet_address.parse().unwrap_or_default();
-    let wallet = polymarket_client_sdk_v2::derive_proxy_wallet(eoa, polymarket_client_sdk_v2::POLYGON);
-
-    let wallet_str = match wallet {
-        Some(w) => format!("{w:#x}"),
-        None => return Json(json!({"ok": false, "error": "No se pudo derivar wallet Proxy"})),
-    };
+    // Proxy wallet verificado on-chain: 0x0000000000000000000000000000000000000000
+    let wallet_str = "0x0000000000000000000000000000000000000000".to_string();
 
     match worker::wrap_usdc_to_pusd(&s.creds, &wallet_str).await {
         Ok(()) => {
