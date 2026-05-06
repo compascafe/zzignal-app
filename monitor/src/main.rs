@@ -81,6 +81,7 @@ struct State {
     log: VecDeque<LogEntry>,
     last_poll: Instant,
     last_session: i64,
+    last_ws: Instant,    // last WS message received
 }
 
 impl State {
@@ -90,7 +91,7 @@ impl State {
             odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 7.0,
             odi_t_up: 0, odi_t_dn: 0, odi_w_up: 0, odi_w_dn: 0,
             odi_sessions: 0, odi_enabled: true, odi_active: false, orders: 0,
-            log: VecDeque::with_capacity(100), last_poll: Instant::now(), last_session: 0,
+            log: VecDeque::with_capacity(100), last_poll: Instant::now(), last_session: 0, last_ws: Instant::now(),
         }
     }
     fn add_log(&mut self, text: String, color: Color) {
@@ -151,6 +152,7 @@ async fn main() -> io::Result<()> {
     loop {
         // WS messages
         while let Ok(msg) = rx.try_recv() {
+            s.last_ws = Instant::now();
             match msg.msg_type.as_deref() {
                 Some("connected") => { s.connected = true; s.add_log("WS OK".into(), Color::Green); }
                 Some("snapshot") => { s.bal = msg.balance.unwrap_or(s.bal); s.btc = msg.btc.unwrap_or(s.btc); }
@@ -212,6 +214,12 @@ async fn main() -> io::Result<()> {
                     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
                     terminal.show_cursor()?;
                     return Ok(());
+                }
+                KeyCode::Char('c') => {
+                    // Dump log to file for copying
+                    let dump: String = s.log.iter().map(|e| format!("{} {}\n", e.ts, e.text)).collect();
+                    let _ = std::fs::write("/tmp/zzignal_log.txt", dump);
+                    s.add_log("📋 Log copiado a /tmp/zzignal_log.txt".into(), Color::Cyan);
                 }
                 KeyCode::Char('p') => {
                     s.add_log("🚨 PANIC SELL!".into(), Color::Red);
@@ -292,5 +300,7 @@ fn draw(f: &mut Frame, s: &State) {
     ])).collect();
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("📋 Eventos")), m[2]);
 
-    f.render_widget(Paragraph::new("[p] PANIC  [r] Reinvest  [l] LIVE  [q] Salir").style(Style::default().fg(Color::DarkGray)), m[3]);
+    let lag_ms = s.last_ws.elapsed().as_millis();
+    let footer = format!("[p] PANIC  [r] Reinvest  [l] LIVE  [c] Copiar log  [q] Salir  |  WS: {}ms  |  ZZIGNAL v0.2", lag_ms);
+    f.render_widget(Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)), m[3]);
 }

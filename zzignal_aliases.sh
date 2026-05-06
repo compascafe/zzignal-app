@@ -84,9 +84,14 @@ echo "  zz-go         <- activa todo listo para tradear"
 
 # ── One-click setup ────────────────────────────
 zz-go() {
-  echo "⚡ Activando Odiseo 85 LIVE con \$7..."
-  zz-live-on > /dev/null
-  zz-odi-only85 > /dev/null
-  zz-odi85-7 > /dev/null
-  echo "✅ Listo. Balance: $(curl -s $ZZ_API/api/balance | python3 -c 'import sys,json;print(json.load(sys.stdin)["balance"])')"
+  local amt=${1:-7}
+  echo "⚡ Activando Odiseo 83 LIVE con \$${amt}..."
+  curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null
+  # Apagar todas menos 0
+  for i in 1 2 3 4 5 6 7 8 9 10 11; do
+    curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d "{\"index\": $i, \"enable\": false}" > /dev/null
+  done
+  curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 0, "enable": true}' > /dev/null
+  curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: application/json" -d "{\"index\": 0, \"amount\": $amt}" > /dev/null
+  echo "✅ Odiseo 83 LIVE \$${amt} | Balance: $(curl -s $ZZ_API/api/balance | python3 -c 'import sys,json;print(json.load(sys.stdin)["balance"])')"
 }
