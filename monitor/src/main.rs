@@ -248,13 +248,24 @@ async fn main() -> io::Result<()> {
 }
 
 fn draw(f: &mut Frame, s: &State) {
+    let has_banner = s.live;
+    let banner_h = if has_banner { 1 } else { 0 };
+    
     let m = Layout::default().direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Length(8), Constraint::Min(1), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),                          // header
+            Constraint::Length(banner_h),                   // LIVE warning banner
+            Constraint::Length(8),                          // Odiseo
+            Constraint::Min(1),                             // log
+            Constraint::Length(2),                          // footer
+        ])
         .split(f.area());
+
+    let mut idx = 0;
 
     // Header
     let h = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,5); 5]).split(m[0]);
+        .constraints([Constraint::Ratio(1,5); 5]).split(m[idx]); idx += 1;
 
     let btc_c = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
     f.render_widget(Paragraph::new(format!("BTC ${:.0}", s.btc)).style(btc_c).block(Block::default().borders(Borders::ALL)), h[0]);
@@ -270,9 +281,16 @@ fn draw(f: &mut Frame, s: &State) {
 
     f.render_widget(Paragraph::new(Local::now().format("%H:%M:%S").to_string()).style(Style::default().fg(Color::Gray)).block(Block::default().borders(Borders::ALL)), h[4]);
 
-    // Odiseo 85
+    // LIVE WARNING BANNER
+    if has_banner {
+        let warn = Paragraph::new("⚠️  DINERO REAL ACTIVO — ÓRDENES EN VIVO  ⚠️")
+            .style(Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD));
+        f.render_widget(warn, m[idx]); idx += 1;
+    }
+
+    // Odiseo 83
     let odi = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(3,5), Constraint::Ratio(2,5)]).split(m[1]);
+        .constraints([Constraint::Ratio(3,5), Constraint::Ratio(2,5)]).split(m[idx]); idx += 1;
 
     let t = s.odi_t_up + s.odi_t_dn;
     let w = s.odi_w_up + s.odi_w_dn;
@@ -281,14 +299,14 @@ fn draw(f: &mut Frame, s: &State) {
     let bc = if s.live && s.odi_enabled { Color::Red } else { Color::Gray };
 
     let txt = format!(
-        "Odiseo 85   Budget: ${:.0}   Balance: ${:.2}   Reinvest: {}\n\
+        "Odiseo 83   Budget: ${:.0}   Balance: ${:.2}   Reinvest: {}\n\
          PnL: {:+.4}   Win Rate: {}\n\
          Trades: {}  (UP {}/{}  DN {}/{})   Sessions: {}   Órdenes: {}",
         s.odi_budget, s.odi_bal, if s.reinvest {"ON"}else{"OFF"},
         s.odi_pnl, wr,
         t, s.odi_w_up, s.odi_t_up, s.odi_w_dn, s.odi_t_dn, s.odi_sessions, s.orders,
     );
-    f.render_widget(Paragraph::new(txt).style(Style::default().fg(pc).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL).title("⚡ Odiseo 85").border_style(Style::default().fg(bc))), odi[0]);
+    f.render_widget(Paragraph::new(txt).style(Style::default().fg(pc).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL).title("⚡ Odiseo 83").border_style(Style::default().fg(bc))), odi[0]);
 
     let act = "[p] PANIC  [r] Reinvest  [l] LIVE/PAPER  [q] Salir";
     f.render_widget(Paragraph::new(act).style(Style::default().fg(Color::DarkGray)).block(Block::default().borders(Borders::ALL).title("Controles")), odi[1]);
@@ -298,9 +316,9 @@ fn draw(f: &mut Frame, s: &State) {
         Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
         Span::styled(&e.text, Style::default().fg(e.color)),
     ])).collect();
-    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("📋 Eventos")), m[2]);
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("📋 Eventos")), m[idx]); idx += 1;
 
     let lag_ms = s.last_ws.elapsed().as_millis();
     let footer = format!("[p] PANIC  [r] Reinvest  [l] LIVE  [c] Copiar log  [q] Salir  |  WS: {}ms  |  ZZIGNAL v0.2", lag_ms);
-    f.render_widget(Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)), m[3]);
+    f.render_widget(Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)), m[idx]);
 }
