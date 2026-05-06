@@ -80,3 +80,13 @@ echo "  zz-live-on    zz-live-off   zz-odi85-on    zz-odi85-off"
 echo "  zz-reinv-on   zz-reinv-off  zz-odi-only85  zz-odi85-7"
 echo "  zz-balance    zz-btc        zz-log         zz-log-f"
 echo "  zz-orders     zz-fills      zz-restart     zz-status"
+echo "  zz-go         <- activa todo listo para tradear"
+
+# ── One-click setup ────────────────────────────
+zz-go() {
+  echo "⚡ Activando Odiseo 85 LIVE con \$7..."
+  zz-live-on > /dev/null
+  zz-odi-only85 > /dev/null
+  zz-odi85-7 > /dev/null
+  echo "✅ Listo. Balance: $(curl -s $ZZ_API/api/balance | python3 -c 'import sys,json;print(json.load(sys.stdin)["balance"])')"
+}
