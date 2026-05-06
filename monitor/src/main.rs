@@ -1,5 +1,5 @@
-/// ZZIGNAL Monitor — TUI real-time para Odiseo 85
-/// Teclas: p=PANIC  r=reinvertir  l=LIVE/PAPER  q=salir
+/// ZZIGNAL MONITOR v0.3 — Odiseo 83 TUI
+/// Teclas: p=PANIC  r=reinvertir  l=LIVE/PAPER  q=salir  c=copiar log
 use std::collections::VecDeque;
 use std::io;
 use std::time::{Duration, Instant};
@@ -13,7 +13,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::{Frame, Terminal};
+use ratatui::Frame;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_tungstenite::connect_async;
@@ -40,18 +40,48 @@ struct OdiseoStatus {
     variants: Vec<OdiseoVariant>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct OdiseoVariant {
     enabled: Option<bool>,
     name: Option<String>,
-    budget: Option<f64>,
-    total_pnl: Option<f64>,
-    balance: Option<f64>,
-    trades_up: Option<i64>,
-    trades_dn: Option<i64>,
-    wins_up: Option<i64>,
-    wins_dn: Option<i64>,
-    sessions: Option<i64>,
+    #[serde(default)]
+    budget: f64,
+    #[serde(default)]
+    total_pnl: f64,
+    #[serde(default)]
+    balance: f64,
+    #[serde(default)]
+    trades_up: i64,
+    #[serde(default)]
+    trades_dn: i64,
+    #[serde(default)]
+    wins_up: i64,
+    #[serde(default)]
+    wins_dn: i64,
+    #[serde(default)]
+    tp_up: i64,
+    #[serde(default)]
+    tp_dn: i64,
+    #[serde(default)]
+    sl_up: i64,
+    #[serde(default)]
+    sl_dn: i64,
+    #[serde(default)]
+    sessions: i64,
+    #[serde(default)]
+    accuracy: f64,
+    #[serde(default)]
+    avg_pnl: f64,
+    #[serde(default)]
+    best: f64,
+    #[serde(default)]
+    worst: f64,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BtcInfo {
+    price: f64,
+    open: f64,
 }
 
 #[derive(Clone)]
@@ -64,6 +94,7 @@ struct LogEntry {
 struct State {
     connected: bool,
     btc: f64,
+    btc_open: f64,
     bal: f64,
     live: bool,
     reinvest: bool,
@@ -74,30 +105,47 @@ struct State {
     odi_t_dn: i64,
     odi_w_up: i64,
     odi_w_dn: i64,
+    odi_tp_up: i64,
+    odi_tp_dn: i64,
+    odi_sl_up: i64,
+    odi_sl_dn: i64,
     odi_sessions: i64,
     odi_enabled: bool,
-    odi_active: bool,  // whether currently in a trade
+    odi_accuracy: f64,
+    odi_avg_pnl: f64,
+    odi_best: f64,
+    odi_worst: f64,
     orders: i64,
     log: VecDeque<LogEntry>,
     last_poll: Instant,
-    last_session: i64,
-    last_ws: Instant,    // last WS message received
+    last_btc_poll: Instant,
+    last_ws: Instant,
+    warnings: VecDeque<String>,
 }
 
 impl State {
     fn new() -> Self {
         Self {
-            connected: false, btc: 0.0, bal: 0.0, live: false, reinvest: false,
-            odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 7.0,
+            connected: false, btc: 0.0, btc_open: 0.0, bal: 0.0, live: false, reinvest: false,
+            odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 9.0,
             odi_t_up: 0, odi_t_dn: 0, odi_w_up: 0, odi_w_dn: 0,
-            odi_sessions: 0, odi_enabled: true, odi_active: false, orders: 0,
-            log: VecDeque::with_capacity(100), last_poll: Instant::now(), last_session: 0, last_ws: Instant::now(),
+            odi_tp_up: 0, odi_tp_dn: 0, odi_sl_up: 0, odi_sl_dn: 0,
+            odi_sessions: 0, odi_enabled: true, odi_accuracy: 0.0,
+            odi_avg_pnl: 0.0, odi_best: 0.0, odi_worst: 0.0,
+            orders: 0, log: VecDeque::with_capacity(100),
+            last_poll: Instant::now(), last_btc_poll: Instant::now(), last_ws: Instant::now(),
+            warnings: VecDeque::with_capacity(20),
         }
     }
     fn add_log(&mut self, text: String, color: Color) {
         let ts = Local::now().format("%H:%M:%S").to_string();
         self.log.push_front(LogEntry { ts, text, color });
         if self.log.len() > 100 { self.log.pop_back(); }
+    }
+    fn add_warning(&mut self, text: String) {
+        let ts = Local::now().format("%H:%M:%S").to_string();
+        self.warnings.push_front(format!("{} {}", ts, text));
+        if self.warnings.len() > 20 { self.warnings.pop_back(); }
     }
     async fn http_post(&self, path: &str, body: &str) {
         let _ = reqwest::Client::new()
@@ -114,10 +162,9 @@ async fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = ratatui::Terminal::new(backend)?;
     let (tx, mut rx) = mpsc::channel::<WsMsg>(256);
 
-    // WS task
     tokio::spawn(async move {
         loop {
             if let Ok((ws, _)) = connect_async(WS_URL).await {
@@ -142,15 +189,13 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    // Input task
     let (itx, mut irx) = mpsc::channel::<KeyCode>(16);
     tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = itx.send(k.code).await; } } });
 
     let mut s = State::new();
-    s.add_log("ZZIGNAL MONITOR v0.1".into(), Color::Magenta);
+    s.add_log("ZZIGNAL MONITOR v0.3 — Odiseo 83".into(), Color::Magenta);
 
     loop {
-        // WS messages
         while let Ok(msg) = rx.try_recv() {
             s.last_ws = Instant::now();
             match msg.msg_type.as_deref() {
@@ -160,53 +205,84 @@ async fn main() -> io::Result<()> {
                 Some("balance") => {
                     let old = s.bal; s.bal = msg.balance.unwrap_or(s.bal);
                     if (s.bal - old).abs() > 0.01 {
-                        s.add_log(format!("💰 ${:.2} ({:+.2})", s.bal, s.bal - old), if s.bal > old { Color::Green } else { Color::Red });
+                        s.add_log(format!("USD ${:.2} ({:+.2})", s.bal, s.bal - old), if s.bal > old { Color::Green } else { Color::Red });
                     }
                 }
                 Some("order_result") => {
                     let ok = msg.success.unwrap_or(false);
                     let txt = msg.message.unwrap_or_default();
-                    s.add_log(format!("{} {}", if ok { "✅" } else { "❌" }, txt), if ok { Color::Green } else { Color::Red });
+                    s.add_log(format!("{} {}", if ok { "OK" } else { "FAIL" }, txt), if ok { Color::Green } else { Color::Red });
                 }
                 _ => {}
             }
         }
 
-        // HTTP poll every 2s
         if s.last_poll.elapsed() > Duration::from_secs(2) {
             s.last_poll = Instant::now();
-            // Odiseo status
             if let Ok(resp) = reqwest::get(format!("{API_URL}/api/odiseo/status")).await {
                 if let Ok(data) = resp.json::<OdiseoStatus>().await {
                     s.live = data.live_mode;
                     s.reinvest = data.reinvest.unwrap_or(false);
                     if let Some(v) = data.variants.first() {
-                        let new_pnl = v.total_pnl.unwrap_or(0.0);
+                        let new_pnl = v.total_pnl;
                         let delta = new_pnl - s.odi_pnl;
-                        if delta.abs() > 0.0001 {
+                        if delta.abs() > 0.0001 && s.odi_pnl != 0.0 {
                             s.add_log(format!("PnL {:+.4} ({:+.4})", new_pnl, delta), if delta > 0.0 { Color::Green } else { Color::Red });
                         }
                         s.odi_pnl = new_pnl;
-                        s.odi_budget = v.budget.unwrap_or(7.0);
-                        s.odi_bal = v.balance.unwrap_or(7.0);
-                        s.odi_t_up = v.trades_up.unwrap_or(0);
-                        s.odi_t_dn = v.trades_dn.unwrap_or(0);
-                        s.odi_w_up = v.wins_up.unwrap_or(0);
-                        s.odi_w_dn = v.wins_dn.unwrap_or(0);
-                        s.odi_sessions = v.sessions.unwrap_or(0);
+                        s.odi_budget = v.budget;
+                        s.odi_bal = v.balance;
+                        s.odi_t_up = v.trades_up;
+                        s.odi_t_dn = v.trades_dn;
+                        s.odi_w_up = v.wins_up;
+                        s.odi_w_dn = v.wins_dn;
+                        s.odi_tp_up = v.tp_up;
+                        s.odi_tp_dn = v.tp_dn;
+                        s.odi_sl_up = v.sl_up;
+                        s.odi_sl_dn = v.sl_dn;
+                        s.odi_sessions = v.sessions;
+                        s.odi_accuracy = v.accuracy;
+                        s.odi_avg_pnl = v.avg_pnl;
+                        s.odi_best = v.best;
+                        s.odi_worst = v.worst;
                         s.odi_enabled = v.enabled.unwrap_or(true);
+
+                        // Warnings
+                        let total_sl = v.sl_up + v.sl_dn;
+                        let total_trades = v.trades_up + v.trades_dn;
+                        if total_trades > 0 && total_sl >= 3 {
+                            s.add_warning(format!("ALERTA: {} SLs acumulados — cerca del limite de 4 por sesion", total_sl));
+                        }
+                        if v.total_pnl < -v.budget * 0.1 {
+                            s.add_warning(format!("PERDIDA >10% del budget (${:.2}) — evaluar apagar", v.budget));
+                        }
+                        if !v.enabled.unwrap_or(true) {
+                            s.add_warning("ODISEO 83 DESACTIVADO — verificar max_sessions o SL limite".into());
+                        }
                     }
                 }
             }
-            // Orders count
             if let Ok(resp) = reqwest::get(format!("{API_URL}/api/orders")).await {
                 if let Ok(orders) = resp.json::<Vec<serde_json::Value>>().await {
-                    s.orders = orders.len() as i64;
+                    let new_count = orders.len() as i64;
+                    if new_count != s.orders {
+                        s.add_log(format!("Ordenes: {} → {}", s.orders, new_count), Color::Cyan);
+                    }
+                    s.orders = new_count;
                 }
             }
         }
 
-        // Keyboard
+        if s.last_btc_poll.elapsed() > Duration::from_secs(5) {
+            s.last_btc_poll = Instant::now();
+            if let Ok(resp) = reqwest::get(format!("{API_URL}/api/btc")).await {
+                if let Ok(data) = resp.json::<BtcInfo>().await {
+                    s.btc = data.price;
+                    if s.btc_open == 0.0 { s.btc_open = data.open; }
+                }
+            }
+        }
+
         while let Ok(k) = irx.try_recv() {
             match k {
                 KeyCode::Char('q') | KeyCode::Esc => {
@@ -216,32 +292,28 @@ async fn main() -> io::Result<()> {
                     return Ok(());
                 }
                 KeyCode::Char('c') => {
-                    // Dump log to file for copying
                     let dump: String = s.log.iter().map(|e| format!("{} {}\n", e.ts, e.text)).collect();
                     let _ = std::fs::write("/tmp/zzignal_log.txt", dump);
-                    s.add_log("📋 Log copiado a /tmp/zzignal_log.txt".into(), Color::Cyan);
+                    s.add_log("Log copiado a /tmp/zzignal_log.txt".into(), Color::Cyan);
                 }
                 KeyCode::Char('p') => {
-                    s.add_log("🚨 PANIC SELL!".into(), Color::Red);
+                    s.add_log("PANIC SELL!".into(), Color::Red);
                     s.http_post("/api/panic", "{}").await;
                 }
                 KeyCode::Char('r') => {
                     let nv = !s.reinvest; s.reinvest = nv;
-                    s.add_log(format!("🔄 Reinvest: {}", if nv {"ON"}else{"OFF"}), Color::Yellow);
-                    let body = format!("{{\"enable\":{nv}}}");
-                    s.http_post("/api/odiseo/reinvest", &body).await;
+                    s.add_log(format!("Reinvest: {}", if nv {"ON"}else{"OFF"}), Color::Yellow);
+                    s.http_post("/api/odiseo/reinvest", &format!("{{\"enable\":{nv}}}")).await;
                 }
                 KeyCode::Char('l') => {
                     let nv = !s.live;
-                    s.add_log(format!("⚡ LIVE: {}", if nv {"ON"}else{"OFF"}), if nv {Color::Red}else{Color::Cyan});
-                    let body = format!("{{\"enable\":{nv}}}");
-                    s.http_post("/api/odiseo/live", &body).await;
+                    s.add_log(format!("LIVE: {}", if nv {"ON"}else{"OFF"}), if nv {Color::Red}else{Color::Cyan});
+                    s.http_post("/api/odiseo/live", &format!("{{\"enable\":{nv}}}")).await;
                 }
                 _ => {}
             }
         }
 
-        // Draw
         terminal.draw(|f| draw(f, &s))?;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -250,75 +322,115 @@ async fn main() -> io::Result<()> {
 fn draw(f: &mut Frame, s: &State) {
     let has_banner = s.live;
     let banner_h = if has_banner { 1 } else { 0 };
-    
+    let warn_h = if s.warnings.is_empty() { 0 } else { (s.warnings.len().min(3) as u16).max(1) };
+
     let m = Layout::default().direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),                          // header
-            Constraint::Length(banner_h),                   // LIVE warning banner
-            Constraint::Length(8),                          // Odiseo
-            Constraint::Min(1),                             // log
-            Constraint::Length(2),                          // footer
+            Constraint::Length(3),
+            Constraint::Length(banner_h),
+            Constraint::Length(10),
+            Constraint::Length(warn_h),
+            Constraint::Min(2),
+            Constraint::Length(2),
         ])
         .split(f.area());
 
     let mut idx = 0;
 
-    // Header
+    // ─── HEADER ─────────────────────────────────────────────────────────
     let h = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,5); 5]).split(m[idx]); idx += 1;
+        .constraints([Constraint::Ratio(1,6); 6]).split(m[idx]); idx += 1;
 
-    let btc_c = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    f.render_widget(Paragraph::new(format!("BTC ${:.0}", s.btc)).style(btc_c).block(Block::default().borders(Borders::ALL)), h[0]);
+    // BTC: current + delta from open
+    let btc_delta = if s.btc_open > 0.0 { s.btc - s.btc_open } else { 0.0 };
+    let btc_delta_pct = if s.btc_open > 0.0 { btc_delta / s.btc_open * 100.0 } else { 0.0 };
+    let btc_c = if btc_delta > 0.0 { Color::Green } else if btc_delta < 0.0 { Color::Red } else { Color::Yellow };
+    let btc_txt = format!("BTC ${:.0} ({:+.0} {:+.1}%)", s.btc, btc_delta, btc_delta_pct);
+    f.render_widget(Paragraph::new(btc_txt).style(Style::default().fg(btc_c).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL)), h[0]);
 
-    let bal_c = if s.bal > 7.0 { Color::Green } else if s.bal > 5.0 { Color::Yellow } else { Color::Red };
-    f.render_widget(Paragraph::new(format!("BAL ${:.2}", s.bal)).style(Style::default().fg(bal_c).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL)), h[1]);
+    let bal_c = if s.bal > s.odi_budget { Color::Green } else if s.bal > s.odi_budget * 0.8 { Color::Yellow } else { Color::Red };
+    f.render_widget(Paragraph::new(format!("USD ${:.2}", s.bal)).style(Style::default().fg(bal_c).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL)), h[1]);
 
     let lc = if s.live { Color::Red } else { Color::Gray };
-    f.render_widget(Paragraph::new(if s.live {"⚡ LIVE"}else{"PAPER"}).style(Style::default().fg(lc).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL)), h[2]);
+    f.render_widget(Paragraph::new(if s.live {"LIVE"}else{"PAPER"}).style(Style::default().fg(lc).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL)), h[2]);
+
+    let odi_st = if s.odi_enabled { if s.live { Color::Red } else { Color::Green } } else { Color::DarkGray };
+    f.render_widget(Paragraph::new(if s.odi_enabled {"Odiseo ON"}else{"Odiseo OFF"}).style(Style::default().fg(odi_st)).block(Block::default().borders(Borders::ALL)), h[3]);
 
     let wsc = if s.connected { Color::Green } else { Color::Red };
-    f.render_widget(Paragraph::new(if s.connected {"WS OK"}else{"WS OFF"}).style(Style::default().fg(wsc)).block(Block::default().borders(Borders::ALL)), h[3]);
+    f.render_widget(Paragraph::new(if s.connected {"WS OK"}else{"WS OFF"}).style(Style::default().fg(wsc)).block(Block::default().borders(Borders::ALL)), h[4]);
 
-    f.render_widget(Paragraph::new(Local::now().format("%H:%M:%S").to_string()).style(Style::default().fg(Color::Gray)).block(Block::default().borders(Borders::ALL)), h[4]);
+    let reinv_c = if s.reinvest { Color::Green } else { Color::DarkGray };
+    f.render_widget(Paragraph::new(if s.reinvest {"Reinv ON"}else{"Reinv OFF"}).style(Style::default().fg(reinv_c)).block(Block::default().borders(Borders::ALL)), h[5]);
 
-    // LIVE WARNING BANNER
+    // ─── LIVE BANNER ────────────────────────────────────────────────────
     if has_banner {
-        let warn = Paragraph::new("⚠️  DINERO REAL ACTIVO — ÓRDENES EN VIVO  ⚠️")
+        let warn = Paragraph::new("DINERO REAL ACTIVO — ODISEO 83 EN VIVO")
             .style(Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD));
         f.render_widget(warn, m[idx]); idx += 1;
     }
 
-    // Odiseo 83
+    // ─── ODISEO 83 PANEL ────────────────────────────────────────────────
     let odi = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(3,5), Constraint::Ratio(2,5)]).split(m[idx]); idx += 1;
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)]).split(m[idx]); idx += 1;
 
+    // LEFT: stats principales
     let t = s.odi_t_up + s.odi_t_dn;
     let w = s.odi_w_up + s.odi_w_dn;
     let wr = if t > 0 { format!("{:.0}%", w as f64 / t as f64 * 100.0) } else { "—".into() };
+    let pnl_pct = if s.odi_budget > 0.0 { s.odi_pnl / s.odi_budget * 100.0 } else { 0.0 };
     let pc = if s.odi_pnl > 0.001 { Color::Green } else if s.odi_pnl < -0.001 { Color::Red } else { Color::Gray };
-    let bc = if s.live && s.odi_enabled { Color::Red } else { Color::Gray };
+    let bc = if s.live && s.odi_enabled { Color::Red } else { Color::DarkGray };
 
-    let txt = format!(
-        "Odiseo 83   Budget: ${:.0}   Balance: ${:.2}   Reinvest: {}\n\
-         PnL: {:+.4}   Win Rate: {}\n\
-         Trades: {}  (UP {}/{}  DN {}/{})   Sessions: {}   Órdenes: {}",
-        s.odi_budget, s.odi_bal, if s.reinvest {"ON"}else{"OFF"},
-        s.odi_pnl, wr,
-        t, s.odi_w_up, s.odi_t_up, s.odi_w_dn, s.odi_t_dn, s.odi_sessions, s.orders,
+    let tp_total = s.odi_tp_up + s.odi_tp_dn;
+    let sl_total = s.odi_sl_up + s.odi_sl_dn;
+
+    let stats = format!(
+        "Budget: ${:.0}   Balance: ${:.2}   PnL: {:+.4} ({:+.1}%)\n\
+         Win Rate: {} ({}/{} trades)   Accuracy: {:.0}%\n\
+         Entry: >=0.83   TP:0.97(+16.9%)   SL:0.81(-2.4%)\n\
+         Sessions: {}   Ordenes abiertas: {}   Avg PnL: {:+.4}",
+        s.odi_budget, s.odi_bal, s.odi_pnl, pnl_pct,
+        wr, w, t, s.odi_accuracy * 100.0,
+        s.odi_sessions, s.orders, s.odi_avg_pnl,
     );
-    f.render_widget(Paragraph::new(txt).style(Style::default().fg(pc).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL).title("⚡ Odiseo 83").border_style(Style::default().fg(bc))), odi[0]);
+    f.render_widget(Paragraph::new(stats).style(Style::default().fg(pc)).block(Block::default().borders(Borders::ALL).title("Odiseo 83 — Estrategia Principal").border_style(Style::default().fg(bc))), odi[0]);
 
-    let act = "[p] PANIC  [r] Reinvest  [l] LIVE/PAPER  [q] Salir";
-    f.render_widget(Paragraph::new(act).style(Style::default().fg(Color::DarkGray)).block(Block::default().borders(Borders::ALL).title("Controles")), odi[1]);
+    // RIGHT: entry/exit breakdown
+    let exit_info = format!(
+        "ENTRADAS / SALIDAS\n\
+         ─────────────────\n\
+         UP:   {}/{} trades   won {}/{}   TP {}   SL {}\n\
+         DOWN: {}/{} trades   won {}/{}   TP {}   SL {}\n\
+         ─────────────────\n\
+         TOTAL: {} trades   {} TP   {} SL\n\
+         Best: {:+.4}   Worst: {:+.4}\n\
+         ─────────────────\n\
+         [l] LIVE/PAPER  [r] Reinvest  [p] PANIC\n\
+         [c] Copiar log  [q] Salir",
+        s.odi_w_up, s.odi_t_up, s.odi_w_up, s.odi_t_up, s.odi_tp_up, s.odi_sl_up,
+        s.odi_w_dn, s.odi_t_dn, s.odi_w_dn, s.odi_t_dn, s.odi_tp_dn, s.odi_sl_dn,
+        t, tp_total, sl_total,
+        s.odi_best, s.odi_worst,
+    );
+    f.render_widget(Paragraph::new(exit_info).style(Style::default().fg(Color::Gray)).block(Block::default().borders(Borders::ALL).title("Detalle UP/DOWN")), odi[1]);
 
-    // Log
+    // ─── WARNINGS ───────────────────────────────────────────────────────
+    if warn_h > 0 {
+        let warn_lines: Vec<Line> = s.warnings.iter().take(3).map(|w|
+            Line::from(Span::styled(w, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
+        ).collect();
+        f.render_widget(Paragraph::new(warn_lines).block(Block::default().borders(Borders::ALL).title("Alertas").border_style(Style::default().fg(Color::Red))), m[idx]); idx += 1;
+    }
+
+    // ─── LOG ────────────────────────────────────────────────────────────
     let lines: Vec<Line> = s.log.iter().map(|e| Line::from(vec![
         Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
         Span::styled(&e.text, Style::default().fg(e.color)),
     ])).collect();
-    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("📋 Eventos")), m[idx]); idx += 1;
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Eventos")), m[idx]); idx += 1;
 
     let lag_ms = s.last_ws.elapsed().as_millis();
-    let footer = format!("[p] PANIC  [r] Reinvest  [l] LIVE  [c] Copiar log  [q] Salir  |  WS: {}ms  |  ZZIGNAL v0.2", lag_ms);
+    let footer = format!("WS: {}ms  |  ZZIGNAL MONITOR v0.3  |  Odiseo 83: entry>=0.83 TP=0.97 SL=0.81  |  profit_stop=15%  maxSL=4", lag_ms);
     f.render_widget(Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)), m[idx]);
 }
