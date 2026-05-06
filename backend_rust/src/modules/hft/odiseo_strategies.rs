@@ -157,7 +157,8 @@ impl OdiseoTradingManager {
                         if reason == 1 {
                             let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Sell, outcome, price: def.tp_price, size: pos.size });
                         } else {
-                            let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: (fill * pos.size).max(1.0) });
+                            // CLOB V2: SELL market orders use shares (contracts), not USD
+                            let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: pos.size.max(1.0) });
                         }
                     }
                 }

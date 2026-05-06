@@ -1099,7 +1099,12 @@ async fn handle_market_order(
     let clob_side = if matches!(side, OrderSide::Buy) { ClobSide::Buy } else { ClobSide::Sell };
 
     let result: Result<_> = async {
-        let amount = Amount::usdc(amount_dec).map_err(|e| anyhow!(e))?;
+        let amount = if matches!(side, OrderSide::Buy) {
+            Amount::usdc(amount_dec).map_err(|e| anyhow!(e))?
+        } else {
+            // CLOB V2: SELL market orders must use shares (contract count)
+            Amount::shares(amount_dec).map_err(|e| anyhow!(e))?
+        };
         let order = client.market_order()
             .token_id(token_id)
             .amount(amount)
