@@ -394,7 +394,7 @@ async fn run_cycle(
         match approve_usdc_for_ctf(creds).await {
             Ok(()) => {
                 info!("Approvals confirmados. Refrescando balance CLOB...");
-                let _ = clob_client.update_balance_allowance(balance_req).await;
+                let _ = clob_client.update_balance_allowance(balance_req.clone()).await;
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
             Err(e) => warn!("Approve USDC falló: {e}"),
@@ -403,6 +403,31 @@ async fn run_cycle(
     }
 
     fetch_and_send_balance(&clob_client, tx).await;
+
+    // 3a. Auto-wrap: si el balance CLOB sigue 0, detectar USDC.e en EOA y wrappear
+    let raw_bal2: f64 = match clob_client.balance_allowance(balance_req.clone()).await {
+        Ok(b) => b.balance.to_string().parse().unwrap_or(0.0),
+        Err(_) => 0.0,
+    };
+    if raw_bal2 <= 0.0 {
+        info!("Balance CLOB = 0, chequeando USDC.e en EOA para auto-wrap...");
+        match quick_usdc_balance(creds).await {
+            Ok(bal) => {
+                if bal > alloy::primitives::U256::ZERO {
+                    info!("USDC.e detectado: {bal} — ejecutando wrap automático");
+                    match wrap_usdc_to_pusd(creds, "0x0000000000000000000000000000000000000000").await {
+                        Ok(()) => {
+                            info!("Wrap automático completado. Refrescando balance...");
+                            let _ = clob_client.update_balance_allowance(balance_req.clone()).await;
+                            fetch_and_send_balance(&clob_client, tx).await;
+                        }
+                        Err(e) => warn!("Auto-wrap falló: {e}"),
+                    }
+                }
+            }
+            Err(e) => warn!("No se pudo leer USDC.e: {e}"),
+        }
+    }
 
     // 4. Descubrir mercado
     let _ = tx.send(AppMsg::Status(ConnStatus::FetchingMarkets));
@@ -1293,6 +1318,19 @@ pub async fn wrap_usdc_to_pusd(creds: &ClobCredentials, proxy_wallet: &str) -> R
 /// Dirección de USDC.e en Polygon (helper)
 fn regular_collateral() -> AlloyAddress {
     alloy::primitives::address!("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
+}
+
+/// Consulta rápida del balance de USDC.e en la EOA (solo lectura, sin gas)
+async fn quick_usdc_balance(creds: &ClobCredentials) -> Result<alloy::primitives::U256> {
+    let signer = creds.build_signer()?;
+    let eoa: AlloyAddress = creds.wallet_address.parse()?;
+    let provider = ProviderBuilder::new()
+        .wallet(signer)
+        .connect(POLYGON_RPC)
+        .await?;
+    let usdc = IERC20::new(regular_collateral(), provider);
+    let bal = usdc.balanceOf(eoa).call().await?;
+    Ok(bal)
 }
 
 async fn fetch_and_send_balance(
