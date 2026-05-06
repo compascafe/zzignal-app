@@ -13,7 +13,9 @@
 //!
 //! Session boundary protection (v6):
 //!   - First 60s (seconds_left > 840): NO entries, liquidate open positions.
-//!   - Last 20s  (seconds_left <= 20): NO entries, liquidate open positions.
+//!   - First 60s (seconds_left > 840): NO entries, liquidate open positions.
+//!   - Last 45s  (seconds_left <= 45): NO entries, liquidate open positions.
+//!     (45s necesario: en sesion #895 el mercado murio a 59:28, 0 ticks 59:40-59:50).
 //!   - Flash-protection exit = exit_reason 6 (market sell, NOT counted as SL).
 
 use std::collections::HashMap;
@@ -141,11 +143,11 @@ impl OdiseoTradingManager {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
 
-        // ── Boundary safety: no trade in first 60s or last 20s ──
+        // ── Boundary safety: no trade in first 60s or last 45s ──
         let in_first_minute = seconds_left > 840;
-        let in_last_20s = seconds_left <= 20;
-        let boundary_block = in_first_minute || in_last_20s;
-        let boundary_label = if in_first_minute {"first60s"} else {"last20s"};
+        let in_last_45s = seconds_left <= 45;
+        let boundary_block = in_first_minute || in_last_45s;
+        let boundary_label = if in_first_minute {"first60s"} else {"last45s"};
 
         // If position open and we're in boundary → force liquidate at market
         if pos.entered && !pos.settled && boundary_block {
