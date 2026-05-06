@@ -1,0 +1,28 @@
+{
+  "accuracy": {
+    "rolling_24h": 0.5,
+    "sample_count": 0
+  },
+  "cp": {
+    "alpha": 0.1,
+    "auto_widened": false,
+    "confidence_level": 0.95,
+    "feedback_count": 0,
+    "quantile_macd": 0.05,
+    "quantile_price": 0.005,
+    "quantile_rsi": 0.05
+  },
+  "exported_at": "2026-05-05T03:23:30.847480+00:00",
+  "hunting": {
+    "volatility": 0.0,
+    "z_score": 0.0
+  },
+  "version": "2.0",
+  "weights": {
+    "bb": 0.35,
+    "macd": 0.3,
+    "rsi": 0.2,
+    "sma": 0.4,
+    "vfi": 0.6
+  }
+}

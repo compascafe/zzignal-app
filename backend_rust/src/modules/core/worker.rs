@@ -356,28 +356,12 @@ async fn run_cycle(
     let _ = tx.send(AppMsg::Status(ConnStatus::Authenticating));
     let signer = creds.build_signer()?;
 
-    // 1. Obtener proxy wallet desde Gamma (no requiere auth)
+    // 1. Cliente Gamma para descubrir mercados
     let gamma_client = gamma::Client::default();
-    let proxy_addr: Option<Address> = {
-        let eoa: Address = creds.wallet_address.parse().ok().unwrap_or_default();
-        let req = PublicProfileRequest::builder().address(eoa).build();
-        match gamma_client.public_profile(&req).await {
-            Ok(p) => {
-                if let Some(a) = p.proxy_wallet {
-                    info!("Proxy wallet: {:#x}", a);
-                    Some(a)
-                } else {
-                    info!("Sin proxy_wallet en perfil, usando EOA");
-                    None
-                }
-            }
-            Err(e) => { warn!("public_profile falló: {e}"); None }
-        }
-    };
 
     // 2. Autenticar CLOB.
-    //    Si hay proxy wallet → SignatureType::Proxy + funder = proxy_addr
-    //    El CLOB buscará el saldo USDC bajo esa dirección (donde está el dinero real).
+    //    Cuenta creada con email (Magic Link) → SignatureType::Proxy
+    //    El SDK 0.6 deriva automáticamente el funder (proxy wallet) desde la EOA.
     let api_key: Uuid = creds.api_key.parse().context("CLOB_API_KEY no es UUID")?;
     let l2_creds = Credentials::new(api_key, creds.api_secret.clone(), creds.api_passphrase.clone());
 
@@ -386,16 +370,15 @@ async fn run_cycle(
         .authentication_builder(&signer)
         .credentials(l2_creds);
 
-    let clob_client = if let Some(proxy) = proxy_addr {
-        base_builder
-            .funder(proxy)
-            .signature_type(SignatureType::Proxy)
-            .authenticate().await
-            .context("Fallo de autenticación (Proxy)")?
-    } else {
-        base_builder.authenticate().await
-            .context("Fallo de autenticación (EOA)")?
-    };
+    let clob_client = base_builder
+        .signature_type(SignatureType::Proxy)
+        .authenticate().await
+        .context("Fallo de autenticación (Proxy)")?;
+
+    // Log de la dirección de trading (funder) derivada automáticamente
+    let eoa_addr: Address = creds.wallet_address.parse().ok().unwrap_or_default();
+    let funder = polymarket_client_sdk_v2::derive_proxy_wallet(eoa_addr, polymarket_client_sdk_v2::POLYGON);
+    info!("EOA: {eoa_addr:#x} | Funder derivado (proxy): {funder:#x?}");
 
     // 3. Balance USDC via CLOB (ahora con el funder correcto devuelve el saldo real)
     let balance_req = BalanceAllowanceRequest::default();

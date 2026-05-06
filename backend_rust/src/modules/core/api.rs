@@ -342,32 +342,20 @@ async fn post_approve(State(s): State<Arc<AppState>>) -> Json<Value> {
 async fn post_wrap(State(s): State<Arc<AppState>>) -> Json<Value> {
     info!("POST /api/wrap — USDC.e → pUSD vía CollateralOnramp");
 
-    // Obtener proxy wallet desde Gamma API
-    let proxy = {
-        let gamma = polymarket_client_sdk_v2::gamma::Client::default();
-        let eoa: polymarket_client_sdk_v2::types::Address =
-            s.creds.wallet_address.parse().unwrap_or_default();
-        let req = polymarket_client_sdk_v2::gamma::types::request::PublicProfileRequest::builder()
-            .address(eoa).build();
-        match gamma.public_profile(&req).await {
-            Ok(p) => p.proxy_wallet.map(|a| format!("{a:#x}")),
-            Err(e) => {
-                let msg = format!("Gamma API falló: {e}");
-                tracing::error!("{msg}");
-                return Json(json!({"ok": false, "error": msg}));
-            }
-        }
+    // Derivar wallet Proxy (email/Magic) desde la EOA
+    let eoa: polymarket_client_sdk_v2::types::Address =
+        s.creds.wallet_address.parse().unwrap_or_default();
+    let wallet = polymarket_client_sdk_v2::derive_proxy_wallet(eoa, polymarket_client_sdk_v2::POLYGON);
+
+    let wallet_str = match wallet {
+        Some(w) => format!("{w:#x}"),
+        None => return Json(json!({"ok": false, "error": "No se pudo derivar wallet Proxy"})),
     };
 
-    let proxy = match proxy {
-        Some(p) => p,
-        None => return Json(json!({"ok": false, "error": "No se encontró proxy wallet"})),
-    };
-
-    match worker::wrap_usdc_to_pusd(&s.creds, &proxy).await {
+    match worker::wrap_usdc_to_pusd(&s.creds, &wallet_str).await {
         Ok(()) => {
-            info!("Wrap completado. pUSD enviado a proxy {proxy}");
-            Json(json!({"ok": true, "message": format!("USDC.e → pUSD enviado a proxy {proxy}")}))
+            info!("Wrap completado. pUSD enviado a Proxy {wallet_str}");
+            Json(json!({"ok": true, "message": format!("USDC.e → pUSD enviado a Proxy {wallet_str}")}))
         }
         Err(e) => {
             let msg = format!("Wrap falló: {e}");
