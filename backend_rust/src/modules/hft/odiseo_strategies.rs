@@ -228,7 +228,7 @@ impl OdiseoTradingManager {
             pnl+=self.settle(&state.trades[i].up,true,au,tie,&mut stats[i],sid,def.name,"UP");
             pnl+=self.settle(&state.trades[i].down,false,ad,tie,&mut stats[i],sid,def.name,"DOWN");
             stats[i].session_pnl+=pnl;stats[i].session_balance+=pnl;stats[i].balance+=pnl;
-            if self.reinvest.load(Ordering::Relaxed) { let mut bd = self.budgets.lock().unwrap(); if let Some(b) = bd.get_mut(i) { *b = (*b + pnl).max(5.0).min(100.0); } }
+            if self.reinvest.load(Ordering::Relaxed) { let mut bd = self.budgets.lock().unwrap(); if let Some(b) = bd.get_mut(i) { if pnl > 0.0 { *b = (*b + pnl).min(100.0); } } }
             stats[i].accuracy=if stats[i].trades_up+stats[i].trades_dn>0{(stats[i].wins_up+stats[i].wins_dn)as f64/(stats[i].trades_up+stats[i].trades_dn)as f64}else{0.0};
 
             // Auto-disable after N sessions
