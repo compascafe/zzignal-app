@@ -798,8 +798,8 @@ async fn capture_combined(
         rec.odiseo_signal = odiseo_signal;
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
             match code.as_str() {
-                "odiseo85_up"   => { rec.odiseo85_up_active = active; rec.odiseo85_up_entry_price = entry; rec.odiseo85_up_size = size; rec.odiseo85_up_pnl = pnl; rec.odiseo85_up_exit_price = exit_price; rec.odiseo85_up_exit_reason = exit_reason; rec.odiseo85_up_balance = balance; }
-                "odiseo85_down" => { rec.odiseo85_down_active = active; rec.odiseo85_down_entry_price = entry; rec.odiseo85_down_size = size; rec.odiseo85_down_pnl = pnl; rec.odiseo85_down_exit_price = exit_price; rec.odiseo85_down_exit_reason = exit_reason; rec.odiseo85_down_balance = balance; }
+                "odiseo83_up"   => { rec.odiseo83_up_active = active; rec.odiseo83_up_entry_price = entry; rec.odiseo83_up_size = size; rec.odiseo83_up_pnl = pnl; rec.odiseo83_up_exit_price = exit_price; rec.odiseo83_up_exit_reason = exit_reason; rec.odiseo83_up_balance = balance; }
+                "odiseo83_down" => { rec.odiseo83_down_active = active; rec.odiseo83_down_entry_price = entry; rec.odiseo83_down_size = size; rec.odiseo83_down_pnl = pnl; rec.odiseo83_down_exit_price = exit_price; rec.odiseo83_down_exit_reason = exit_reason; rec.odiseo83_down_balance = balance; }
                 "odiseo86_up"   => { rec.odiseo86_up_active = active; rec.odiseo86_up_entry_price = entry; rec.odiseo86_up_size = size; rec.odiseo86_up_pnl = pnl; rec.odiseo86_up_exit_price = exit_price; rec.odiseo86_up_exit_reason = exit_reason; rec.odiseo86_up_balance = balance; }
                 "odiseo86_down" => { rec.odiseo86_down_active = active; rec.odiseo86_down_entry_price = entry; rec.odiseo86_down_size = size; rec.odiseo86_down_pnl = pnl; rec.odiseo86_down_exit_price = exit_price; rec.odiseo86_down_exit_reason = exit_reason; rec.odiseo86_down_balance = balance; }
                 "odiseo87_up"   => { rec.odiseo87_up_active = active; rec.odiseo87_up_entry_price = entry; rec.odiseo87_up_size = size; rec.odiseo87_up_pnl = pnl; rec.odiseo87_up_exit_price = exit_price; rec.odiseo87_up_exit_reason = exit_reason; rec.odiseo87_up_balance = balance; }
@@ -825,7 +825,14 @@ async fn capture_combined(
                 _ => {}
             }
         }
-    } // end diagnostic_mode guard
+    } // end Odiseo trading block
+
+    // ─── LIVE money trace: real USDC balance + Odiseo 83 live PnL ────────
+    {
+        rec.live_usdc_balance = state.balance.read().await.unwrap_or(0.0);
+        rec.odiseo83_up_live_pnl = state.odiseo_trading.get_total_pnl("odiseo83");
+        rec.odiseo83_down_live_pnl = 0.0;
+    }
 
     // ─── Perf: processing time (micros) ──────────────────────────────────
     let _proc_us = t_start.elapsed().as_micros() as u64;

@@ -215,22 +215,26 @@ pub struct CsvRecord {
     pub pressure_index:         f64,   // (mid - floor) / band → 0=DOWN, 1=UP
     pub pressure_skew:          f64,   // (bid_vol - ask_vol) / total within band
     // ─── Odiseo Strategies — bidirectional momentum paper-trading ────────
-    // Odiseo 85 UP
-    pub odiseo85_up_active:        u8,
-    pub odiseo85_up_entry_price:   f64,
-    pub odiseo85_up_size:          f64,
-    pub odiseo85_up_pnl:           f64,
-    pub odiseo85_up_exit_price:    f64,
-    pub odiseo85_up_exit_reason:   u8,
-    pub odiseo85_up_balance:       f64,
+    // Odiseo 83 UP (estrategia principal — entry≥0.83, tp=0.97, sl_hard=0.81)
+    pub odiseo83_up_active:        u8,
+    pub odiseo83_up_entry_price:   f64,
+    pub odiseo83_up_size:          f64,
+    pub odiseo83_up_pnl:           f64,
+    pub odiseo83_up_exit_price:    f64,
+    pub odiseo83_up_exit_reason:   u8,
+    pub odiseo83_up_balance:       f64,
     // Odiseo 85 DOWN
-    pub odiseo85_down_active:        u8,
-    pub odiseo85_down_entry_price:   f64,
-    pub odiseo85_down_size:          f64,
-    pub odiseo85_down_pnl:           f64,
-    pub odiseo85_down_exit_price:    f64,
-    pub odiseo85_down_exit_reason:   u8,
-    pub odiseo85_down_balance:       f64,
+    pub odiseo83_down_active:        u8,
+    pub odiseo83_down_entry_price:   f64,
+    pub odiseo83_down_size:          f64,
+    pub odiseo83_down_pnl:           f64,
+    pub odiseo83_down_exit_price:    f64,
+    pub odiseo83_down_exit_reason:   u8,
+    pub odiseo83_down_balance:       f64,
+    // ─── Odiseo 83 LIVE (real-money traceability) ──────────────────────────
+    pub odiseo83_up_live_pnl:       f64,   // cumulative real PnL from UP LIVE trades
+    pub odiseo83_down_live_pnl:     f64,   // cumulative real PnL from DOWN LIVE trades
+    pub live_usdc_balance:          f64,   // real USDC balance from Polymarket
     // Odiseo 86 UP
     pub odiseo86_up_active:        u8,
     pub odiseo86_up_entry_price:   f64,
@@ -528,12 +532,14 @@ impl Default for CsvRecord {
             pressure_band:           0.0,
             pressure_index:          0.5,
             pressure_skew:           0.0,
-            odiseo85_up_active:       0, odiseo85_up_entry_price: 0.0, odiseo85_up_size: 0.0,
-            odiseo85_up_pnl:          0.0, odiseo85_up_exit_price: 0.0, odiseo85_up_exit_reason: 0,
-            odiseo85_up_balance:      20.0,
-            odiseo85_down_active:     0, odiseo85_down_entry_price: 0.0, odiseo85_down_size: 0.0,
-            odiseo85_down_pnl:        0.0, odiseo85_down_exit_price: 0.0, odiseo85_down_exit_reason: 0,
-            odiseo85_down_balance:    20.0,
+            odiseo83_up_active:       0, odiseo83_up_entry_price: 0.0, odiseo83_up_size: 0.0,
+            odiseo83_up_pnl:          0.0, odiseo83_up_exit_price: 0.0, odiseo83_up_exit_reason: 0,
+            odiseo83_up_balance:      20.0,
+            odiseo83_down_active:     0, odiseo83_down_entry_price: 0.0, odiseo83_down_size: 0.0,
+            odiseo83_down_pnl:        0.0, odiseo83_down_exit_price: 0.0, odiseo83_down_exit_reason: 0,
+            odiseo83_down_balance:    20.0,
+            odiseo83_up_live_pnl:      0.0, odiseo83_down_live_pnl: 0.0,
+            live_usdc_balance:         0.0,
             odiseo86_up_active:       0, odiseo86_up_entry_price: 0.0, odiseo86_up_size: 0.0,
             odiseo86_up_pnl:          0.0, odiseo86_up_exit_price: 0.0, odiseo86_up_exit_reason: 0,
             odiseo86_up_balance:      20.0,

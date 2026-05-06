@@ -31,7 +31,7 @@ struct OdiseoDef {
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
-    OdiseoDef { name:"Odiseo 83", code:"odiseo85", entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 83", code:"odiseo83", entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Wide 65", code:"odiseo65", entry_threshold:0.65, tp_price:0.95, sl_hard:0.63, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 86", code:"odiseo86", entry_threshold:0.86, tp_price:0.97, sl_hard:0.84, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 87", code:"odiseo87", entry_threshold:0.87, tp_price:0.97, sl_hard:0.85, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
@@ -149,10 +149,10 @@ impl OdiseoTradingManager {
             // Si ya hay posición abierta, mantenemos último estado (no resetear)
             if pos.entered && !pos.settled {
                 let pnl = (pos.entry_price - pos.entry_price) * pos.size; // 0
-                r.push((code.clone(), 1u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
+                r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
                 return;
             }
-            r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
+            r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
         }};
 
         if pos.entered && !pos.settled {
@@ -204,9 +204,9 @@ impl OdiseoTradingManager {
             pos.prev_vol = if is_up{av}else{bv};
         }
 
-        let active = if pos.entered && !pos.settled {1u8}else{0u8};
-        let pnl = if active==1 {(px-pos.entry_price)*pos.size}else if pos.settled{pos.virtual_pnl}else{0.0};
-        r.push((code, active, pos.entry_price, pos.size, pnl, if pos.settled{pos.exit_price}else{0.0}, if pos.settled{pos.exit_reason}else{0u8}, budget+pnl));
+        let status = if pos.entered && !pos.settled {2u8}else{1u8}; // 2=ACTIVE, 1=WATCHING
+        let pnl = if status==2 {(px-pos.entry_price)*pos.size}else if pos.settled{pos.virtual_pnl}else{0.0};
+        r.push((code, status, pos.entry_price, pos.size, pnl, if pos.settled{pos.exit_price}else{0.0}, if pos.settled{pos.exit_reason}else{0u8}, budget+pnl));
     }
 
     fn check_exit(&self, pos:&OdiseoPosition, def:&OdiseoDef, px:f64, vol:f64, imb:f64, vel:f64) -> u8 {
@@ -259,4 +259,11 @@ impl OdiseoTradingManager {
     }
 
     pub fn export_json(&self) -> String { serde_json::to_string_pretty(&*self.stats.lock().unwrap()).unwrap_or_default() }
+
+    pub fn get_total_pnl(&self, code: &str) -> f64 {
+        self.stats.lock().unwrap().iter()
+            .find(|s| s.code == code)
+            .map(|s| s.total_pnl)
+            .unwrap_or(0.0)
+    }
 }
