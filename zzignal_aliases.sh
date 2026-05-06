@@ -19,7 +19,7 @@ alias zz-odi83-8='curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: appl
 
 # Apagar todas las variantes menos la 0
 zz-odi-only83() {
-  for i in 1 2 3 4 5 6 7 8 9 10 11; do
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     curl -sX POST $ZZ_API/api/odiseo/variant \
       -H "Content-Type: application/json" \
       -d "{\"index\": $i, \"enable\": false}" > /dev/null
@@ -43,7 +43,7 @@ zz-emergency() {
   echo "🚨 EMERGENCIA TOTAL"
   curl -sX POST $ZZ_API/api/panic -H "Content-Type: application/json" -d "{}" > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": false}' > /dev/null
-  for i in 0 1 2 3 4 5 6 7 8 9 10 11; do
+  for i in 0 1 2 3 4 5 6 7 8 9 10 11 12; do
     curl -sX POST $ZZ_API/api/odiseo/variant \
       -H "Content-Type: application/json" \
       -d "{\"index\": $i, \"enable\": false}" > /dev/null
@@ -91,8 +91,8 @@ zz-go() {
   local r1=$(curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": true}')
   echo "  LIVE: $r1"
   
-  # Apagar variantes 1-11
-  for i in 1 2 3 4 5 6 7 8 9 10 11; do
+  # Apagar variantes 1-12
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d "{\"index\": $i, \"enable\": false}" > /dev/null
   done
   

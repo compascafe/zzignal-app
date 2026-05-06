@@ -32,6 +32,7 @@ struct OdiseoDef {
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
     OdiseoDef { name:"Odiseo 83", code:"odiseo85", entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Wide 65", code:"odiseo65", entry_threshold:0.65, tp_price:0.95, sl_hard:0.63, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 86", code:"odiseo86", entry_threshold:0.86, tp_price:0.97, sl_hard:0.84, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 87", code:"odiseo87", entry_threshold:0.87, tp_price:0.97, sl_hard:0.85, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 88", code:"odiseo88", entry_threshold:0.88, tp_price:0.97, sl_hard:0.86, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
@@ -90,7 +91,7 @@ impl OdiseoTradingManager {
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
     pub fn is_enabled(&self, idx:usize) -> bool { idx < self.enabled.len() && self.enabled[idx].load(Ordering::Relaxed) }
-    pub fn set_budget(&self, idx:usize, amount:f64) { if let Some(b) = self.budgets.lock().unwrap().get_mut(idx) { *b = amount.max(5.0).min(1000.0); } }
+    pub fn set_budget(&self, idx:usize, amount:f64) { if let Some(b) = self.budgets.lock().unwrap().get_mut(idx) { *b = amount.max(5.0).min(100.0); } }
     pub fn get_budget(&self, idx:usize) -> f64 { self.budgets.lock().unwrap().get(idx).copied().unwrap_or(20.0) }
     pub fn set_reinvest(&self, on:bool) { self.reinvest.store(on, Ordering::Relaxed); }
     pub fn set_max_sessions(&self, idx:usize, max:u32) { if let Some(m) = self.max_sessions.lock().unwrap().get_mut(idx) { *m = max; } }
@@ -227,7 +228,7 @@ impl OdiseoTradingManager {
             pnl+=self.settle(&state.trades[i].up,true,au,tie,&mut stats[i],sid,def.name,"UP");
             pnl+=self.settle(&state.trades[i].down,false,ad,tie,&mut stats[i],sid,def.name,"DOWN");
             stats[i].session_pnl+=pnl;stats[i].session_balance+=pnl;stats[i].balance+=pnl;
-            if self.reinvest.load(Ordering::Relaxed) { let mut bd = self.budgets.lock().unwrap(); if let Some(b) = bd.get_mut(i) { *b = (*b + pnl).max(5.0).min(10000.0); } }
+            if self.reinvest.load(Ordering::Relaxed) { let mut bd = self.budgets.lock().unwrap(); if let Some(b) = bd.get_mut(i) { *b = (*b + pnl).max(5.0).min(100.0); } }
             stats[i].accuracy=if stats[i].trades_up+stats[i].trades_dn>0{(stats[i].wins_up+stats[i].wins_dn)as f64/(stats[i].trades_up+stats[i].trades_dn)as f64}else{0.0};
 
             // Auto-disable after N sessions
