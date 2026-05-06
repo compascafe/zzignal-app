@@ -68,6 +68,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/odiseo/variant",  post(post_odiseo_variant))
         .route("/api/odiseo/budget",   post(post_odiseo_budget))
         .route("/api/odiseo/reinvest", post(post_odiseo_reinvest))
+        .route("/api/odiseo/max-sessions", post(post_odiseo_max_sessions))
         .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
@@ -455,6 +456,8 @@ async fn get_odiseo_status(State(s): State<Arc<AppState>>) -> Json<Value> {
         if let Some(obj) = v.as_object_mut() {
             obj.insert("enabled".into(), json!(s.odiseo_trading.is_enabled(i)));
             obj.insert("budget".into(), json!(s.odiseo_trading.get_budget(i)));
+            obj.insert("max_sessions".into(), json!(s.odiseo_trading.get_max_sessions(i)));
+            obj.insert("sessions_done".into(), json!(s.odiseo_trading.get_sessions_done(i)));
         }
     }
     Json(json!({
@@ -487,6 +490,14 @@ struct OdiseoReinvestBody { enable: bool }
 async fn post_odiseo_reinvest(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoReinvestBody>) -> Json<Value> {
     s.odiseo_trading.set_reinvest(body.enable);
     Json(json!({"ok": true, "reinvest": body.enable}))
+}
+
+#[derive(Deserialize)]
+struct OdiseoMaxSessionsBody { index: usize, max_sessions: u32 }
+
+async fn post_odiseo_max_sessions(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoMaxSessionsBody>) -> Json<Value> {
+    s.odiseo_trading.set_max_sessions(body.index, body.max_sessions);
+    Json(json!({"ok": true, "index": body.index, "max_sessions": s.odiseo_trading.get_max_sessions(body.index)}))
 }
 
 #[derive(Deserialize)]
