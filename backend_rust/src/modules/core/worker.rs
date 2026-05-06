@@ -1323,7 +1323,7 @@ async fn fetch_and_send_balance(
             let raw: f64 = b.balance.to_string().parse().unwrap_or(0.0);
             // El CLOB devuelve USDC en unidades raw con 6 decimales (ej: 35168666 = $35.17)
             let bal = if raw > 1_000.0 { raw / 1_000_000.0 } else { raw };
-            info!("Balance USDC raw={} → ${:.2}", raw, bal);
+            info!("Balance CLOB raw={} → ${:.2} | allowances={:?}", raw, bal, b.allowances);
             let _ = tx.send(AppMsg::Balance(bal));
         }
         Err(e) => error!("balance_allowance: {:#}", e),
