@@ -1,14 +1,20 @@
-//! Odiseo Strategies v5 — 5 variants, TP=0.97, last-10-min specialists, cumulative track
+//! Odiseo Strategies v6 — 13 variants, TP=0.97, session boundary protection
 //!
 //! Variants:
-//!   90: entry>=0.90 tp=0.97 sl=0.84 (full 15min)
-//!   93: entry>=0.93 tp=0.97 sl=0.87 (full 15min)
-//!   95: entry>=0.95 tp=0.97 sl=0.90 (full 15min)
-//!   94: entry>=0.94 tp=0.97 sl=0.88 (only last 10min)
-//!   96: entry>=0.96 tp=0.97 sl=0.90 (only last 10min)
+//!   83: entry>=0.83 tp=0.97 sl=0.81 (PRINCIPAL, full 15min)
+//!   65: entry>=0.65 tp=0.95 sl=0.63 (Wide 65 reversals, full 15min)
+//!   86-93: entry>=0.86-0.93 tp=0.97 (full 15min)
+//!   94:  entry>=0.94 tp=0.97 sl=0.92 (only last 10min)
+//!   95:  entry>=0.95 tp=0.97 sl=0.93 (full 15min)
+//!   96:  entry>=0.96 tp=0.985 sl=0.95 (only last 10min)
 //!
 //! Anti-whale: entry only if price between entry_threshold and tp_price.
 //! 3-layer SL. $20 per variant per direction. Cumulative + per-session reset.
+//!
+//! Session boundary protection (v6):
+//!   - First 60s (seconds_left > 840): NO entries, liquidate open positions.
+//!   - Last 20s  (seconds_left <= 20): NO entries, liquidate open positions.
+//!   - Flash-protection exit = exit_reason 6 (market sell, NOT counted as SL).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -122,18 +128,55 @@ impl OdiseoTradingManager {
                 results.push((format!("{}_down",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
                 continue;
             }
-            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i]);
-            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i]);
+            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i], seconds_left);
+            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i], seconds_left);
         }
         (results, sig)
     }
 
     fn process(&self, is_up:bool, t:&mut OdiseoSessionTrade, def:&OdiseoDef, sid:i32,
                bv:f64, av:f64, imb:f64, vel:f64, lt:Option<f64>, sig:&mut u8,
-               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64)
+               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64, seconds_left:i32)
     {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
+
+        // ── Boundary safety: no trade in first 60s or last 20s ──
+        let in_first_minute = seconds_left > 840;
+        let in_last_20s = seconds_left <= 20;
+        let boundary_block = in_first_minute || in_last_20s;
+        let boundary_label = if in_first_minute {"first60s"} else {"last20s"};
+
+        // If position open and we're in boundary → force liquidate at market
+        if pos.entered && !pos.settled && boundary_block {
+            if let Some(px) = lt.filter(|&p| p > 0.0) {
+                pos.settled = true; pos.exit_reason = 6; // 6 = flash_protection
+                pos.exit_price = px;
+                pos.virtual_pnl = (px - pos.entry_price) * pos.size;
+                t.session_profit += pos.virtual_pnl;
+                // NOT counted as SL — boundary protection is not a strategy failure
+                info!("[Odiseo] #{} {} FLASH-PROTECT({}) EXIT @{:.4} pnl={:.4}", sid, code, boundary_label, px, pos.virtual_pnl);
+                if self.live_mode.load(Ordering::Relaxed) {
+                    if let Some(ref tx) = self.cmd_tx {
+                        let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
+                        let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: pos.size.max(1.0) });
+                    }
+                }
+                let bal = budget + pos.virtual_pnl;
+                r.push((code.clone(), 0u8, pos.entry_price, pos.size, pos.virtual_pnl, px, 6u8, bal));
+                *pos = OdiseoPosition::default();
+                return;
+            }
+            // No price yet → keep position active but don't enter new logic
+            r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
+            return;
+        }
+
+        // If no position and we're in boundary → block new entries
+        if !pos.entered && boundary_block {
+            r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
+            return;
+        }
 
         // ── Límites de sesión ──
         let profit_limit = budget * 0.15; // 15% profit stop
