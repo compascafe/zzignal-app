@@ -361,8 +361,9 @@ async fn run_cycle(
 
     // 2. Autenticar CLOB.
     //    Cuenta creada con email (Magic Link) → SignatureType::Proxy
-    //    Wallet EOA directa — el pUSD está en la EOA, no en el proxy.
-    //    SignatureType::Eoa (default). Allowances ya están en MAX_U256.
+    //    Deposit wallet (Poly1271) — CLOB V2 requiere deposit wallet para órdenes.
+    //    El pUSD debe estar en el proxy/deposit 0x059..., no en la EOA.
+    let funder_address: AlloyAddress = alloy::primitives::address!("0x0000000000000000000000000000000000000000");
     let api_key: Uuid = creds.api_key.parse().context("CLOB_API_KEY no es UUID")?;
     let l2_creds = Credentials::new(api_key, creds.api_secret.clone(), creds.api_passphrase.clone());
 
@@ -372,10 +373,12 @@ async fn run_cycle(
         .credentials(l2_creds);
 
     let clob_client = base_builder
+        .funder(funder_address)
+        .signature_type(SignatureType::Poly1271)
         .authenticate().await
-        .context("Fallo de autenticación (EOA)")?;
+        .context("Fallo de autenticación (Poly1271)")?;
 
-    info!("EOA: {}", creds.wallet_address);
+    info!("EOA: {} | Funder: {funder_address:#x}", creds.wallet_address);
 
     // 3. Balance USDC via CLOB (ahora con el funder correcto devuelve el saldo real)
     let balance_req = BalanceAllowanceRequest::default();
@@ -411,7 +414,7 @@ async fn run_cycle(
             Ok(bal) => {
                 if bal > alloy::primitives::U256::ZERO {
                     info!("USDC.e detectado: {bal} — ejecutando wrap automático");
-                    match wrap_usdc_to_pusd(creds, &creds.wallet_address).await {
+                    match wrap_usdc_to_pusd(creds, "0x0000000000000000000000000000000000000000").await {
                         Ok(()) => {
                             info!("Wrap automático completado. Refrescando balance...");
                             let _ = clob_client.update_balance_allowance(balance_req.clone()).await;

@@ -345,7 +345,7 @@ async fn post_approve(State(s): State<Arc<AppState>>) -> Json<Value> {
 async fn post_wrap(State(s): State<Arc<AppState>>) -> Json<Value> {
     info!("POST /api/wrap — USDC.e → pUSD vía CollateralOnramp");
 
-    // Proxy wallet verificado on-chain: 0x0000000000000000000000000000000000000000
+    // Deposit wallet (Poly1271) — el pUSD debe estar aquí
     let wallet_str = "0x0000000000000000000000000000000000000000".to_string();
 
     match worker::wrap_usdc_to_pusd(&s.creds, &wallet_str).await {
