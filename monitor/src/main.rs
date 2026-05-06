@@ -76,9 +76,11 @@ struct State {
     odi_w_dn: i64,
     odi_sessions: i64,
     odi_enabled: bool,
+    odi_active: bool,  // whether currently in a trade
     orders: i64,
     log: VecDeque<LogEntry>,
     last_poll: Instant,
+    last_session: i64,
 }
 
 impl State {
@@ -87,8 +89,8 @@ impl State {
             connected: false, btc: 0.0, bal: 0.0, live: false, reinvest: false,
             odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 7.0,
             odi_t_up: 0, odi_t_dn: 0, odi_w_up: 0, odi_w_dn: 0,
-            odi_sessions: 0, odi_enabled: true, orders: 0,
-            log: VecDeque::with_capacity(100), last_poll: Instant::now(),
+            odi_sessions: 0, odi_enabled: true, odi_active: false, orders: 0,
+            log: VecDeque::with_capacity(100), last_poll: Instant::now(), last_session: 0,
         }
     }
     fn add_log(&mut self, text: String, color: Color) {
