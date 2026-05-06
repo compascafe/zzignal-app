@@ -58,7 +58,65 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => println!("❌ Error: {e}"),
     }
 
+    // ── signature_type explícito en request ──
+    println!("\n─── BalanceAllowanceRequest con sig explícito ───");
+    match test_balance_sig(&signer, known_proxy, SignatureType::Proxy).await {
+        Ok(bal) => println!("✅ sig=Proxy: {bal}"),
+        Err(e) => println!("❌ sig=Proxy: {e}"),
+    }
+    match test_balance_sig(&signer, known_proxy, SignatureType::GnosisSafe).await {
+        Ok(bal) => println!("✅ sig=GnosisSafe: {bal}"),
+        Err(e) => println!("❌ sig=GnosisSafe: {e}"),
+    }
+
+    // ── AssetType::Conditional ──
+    println!("\n─── AssetType::Conditional ───");
+    match test_balance_conditional(&signer, known_proxy).await {
+        Ok(bal) => println!("✅ CONDITIONAL: {bal}"),
+        Err(e) => println!("❌ Error: {e}"),
+    }
+
     Ok(())
+}
+
+async fn test_balance_sig(signer: &PrivateKeySigner, funder: alloy::primitives::Address, req_st: SignatureType) -> anyhow::Result<String> {
+    use polymarket_client_sdk_v2::auth::{Credentials, Uuid};
+    let creds = {
+        let api_key = std::env::var("CLOB_API_KEY")?;
+        let api_secret = std::env::var("CLOB_API_SECRET")?;
+        let api_passphrase = std::env::var("CLOB_API_PASSPHRASE")?;
+        Credentials::new(Uuid::parse_str(&api_key)?, api_secret, api_passphrase)
+    };
+    let client = Client::new("https://clob.polymarket.com", Config::default())?
+        .authentication_builder(signer).credentials(creds)
+        .funder(funder).signature_type(SignatureType::Proxy)
+        .authenticate().await?;
+    let req = BalanceAllowanceRequest::builder()
+        .asset_type(AssetType::Collateral).signature_type(req_st).build();
+    client.update_balance_allowance(req.clone()).await?;
+    let b = client.balance_allowance(req).await?;
+    Ok(format!("raw={} | allowances: {}", b.balance, serde_json::to_string(&b.allowances).unwrap_or_default()))
+}
+
+async fn test_balance_conditional(signer: &PrivateKeySigner, funder: alloy::primitives::Address) -> anyhow::Result<String> {
+    use polymarket_client_sdk_v2::auth::{Credentials, Uuid};
+    use polymarket_client_sdk_v2::types::U256;
+    let creds = {
+        let api_key = std::env::var("CLOB_API_KEY")?;
+        let api_secret = std::env::var("CLOB_API_SECRET")?;
+        let api_passphrase = std::env::var("CLOB_API_PASSPHRASE")?;
+        Credentials::new(Uuid::parse_str(&api_key)?, api_secret, api_passphrase)
+    };
+    let client = Client::new("https://clob.polymarket.com", Config::default())?
+        .authentication_builder(signer).credentials(creds)
+        .funder(funder).signature_type(SignatureType::Proxy)
+        .authenticate().await?;
+    let req = BalanceAllowanceRequest::builder()
+        .asset_type(AssetType::Conditional).token_id(U256::from(1))
+        .signature_type(SignatureType::Proxy).build();
+    client.update_balance_allowance(req.clone()).await?;
+    let b = client.balance_allowance(req).await?;
+    Ok(format!("raw={} | allowances: {}", b.balance, serde_json::to_string(&b.allowances).unwrap_or_default()))
 }
 
 async fn test_balance_funder(signer: &PrivateKeySigner, st: SignatureType, funder: alloy::primitives::Address) -> anyhow::Result<String> {
