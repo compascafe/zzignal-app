@@ -31,7 +31,7 @@ struct OdiseoDef {
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
-    OdiseoDef { name:"Odiseo 85", code:"odiseo85", entry_threshold:0.85, tp_price:0.97, sl_hard:0.83, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 83", code:"odiseo85", entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 86", code:"odiseo86", entry_threshold:0.86, tp_price:0.97, sl_hard:0.84, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 87", code:"odiseo87", entry_threshold:0.87, tp_price:0.97, sl_hard:0.85, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 88", code:"odiseo88", entry_threshold:0.88, tp_price:0.97, sl_hard:0.86, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
@@ -48,7 +48,7 @@ static ODISEO_DEFS: &[OdiseoDef] = &[
 #[derive(Debug, Clone, Default)]
 struct OdiseoPosition { entered:bool, entry_price:f64, size:f64, settled:bool, exit_price:f64, exit_reason:u8, virtual_pnl:f64, max_price:f64, prev_vol:f64 }
 #[derive(Debug, Clone, Default)]
-struct OdiseoSessionTrade { up:OdiseoPosition, down:OdiseoPosition }
+struct OdiseoSessionTrade { up:OdiseoPosition, down:OdiseoPosition, sl_count:u32, session_profit:f64 }
 struct OdiseoSessionState { trades:Vec<OdiseoSessionTrade> }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,6 +133,17 @@ impl OdiseoTradingManager {
     {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
+
+        // ── Límites de sesión ──
+        let profit_limit = budget * 0.15; // 15% profit stop
+        let sl_limit = 4u32;            // max 4 stop-losses per session
+        if t.session_profit >= profit_limit {
+            r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
+        }
+        if t.sl_count >= sl_limit {
+            r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
+        }
+
         let px = match lt { Some(p) if p>0.0 => p, _ => {
             // Si ya hay posición abierta, mantenemos último estado (no resetear)
             if pos.entered && !pos.settled {
@@ -149,7 +160,9 @@ impl OdiseoTradingManager {
                 pos.settled = true; pos.exit_reason = reason;
                 let fill = if reason==1 { def.tp_price } else { px };
                 pos.exit_price = fill; pos.virtual_pnl = (fill - pos.entry_price) * pos.size;
-                info!("[Odiseo] #{} {} EXIT r={} @{:.4} pnl={:.4}", sid, code, reason, fill, pos.virtual_pnl);
+                t.session_profit += pos.virtual_pnl;
+                if reason >= 2 { t.sl_count += 1; }
+                info!("[Odiseo] #{} {} EXIT r={} @{:.4} pnl={:.4} sl_count={}", sid, code, reason, fill, pos.virtual_pnl, t.sl_count);
                 // ── Live: place real exit order ──
                 if self.live_mode.load(Ordering::Relaxed) {
                     if let Some(ref tx) = self.cmd_tx {
