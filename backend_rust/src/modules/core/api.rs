@@ -86,6 +86,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/orders",          get(get_orders))
         .route("/api/orders",          delete(cancel_all_orders))
         .route("/api/orders/{id}",     delete(cancel_order))
+        // Panic — cancel all + market sell
+        .route("/api/panic",           post(post_panic))
         // Colocar órdenes
         .route("/api/orders/limit",    post(post_limit_order))
         .route("/api/orders/market",   post(post_market_order))
@@ -1121,6 +1123,47 @@ async fn cancel_order(
 async fn cancel_all_orders(State(s): State<Arc<AppState>>) -> Json<Value> {
     let _ = s.cmd_tx.send(CmdMsg::CancelMarket);
     Json(json!({"ok": true}))
+}
+
+// ─── Panic — cancelar todo + market sell ──────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PanicBody {
+    outcome: Option<String>, // "up", "down", o ausente = ambos
+}
+
+async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>) -> Json<Value> {
+    info!("🚨 PANIC — cancel all + market sell");
+
+    // 1. Cancelar todas las órdenes
+    let _ = s.cmd_tx.send(CmdMsg::CancelMarket);
+
+    // 2. Market sell para el outcome especificado (o ambos)
+    let outcomes: Vec<&str> = match body.outcome.as_deref() {
+        Some("up")   => vec!["up"],
+        Some("down") => vec!["down"],
+        _            => vec!["up", "down"],
+    };
+
+    let bal = s.balance.read().await;
+    let amount = bal.unwrap_or(0.0) * 0.99;
+    let amount = if amount > 1.0 { amount } else { 1.0 };
+
+    for outcome in &outcomes {
+        let outcome_enum = match *outcome {
+            "up"   => Outcome::Up,
+            "down" => Outcome::Down,
+            _      => continue,
+        };
+        info!("  Market SELL {outcome} × ${amount:.2}");
+        let _ = s.cmd_tx.send(CmdMsg::PlaceMarketOrder {
+            side: OrderSide::Sell,
+            outcome: outcome_enum,
+            amount_usdc: amount,
+        });
+    }
+
+    Json(json!({"ok": true, "message": format!("PANIC executed: cancelled all + market sell {:?}", outcomes)}))
 }
 
 // ─── Fills ────────────────────────────────────────────────────────────────────
