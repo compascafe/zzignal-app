@@ -70,6 +70,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/odiseo/reinvest", post(post_odiseo_reinvest))
         .route("/api/odiseo/max-sessions", post(post_odiseo_max_sessions))
         .route("/api/odiseo/filters", post(post_odiseo_filters))
+        .route("/api/odiseo/trade-config", post(post_odiseo_trade_config))
         .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
@@ -529,6 +530,23 @@ async fn post_odiseo_filters(State(s): State<Arc<AppState>>, Json(body): Json<Od
         "ok": true,
         "enabled_mask": s.odiseo_trading.filter_chain.enabled_mask(),
         "filters": s.odiseo_trading.filter_chain.list_filters(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct OdiseoTradeConfigBody { min_vol: Option<f64>, window: Option<usize> }
+
+async fn post_odiseo_trade_config(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoTradeConfigBody>) -> Json<Value> {
+    if let Some(v) = body.min_vol {
+        *s.trade_min_vol.write().await = v.max(0.0);
+    }
+    if let Some(n) = body.window {
+        *s.trade_window_n.write().await = n.max(1).min(50);
+    }
+    Json(json!({
+        "ok": true,
+        "trade_min_vol": *s.trade_min_vol.read().await,
+        "trade_window_n": *s.trade_window_n.read().await,
     }))
 }
 

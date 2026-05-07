@@ -105,6 +105,8 @@ pub struct CsvRecord {
     pub clob_trade_dn:         f64,   // último precio CLOB trade DOWN
     pub clob_trade_up_vol:     f64,   // volumen del último trade CLOB UP
     pub clob_trade_dn_vol:     f64,   // volumen del último trade CLOB DOWN
+    pub clob_trade_count_up:  u16,   // N° of qualifying trades in UP window
+    pub clob_trade_count_dn:  u16,   // N° of qualifying trades in DOWN window
     pub od83_event:            String, // IN_UP|IN_DN|OUT_UP|OUT_DN|empty — Odiseo 83 entry/exit marker
     pub od83_filters:          u8,    // enabled filter bitmask: 0=all_off 255=all_on (8 bits=8 filters)
     // ─── Odiseo 83 Timing ────────────────────────────────────────────────
@@ -155,6 +157,8 @@ impl Default for CsvRecord {
             clob_trade_dn:        0.0,
             clob_trade_up_vol:    0.0,
             clob_trade_dn_vol:    0.0,
+            clob_trade_count_up: 0,
+            clob_trade_count_dn: 0,
             od83_event:            String::new(),
             od83_filters:          0,
             od83_up_mode:           String::new(),
@@ -181,7 +185,7 @@ impl CsvRecord {
         "bid,ask,mid,spread,bid_vol,ask_vol,imbalance,",
         "spoof,tick_gap_ms,ask_wall,dump_score,reversal_score,secs_left,",
         "poly_liquidity_delta,",
-        "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,od83_filters,",
+        "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,clob_trade_count_up,clob_trade_count_dn,od83_filters,",
         "od83_up,od83_up_entry,od83_up_sz,od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,",
         "od83_dn,od83_dn_entry,od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,",
         "od83_event,od83_up_mode,od83_dn_mode,",
@@ -221,11 +225,13 @@ impl CsvRecord {
         f.push(self.pnr_seconds_left.to_string());
         // ── FASE 4: MICRO (1) ──
         f.push(self.poly_liquidity_delta.to_string());
-        // ── FASE 5: TRIGGER (5) ──
+        // ── FASE 5: TRIGGER (7) ──
         f.push(self.clob_trade_up.to_string());
         f.push(self.clob_trade_dn.to_string());
         f.push(self.clob_trade_up_vol.to_string());
         f.push(self.clob_trade_dn_vol.to_string());
+        f.push(self.clob_trade_count_up.to_string());
+        f.push(self.clob_trade_count_dn.to_string());
         f.push(self.od83_filters.to_string());
         // ── FASE 6: ODISEO UP (7) ──
         f.push(self.odiseo83_up_active.to_string());

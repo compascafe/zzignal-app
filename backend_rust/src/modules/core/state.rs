@@ -34,10 +34,10 @@ pub struct AppState {
     pub btc_price:       RwLock<Option<f64>>,
     pub btc_volume:      RwLock<f64>,
     pub btc_open:        RwLock<Option<f64>>,
-    pub last_trade_up:   RwLock<Option<f64>>,
-    pub last_trade_down: RwLock<Option<f64>>,
-    pub last_trade_up_size:   RwLock<f64>,
-    pub last_trade_down_size: RwLock<f64>,
+    pub trade_window_up:   RwLock<VecDeque<(f64,f64)>>, // (price, size) — last N UP trades with vol>=min_vol
+    pub trade_window_dn:   RwLock<VecDeque<(f64,f64)>>, // last N DOWN trades
+    pub trade_min_vol:   RwLock<f64>,   // minimum trade size to qualify (default 50)
+    pub trade_window_n:  RwLock<usize>, // max trades to keep in window (default 10)
     pub open_orders:     RwLock<Vec<OpenOrder>>,
     pub recent_fills:    RwLock<Vec<RecentFill>>,
     pub candles:         RwLock<Vec<Candle>>,
@@ -139,10 +139,10 @@ impl AppState {
             btc_price:         RwLock::new(None),
             btc_volume:        RwLock::new(0.0),
             btc_open:          RwLock::new(None),
-            last_trade_up:     RwLock::new(None),
-            last_trade_down:   RwLock::new(None),
-            last_trade_up_size:   RwLock::new(0.0),
-            last_trade_down_size: RwLock::new(0.0),
+            trade_window_up:   RwLock::new(VecDeque::with_capacity(10)),
+            trade_window_dn:   RwLock::new(VecDeque::with_capacity(10)),
+            trade_min_vol:     RwLock::new(50.0),
+            trade_window_n:    RwLock::new(10),
             open_orders:       RwLock::new(vec![]),
             recent_fills:      RwLock::new(vec![]),
             candles:           RwLock::new(vec![]),

@@ -253,8 +253,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         state3.recording_sessions.write().await.push(child_id);
                         state3.session_manager.start_session(child_id).ok();
                         // Reset trade prices to avoid stale triggers from previous session
-                        *state3.last_trade_up.write().await = None;
-                        *state3.last_trade_down.write().await = None;
+                        state3.trade_window_up.write().await.clear();
+                        state3.trade_window_dn.write().await.clear();
                         state3.adaptive_engine.lock().await.reset_session_warmup();
                         session_repo::start_session_recording(&state3, child_id, btc_price).await.ok();
                         info!("Auto-started indefinite session: parent #{}, child #{} ({})", parent_id, child_id, child_name);
@@ -475,8 +475,24 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             capture_book_db(state, "down", &b.bids, &b.asks).await;
         }
 
-        AppMsg::LastTradeUp { price, size }   => { *state.last_trade_up.write().await   = Some(*price); *state.last_trade_up_size.write().await = *size; }
-        AppMsg::LastTradeDown { price, size } => { *state.last_trade_down.write().await  = Some(*price); *state.last_trade_down_size.write().await = *size; }
+        AppMsg::LastTradeUp { price, size }   => {
+            let min_vol = *state.trade_min_vol.read().await;
+            if *size >= min_vol {
+                let mut window = state.trade_window_up.write().await;
+                window.push_back((*price, *size));
+                let max_n = *state.trade_window_n.read().await;
+                while window.len() > max_n { window.pop_front(); }
+            }
+        }
+        AppMsg::LastTradeDown { price, size } => {
+            let min_vol = *state.trade_min_vol.read().await;
+            if *size >= min_vol {
+                let mut window = state.trade_window_dn.write().await;
+                window.push_back((*price, *size));
+                let max_n = *state.trade_window_n.read().await;
+                while window.len() > max_n { window.pop_front(); }
+            }
+        }
         AppMsg::Balance(b)       => { *state.balance.write().await          = Some(*b); }
         AppMsg::BtcOpen(p)       => { *state.btc_open.write().await         = Some(*p); }
 
@@ -656,14 +672,22 @@ async fn capture_combined(
 
     let t_start = std::time::Instant::now();
 
-    // ─── Last Trade Prices (para tracking de evolución real en CSV) ──────
+    // ─── Trade Window Prices (average of last N qualifying trades) ──────
     {
-        let lt_up = state.last_trade_up.read().await;
-        let lt_down = state.last_trade_down.read().await;
-        rec.clob_trade_up = lt_up.unwrap_or(0.0);
-        rec.clob_trade_dn = lt_down.unwrap_or(0.0);
-        rec.clob_trade_up_vol = *state.last_trade_up_size.read().await;
-        rec.clob_trade_dn_vol = *state.last_trade_down_size.read().await;
+        let window_up = state.trade_window_up.read().await;
+        let window_dn = state.trade_window_dn.read().await;
+        if !window_up.is_empty() {
+            let total: f64 = window_up.iter().map(|(p,_)| p).sum();
+            rec.clob_trade_up = total / window_up.len() as f64;
+            rec.clob_trade_up_vol = window_up.iter().map(|(_,s)| s).sum();
+            rec.clob_trade_count_up = window_up.len() as u16;
+        }
+        if !window_dn.is_empty() {
+            let total: f64 = window_dn.iter().map(|(p,_)| p).sum();
+            rec.clob_trade_dn = total / window_dn.len() as f64;
+            rec.clob_trade_dn_vol = window_dn.iter().map(|(_,s)| s).sum();
+            rec.clob_trade_count_dn = window_dn.len() as u16;
+        }
     }
 
     // ─── ESTRATEGIAS — solo en modo normal ────────────────────────────────
@@ -680,10 +704,12 @@ async fn capture_combined(
         }
     } // end diagnostic_mode guard — solo Odiseo corre fuera
 
-    // ─── Odiseo Trading v4 (last-trade + anti-whale limit-buy) ──────────
+    // ─── Odiseo Trading v4 (trade window average + anti-whale limit-buy) ─
     {
-        let lt_up = *state.last_trade_up.read().await;
-        let lt_down = *state.last_trade_down.read().await;
+        let wu = state.trade_window_up.read().await;
+        let wd = state.trade_window_dn.read().await;
+        let lt_up = if !wu.is_empty() { Some(wu.iter().map(|(p,_)| p).sum::<f64>() / wu.len() as f64) } else { None };
+        let lt_down = if !wd.is_empty() { Some(wd.iter().map(|(p,_)| p).sum::<f64>() / wd.len() as f64) } else { None };
 
         let filter_ctx = FilterContext {
             px: 0.0, is_up: true, // overwritten per-direction in process()
