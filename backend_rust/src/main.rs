@@ -795,6 +795,38 @@ async fn capture_combined(
                     else if rec.ask_wall == 1 { 2 }
                     else if rec.tick_gap_ms > 500 { 1 }
                     else { 0 };
+
+        // imbalance: 3-tick rolling average (smooths UP/DOWN book alternation)
+        {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static IMB_SUM: AtomicU64 = AtomicU64::new(0);
+            static IMB_COUNT: AtomicU64 = AtomicU64::new(0);
+            let bits = rec.poly_imbalance.to_bits();
+            let prev_sum = IMB_SUM.fetch_add(bits, Ordering::Relaxed);
+            let count = IMB_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if count >= 3 {
+                let avg_bits = (prev_sum + bits) / 3;
+                rec.poly_imbalance = f64::from_bits(avg_bits);
+                IMB_SUM.store(avg_bits * 3, Ordering::Relaxed);
+                IMB_COUNT.store(2, Ordering::Relaxed);
+            } else {
+                // Use previous average until we have 3 values
+                rec.poly_imbalance = if count > 1 { f64::from_bits(prev_sum / count) } else { rec.poly_imbalance };
+            }
+        }
+
+        // spoof with hysteresis: only trigger after 3+ consecutive ticks
+        {
+            use std::sync::atomic::AtomicU8;
+            static SPOOF_COUNT: AtomicU8 = AtomicU8::new(0);
+            if rec.spoofing_flag == 1 {
+                let c = SPOOF_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                rec.spoofing_flag = if c >= 3 { 1 } else { 0 };
+            } else {
+                SPOOF_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+                rec.spoofing_flag = 0;
+            }
+        }
     }
 
     // ─── Odiseo 83 Timing + Anti-Reversion ─────────────────────────────
