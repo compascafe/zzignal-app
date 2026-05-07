@@ -69,6 +69,7 @@ pub struct CsvRecord {
     pub binance_imbalance:   f32,
     pub binance_vol_100ms:   f64,
     pub binance_vol_24h:     f64,
+    pub btc_vol:             f64,   // real-time BTC volume from Binance aggTrade
     pub poly_bid:            f64,
     pub poly_ask:            f64,
     pub poly_mid:            f64,
@@ -132,6 +133,7 @@ pub struct CsvRecord {
     pub clob_trade_dn_vol:     f64,   // volumen del último trade CLOB DOWN
     pub clob_trade_up_ts:      String,// timestamp HH:MM:SS.mmm último trade UP
     pub clob_trade_dn_ts:      String,// timestamp HH:MM:SS.mmm último trade DOWN
+    pub od83_event:            String, // IN_UP|IN_DN|OUT_UP|OUT_DN|empty — Odiseo 83 entry/exit marker
     // ─── Odiseo 83 Timing ────────────────────────────────────────────────
     pub od83_up_mode:           String, // PAPER | LIVE
     pub od83_dn_mode:           String, // PAPER | LIVE
@@ -209,6 +211,7 @@ impl Default for CsvRecord {
             clob_trade_dn_vol:    0.0,
             clob_trade_up_ts:     String::new(),
             clob_trade_dn_ts:     String::new(),
+            od83_event:            String::new(),
             od83_up_mode:           String::new(),
             od83_dn_mode:           String::new(),
             od83_up_at:             String::new(),
@@ -234,7 +237,7 @@ impl CsvRecord {
     /// Column names in exact order matching `to_csv_fields()`.
             pub fn csv_header() -> &'static str {
         "time,ts_exchange,event,latencia_ms,binance_price,binance_micro_price,\
-         binance_imbalance,binance_vol_100ms,binance_vol_24h,bid,ask,mid,spread,\
+         binance_imbalance,binance_vol_100ms,binance_vol_24h,btc_vol,bid,ask,mid,spread,\
          bid_vol,ask_vol,imbalance,trades_per_second,btc_vel,\
          poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoof,tape,gap,\
          pnr_active,secs_left,pnr_price,pnr_return_up,pnr_return_down,\
@@ -259,6 +262,7 @@ impl CsvRecord {
         f.push(self.binance_imbalance.to_string());
         f.push(self.binance_vol_100ms.to_string());
         f.push(self.binance_vol_24h.to_string());
+        f.push(self.btc_vol.to_string());
         f.push(self.poly_bid.to_string());
         f.push(self.poly_ask.to_string());
         f.push(self.poly_mid.to_string());
@@ -312,6 +316,7 @@ impl CsvRecord {
         f.push(self.clob_trade_dn_vol.to_string());
         f.push(self.clob_trade_up_ts.clone());
         f.push(self.clob_trade_dn_ts.clone());
+        f.push(self.od83_event.clone());
         f.push(self.od83_up_mode.clone());
         f.push(self.od83_dn_mode.clone());
         f.push(self.od83_up_at.clone());

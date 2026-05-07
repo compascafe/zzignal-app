@@ -856,8 +856,10 @@ async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>)
     };
 
     let bal = s.balance.read().await;
-    let amount = bal.unwrap_or(0.0) * 0.99;
-    let amount = if amount > 1.0 { amount } else { 1.0 };
+    let usdc = bal.unwrap_or(0.0);
+    // For SELL: amount = number of shares/contracts (not USDC).
+    // Estimate: assume average entry ~0.50, so contracts = USDC / 0.5, with buffer.
+    let shares = if usdc > 0.0 { (usdc * 2.5).max(10.0) } else { 10.0 };
 
     for outcome in &outcomes {
         let outcome_enum = match *outcome {
@@ -865,11 +867,11 @@ async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>)
             "down" => Outcome::Down,
             _      => continue,
         };
-        info!("  Market SELL {outcome} × ${amount:.2}");
+        info!("  Market SELL {outcome} × {shares:.0} shares");
         let _ = s.cmd_tx.send(CmdMsg::PlaceMarketOrder {
             side: OrderSide::Sell,
             outcome: outcome_enum,
-            amount_usdc: amount,
+            amount_usdc: shares,
         });
     }
 

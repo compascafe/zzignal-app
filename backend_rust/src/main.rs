@@ -481,6 +481,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
 
         AppMsg::BtcTick { price, volume, event_time } => {
             *state.btc_price.write().await = Some(*price);
+            *state.btc_volume.write().await = *volume;
             // Tracking: volumen deslizante + detección de big move
             state.tracking_state.push_volume(*event_time, *volume);
             state.tracking_state.track_price(*price, *event_time);
@@ -702,8 +703,16 @@ async fn capture_combined(
         rec.odiseo_signal = odiseo_signal;
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
             match code.as_str() {
-                "odiseo83_up"   => { rec.odiseo83_up_active = active; rec.odiseo83_up_entry_price = entry; rec.odiseo83_up_size = size; rec.odiseo83_up_pnl = pnl; rec.odiseo83_up_exit_price = exit_price; rec.odiseo83_up_exit_reason = exit_reason; rec.odiseo83_up_balance = balance; }
-                "odiseo83_down" => { rec.odiseo83_down_active = active; rec.odiseo83_down_entry_price = entry; rec.odiseo83_down_size = size; rec.odiseo83_down_pnl = pnl; rec.odiseo83_down_exit_price = exit_price; rec.odiseo83_down_exit_reason = exit_reason; rec.odiseo83_down_balance = balance; }
+                "odiseo83_up"   => { 
+                    if rec.odiseo83_up_active == 0 && active == 2 { rec.od83_event = "IN_UP".into(); }
+                    else if rec.odiseo83_up_active == 2 && active == 0 && exit_reason > 0 { rec.od83_event = "OUT_UP".into(); }
+                    rec.odiseo83_up_active = active; rec.odiseo83_up_entry_price = entry; rec.odiseo83_up_size = size; rec.odiseo83_up_pnl = pnl; rec.odiseo83_up_exit_price = exit_price; rec.odiseo83_up_exit_reason = exit_reason; rec.odiseo83_up_balance = balance;
+                }
+                "odiseo83_down" => {
+                    if rec.odiseo83_down_active == 0 && active == 2 { rec.od83_event = "IN_DN".into(); }
+                    else if rec.odiseo83_down_active == 2 && active == 0 && exit_reason > 0 { rec.od83_event = "OUT_DN".into(); }
+                    rec.odiseo83_down_active = active; rec.odiseo83_down_entry_price = entry; rec.odiseo83_down_size = size; rec.odiseo83_down_pnl = pnl; rec.odiseo83_down_exit_price = exit_price; rec.odiseo83_down_exit_reason = exit_reason; rec.odiseo83_down_balance = balance;
+                }
                 _ => {}
             }
         }
@@ -764,6 +773,7 @@ async fn capture_combined(
         rec.live_usdc_balance = state.balance.read().await.unwrap_or(0.0);
         rec.odiseo83_up_live_pnl = state.odiseo_trading.get_total_pnl("odiseo83");
         rec.odiseo83_down_live_pnl = 0.0;
+        rec.btc_vol = *state.btc_volume.read().await;
     }
 
     // ─── Perf: processing time (micros) ──────────────────────────────────
