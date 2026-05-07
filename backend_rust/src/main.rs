@@ -707,7 +707,7 @@ async fn capture_combined(
             trade_dn: lt_down,
         };
 
-        let (odiseo_trades, odiseo_signal) = state.odiseo_trading.on_tick(
+        let (odiseo_trades, _odiseo_signal) = state.odiseo_trading.on_tick(
             active_sid,
             state.t5_manager.seconds_left(active_sid) as i32,
             rec.poly_bid_vol_all, rec.poly_ask_vol_all,
@@ -715,7 +715,6 @@ async fn capture_combined(
             lt_up, lt_down,
             &filter_ctx,
         );
-        rec.odiseo_signal = odiseo_signal;
         rec.od83_filters = state.odiseo_trading.filter_chain.enabled_mask();
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
             match code.as_str() {
@@ -770,8 +769,6 @@ async fn capture_combined(
                 rec.od83_up_at = rec.ts_local.clone();
             }
             rec.mid_from_entry = rec.poly_mid - rec.odiseo83_up_entry_price;
-        } else if rec.odiseo83_up_active == 0 && rec.odiseo83_up_exit_reason > 0 {
-            rec.od83_up_fill_ms = 0; // paper = instant
         }
 
         // DOWN side
@@ -781,19 +778,13 @@ async fn capture_combined(
                 rec.od83_dn_at = rec.ts_local.clone();
             }
             rec.mid_from_entry = if rec.poly_mid > 0.0 { rec.odiseo83_down_entry_price - rec.poly_mid } else { 0.0 };
-        } else if rec.odiseo83_down_active == 0 && rec.odiseo83_down_exit_reason > 0 {
-            rec.od83_dn_fill_ms = 0;
         }
 
-        rec.btc_delta = 0.0;
         rec.reversal_score = 0;
     }
 
-    // ─── LIVE money trace: real USDC balance + Odiseo 83 live PnL ────────
+    // ─── LIVE money trace: real-time BTC volume ────────
     {
-        rec.live_usdc_balance = state.balance.read().await.unwrap_or(0.0);
-        rec.odiseo83_up_live_pnl = state.odiseo_trading.get_total_pnl("odiseo83");
-        rec.odiseo83_down_live_pnl = 0.0;
         rec.btc_vol = *state.btc_volume.read().await;
     }
 

@@ -470,7 +470,7 @@ pub fn build_book_update(
     let price_vel    = tracking.price_velocity(ring, now.timestamp_millis(), bb_mid);
     let (liq_delta, spoof_flag) = compute_liquidity_delta(pb_ask_vol, tracking, false);
     let (gap_pct, gap_flag)     = compute_price_gap(bb_mid, pb_mid, tracking);
-    let tape_flag    = check_volume_spike(bn_vol_100, tracking, pb_sprd);
+    let _tape_flag   = check_volume_spike(bn_vol_100, tracking, pb_sprd);
     if gap_flag > 0 { check_gap_alert(gap_pct); }
 
     // ─── Bollinger Bands & Signals ────────────────────────────────────────
@@ -529,10 +529,7 @@ pub fn build_book_update(
         poly_imbalance:      if pb_imb.is_finite() { pb_imb } else { 0.0 },
         price_velocity:      price_vel,
         poly_liquidity_delta: liq_delta,
-        price_gap_ratio:     gap_pct,
         spoofing_flag:       spoof_flag,
-        tape_speed_flag:     tape_flag,
-        gap_alert_flag:      gap_flag,
         ..Default::default()
     }
 }
@@ -593,7 +590,7 @@ pub fn build_binance_tick(
         if total > 0.0 { ((bb_bid_vol_20 - bb_ask_vol_20) / total) as f32 } else { 0.0 }
     };
 
-    let bb_vol_100 = tracking.vol_100ms(now.timestamp_millis());
+    let _bb_vol_100 = tracking.vol_100ms(now.timestamp_millis());
     CsvRecord {
         ts_local:            ts_str,
         ts_exchange:         tick_ts.to_string(),
@@ -603,7 +600,6 @@ pub fn build_binance_tick(
         binance_imbalance:   bb_imb,
         binance_vol_24h:     binance.btc_volume_24h,
         price_velocity:      tracking.price_velocity(ring, now.timestamp_millis(), bb_mid),
-        tape_speed_flag:     check_volume_spike(bb_vol_100, tracking, 0.0),
         ..Default::default()
     }
 }
