@@ -702,7 +702,6 @@ async fn capture_combined(
             tick_gap_ms: rec.tick_gap_ms,
             spoof: rec.spoofing_flag,
             ask_wall: rec.ask_wall,
-            bid_drain: 0.0,
             trade_up: lt_up,
             trade_dn: lt_down,
         };

@@ -57,7 +57,6 @@ pub struct FilterContext {
     pub tick_gap_ms:       i64,  // ms desde último tick
     pub spoof:             u8,   // 1 = posible spoof detectado
     pub ask_wall:          u8,   // 1 = ask_vol > 3x bid_vol
-    pub bid_drain:         f64,  // % bid vol perdido vs 5 ticks atrás
 
     // ── CLOB Last Trade ──
     pub trade_up:          Option<f64>, // último precio trade UP
