@@ -305,7 +305,7 @@ async fn process_sessions(state: Arc<AppState>) {
         }
 
         // New session: truncate and write fresh header
-        if let Err(e) = state.session_manager.start_session(session.id) {
+        if let Err(e) = state.session_manager.start_session(session.id, &session.name) {
             warn!("SessionManager start #{}: {}", session.id, e);
         }
 

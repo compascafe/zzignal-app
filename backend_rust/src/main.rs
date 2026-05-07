@@ -251,7 +251,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let child_name = crate::modules::db::api::child_session_name(child_start, chunk_min);
                     if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
                         state3.recording_sessions.write().await.push(child_id);
-                        state3.session_manager.start_session(child_id).ok();
+                        state3.session_manager.start_session(child_id, &child_name).ok();
                         // Reset trade prices to avoid stale triggers from previous session
                         state3.trade_window_up.write().await.clear();
                         state3.trade_window_dn.write().await.clear();

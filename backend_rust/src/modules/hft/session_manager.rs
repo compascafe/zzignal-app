@@ -159,11 +159,12 @@ struct SessionWriter {
 }
 
 /// Manages per-session CSV file isolation with MULTIPLE concurrent writers.
-/// Each session gets its own file: `{data_dir}/session_{id:04}_hft.csv`.
+/// Each session gets its own file: `{data_dir}/session_{id:04}_{name}_hft.csv`.
 /// Sessions are fully isolated — writing to one never closes another.
 pub struct SessionManager {
     writers:  Mutex<HashMap<i32, SessionWriter>>,
     data_dir: String,
+    names:    Mutex<HashMap<i32, String>>,
 }
 
 impl SessionManager {
@@ -172,12 +173,18 @@ impl SessionManager {
         Self {
             writers:  Mutex::new(HashMap::new()),
             data_dir: data_dir.to_string(),
+            names:    Mutex::new(HashMap::new()),
         }
     }
 
     /// Start a new session writer. Does NOT close other sessions' writers.
-    pub fn start_session(&self, session_id: i32) -> Result<(), String> {
-        let path = format!("{}/session_{:04}_hft.csv", self.data_dir, session_id);
+    pub fn start_session(&self, session_id: i32, name: &str) -> Result<(), String> {
+        let path = if name.is_empty() {
+            format!("{}/session_{:04}_hft.csv", self.data_dir, session_id)
+        } else {
+            format!("{}/session_{:04}_{}_hft.csv", self.data_dir, session_id, name)
+        };
+        self.names.lock().unwrap().insert(session_id, name.to_string());
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -350,7 +357,12 @@ impl SessionManager {
     }
 
     pub fn session_path(&self, session_id: i32) -> String {
-        format!("{}/session_{:04}_hft.csv", self.data_dir, session_id)
+        let name = self.names.lock().unwrap().get(&session_id).cloned().unwrap_or_default();
+        if name.is_empty() {
+            format!("{}/session_{:04}_hft.csv", self.data_dir, session_id)
+        } else {
+            format!("{}/session_{:04}_{}_hft.csv", self.data_dir, session_id, name)
+        }
     }
 
     pub fn current_path(&self, session_id: i32) -> Option<String> {

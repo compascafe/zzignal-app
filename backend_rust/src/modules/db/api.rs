@@ -273,7 +273,7 @@ async fn start_session(
 
         // 5. Start child immediately
         s.recording_sessions.write().await.push(child_id);
-        if let Err(e) = s.session_manager.start_session(child_id) {
+        if let Err(e) = s.session_manager.start_session(child_id, &child_name) {
             warn!("SessionManager start child #{}: {}", child_id, e);
         }
         if let Err(e) = repository::start_session_recording(&s, child_id, btc_price).await {
