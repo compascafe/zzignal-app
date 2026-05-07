@@ -80,6 +80,7 @@ pub struct CsvRecord {
     // ─── Advanced HFT Metrics ────────────────────────────────────────────
     pub price_velocity:       f64,  // Δprice/Δtime over 500ms window (USD/s)
     pub btc_acel:             f64,  // Δvelocity/Δtime (USD/s²) — price acceleration
+    pub btc_vol_ratio:        f64,  // btc_vol / (bid_vol+ask_vol) — real vs resting liquidity
     pub poly_liquidity_delta: f64,  // Δpoly_ask_vol_all vs previous tick
     pub spoofing_flag:        u8,   // 1 = >30% vol drop with no poly trade
     pub pnr_seconds_left:       i32,   // seconds until session close
@@ -120,7 +121,6 @@ pub struct CsvRecord {
     pub dump_score:             u8,     // 0=normal 1=warning 2=critical 3=dead
     // ─── Anti-Reversion ───────────────────────────────────────────────────
     pub mid_from_entry:         f64,    // poly_mid - entry_price (distance from entry)
-    pub reversal_score:         u8,     // 0=safe 1=alert 2=danger 3=exit
 }
 
 impl Default for CsvRecord {
@@ -144,6 +144,7 @@ impl Default for CsvRecord {
             session_id:          0,
             price_velocity:       0.0,
             btc_acel:             0.0,
+            btc_vol_ratio:        0.0,
             poly_liquidity_delta: 0.0,
             spoofing_flag:        0,
             pnr_seconds_left:       0,
@@ -169,7 +170,6 @@ impl Default for CsvRecord {
             ask_wall:               0,
             dump_score:             0,
             mid_from_entry:         0.0,
-            reversal_score:         0,
         }
     }
 }
@@ -181,9 +181,9 @@ impl CsvRecord {
             pub fn csv_header() -> &'static str {
         concat!(
         "time,ts_exchange,event,latencia_ms,",
-        "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,",
+        "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,btc_vol_ratio,",
         "bid,ask,mid,spread,bid_vol,ask_vol,imbalance,",
-        "spoof,tick_gap_ms,ask_wall,dump_score,reversal_score,secs_left,",
+        "spoof,tick_gap_ms,ask_wall,dump_score,secs_left,",
         "poly_liquidity_delta,",
         "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,clob_trade_count_up,clob_trade_count_dn,od83_filters,",
         "od83_up,od83_up_entry,od83_up_sz,od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,",
@@ -201,13 +201,14 @@ impl CsvRecord {
         f.push(self.ts_exchange.clone());
         f.push(self.event_type.as_str().to_string());
         f.push(self.latencia_ms.to_string());
-        // ── FASE 1: MERCADO BTC (6) ──
+        // ── FASE 1: MERCADO BTC (7) ──
         f.push(self.binance_price.to_string());
         f.push(self.binance_imbalance.to_string());
         f.push(self.binance_vol_24h.to_string());
         f.push(self.btc_vol.to_string());
         f.push(self.price_velocity.to_string());
         f.push(self.btc_acel.to_string());
+        f.push(self.btc_vol_ratio.to_string());
         // ── FASE 2: ORDER BOOK (7) ──
         f.push(self.poly_bid.to_string());
         f.push(self.poly_ask.to_string());
@@ -221,7 +222,6 @@ impl CsvRecord {
         f.push(self.tick_gap_ms.to_string());
         f.push(self.ask_wall.to_string());
         f.push(self.dump_score.to_string());
-        f.push(self.reversal_score.to_string());
         f.push(self.pnr_seconds_left.to_string());
         // ── FASE 4: MICRO (1) ──
         f.push(self.poly_liquidity_delta.to_string());

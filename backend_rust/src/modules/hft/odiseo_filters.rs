@@ -53,7 +53,6 @@ pub struct FilterContext {
 
     // ── Risk Signals ──
     pub dump_score:        u8,   // 0=safe 1=warning 2=critical 3=dead
-    pub reversal_score:    u8,   // 0=safe 1=alert 2=danger 3=exit
     pub tick_gap_ms:       i64,  // ms desde último tick
     pub spoof:             u8,   // 1 = posible spoof detectado
     pub ask_wall:          u8,   // 1 = ask_vol > 3x bid_vol
@@ -205,9 +204,9 @@ impl FilterChain {
                 FilterResult::Pass => continue,
                 FilterResult::Block { reason } => {
                     info!(
-                        "[Odiseo] #{} {} BLOCKED by {}: {} (px={:.4} spread={:.4} dump={} rev={} gap={}ms)",
+                        "[Odiseo] #{} {} BLOCKED by {}: {} (px={:.4} spread={:.4} dump={} gap={}ms)",
                         session_id, variant, name, reason,
-                        ctx.px, ctx.spread, ctx.dump_score, ctx.reversal_score, ctx.tick_gap_ms
+                        ctx.px, ctx.spread, ctx.dump_score, ctx.tick_gap_ms
                     );
                     return FilterResult::Block { reason: format!("[{}] {}", name, reason) };
                 }
@@ -325,18 +324,13 @@ impl OdiseoEntryFilter for BtcTrendConfirmFilter {
     }
 }
 
-// ─── F6: ReversalRiskFilter ───────────────────────────────────────────────
-/// Bloquea entrada si el riesgo de reversión de tendencia es alto.
-/// reversal_score: 0=safe, 1=alert, 2=danger, 3=exit
+// ─── F6: ReversalRiskFilter (disabled — reversal_score not yet implemented) ──
+/// Placeholder filter — always passes until reversal_score is re-implemented.
 pub struct ReversalRiskFilter { pub max_reversal: u8 }
 impl OdiseoEntryFilter for ReversalRiskFilter {
     fn name(&self) -> &'static str { "reversal_risk" }
-    fn check(&self, ctx: &FilterContext) -> FilterResult {
-        if ctx.reversal_score >= self.max_reversal {
-            return FilterResult::block(format!(
-                "reversal risk (score={} >= {})", ctx.reversal_score, self.max_reversal
-            ));
-        }
+    fn check(&self, _ctx: &FilterContext) -> FilterResult {
+        // TODO: re-enable when reversal_score is implemented with btc_vel direction change
         FilterResult::Pass
     }
 }

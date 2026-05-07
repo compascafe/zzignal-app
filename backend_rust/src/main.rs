@@ -727,7 +727,6 @@ async fn capture_combined(
             ask_vol: rec.poly_ask_vol_all,
             imbalance: rec.poly_imbalance,
             dump_score: rec.dump_score,
-            reversal_score: rec.reversal_score,
             tick_gap_ms: rec.tick_gap_ms,
             spoof: rec.spoofing_flag,
             ask_wall: rec.ask_wall,
@@ -775,6 +774,12 @@ async fn capture_combined(
             let prev_vel = *state.prev_btc_vel.read().await;
             rec.btc_acel = (rec.price_velocity - prev_vel) / dt_secs;
             *state.prev_btc_vel.write().await = rec.price_velocity;
+        }
+
+        // BTC volume ratio: real trading vs resting liquidity
+        {
+            let ob_vol = rec.poly_bid_vol_all + rec.poly_ask_vol_all;
+            rec.btc_vol_ratio = if ob_vol > 0.0 { rec.btc_vol / ob_vol } else { 0.0 };
         }
 
         // ask_wall with hysteresis: only trigger after 3+ consecutive ticks
@@ -852,7 +857,6 @@ async fn capture_combined(
             rec.mid_from_entry = if rec.poly_mid > 0.0 { rec.odiseo83_down_entry_price - rec.poly_mid } else { 0.0 };
         }
 
-        rec.reversal_score = 0;
     }
 
     // ─── LIVE money trace: real-time BTC volume ────────
