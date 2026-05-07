@@ -537,19 +537,6 @@ pub fn build_book_update(
         spoofing_flag:       spoof_flag,
         tape_speed_flag:     tape_flag,
         gap_alert_flag:      gap_flag,
-        bollinger_sma:       bb_sma,
-        bollinger_upper:     bb_upper,
-        bollinger_lower:     bb_lower,
-        mean_reversion_signal: mr_signal,
-        technical_confluence:  tc_signal.max(mr_signal.min(1)),
-        trend_direction:     trend_dir,
-        signal_label:        signal_label,
-        realized_volatility: realized_vol,
-        high_volatility_event: high_vol,
-        bollinger_position:  bb_pos,
-        master_signal:       master_sig,
-        cp_uncertainty_range: cp_range,
-        cp_valid_signal:     cp_valid,
         ..Default::default()
     }
 }

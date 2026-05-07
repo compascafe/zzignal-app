@@ -207,45 +207,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     { let _g = perf::TRACK_PRICE.start(); tracking_state.track_price(tick.price, tick.event_time); }
                     { let _g = perf::RECORD_TRADE.start(); tracking_state.record_binance_trade(tick.event_time); }
                     { let _g = perf::RECORD_SAMPLE.start(); tracking_state.record_price_sample(tick.event_time, tick.price); }
-                    { let _g = perf::PUSH_BOLLINGER.start(); tracking_state.push_bollinger_price(tick.price); }
                     let mut rec = { let _g = perf::BUILD_TICK.start();
                         metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume)
                     };
                     rec.session_id = tick_state.recording_sessions.read().await.last().copied().unwrap_or(0);
-                    // ─── Adaptive Risk Engine: macro fields + master signal ───────
-                    {
-                        let _g = perf::ENGINE_LOCK.start();
-                        let mut eng = tick_state.adaptive_engine.lock().await;
-                        rec.macro_slope = eng.macro_slope();
-                        rec.vfi_value = eng.vfi_value();
-                        rec.macd_hist = eng.macd_hist();
-                        rec.predicted_bias = eng.predicted_bias().to_string();
-                        rec.is_feedback_adjusted = eng.feedback_adjusted();
-                        let is_fb = rec.is_feedback_adjusted > 0;
-                        let (master, cp_range, cp_valid) = { let _g2 = perf::EVAL_MASTER.start();
-                            eng.evaluate_master_signal(
-                                rec.binance_price, rec.poly_mid, rec.poly_spread,
-                                rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
-                                rec.poly_imbalance, rec.price_velocity,
-                                is_fb,
-                                tick.volume, tick.event_time,
-                                rec.tape_speed_flag, rec.absorption_ratio, rec.spoofing_flag,
-                            )
-                        };
-                        rec.master_signal = master;
-                        rec.cp_uncertainty_range = cp_range;
-                        rec.cp_valid_signal = cp_valid;
-                        // ─── Dynamic macro context (from shared state) ────────
-                        { let _g3 = perf::MACRO_CTX_WRITE.start();
-                            let mut ctx = tick_state.macro_ctx.write().await;
-                            eng.sync_to_context(&mut ctx);
-                            { let _g4 = perf::UPDATE_RSI.start(); eng.update_dynamic_rsi(&mut ctx, tick.price); }
-                            { let _g5 = perf::CHECK_MOMENTUM.start(); eng.check_momentum_trigger(&mut ctx); }
-                            rec.dynamic_rsi = ctx.dynamic_rsi;
-                            rec.vfi_confidence = ctx.vfi_confidence;
-                            rec.db_accuracy_factor = ctx.db_accuracy_factor;
-                        }
-                    }
                     { let _g = perf::SM_PUSH.start(); sm3.push(&rec); }
                 }
             }
@@ -693,34 +658,6 @@ async fn capture_combined(
 
     let t_start = std::time::Instant::now();
 
-    // ─── HEALTH SIGNALS: solo fuera de modo diagnóstico ──────────────────
-    if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
-        let mut eng = state.adaptive_engine.lock().await;
-        rec.macro_slope = eng.macro_slope();
-        rec.vfi_value = eng.vfi_value();
-        rec.macd_hist = eng.macd_hist();
-        rec.predicted_bias = eng.predicted_bias().to_string();
-        rec.is_feedback_adjusted = eng.feedback_adjusted();
-        let is_fb = rec.is_feedback_adjusted > 0;
-        let ts_now = chrono::Utc::now().timestamp_millis();
-        let (master, cp_range, cp_valid) = eng.evaluate_master_signal(
-            rec.binance_price, rec.poly_mid, rec.poly_spread,
-            rec.bollinger_sma, rec.bollinger_upper, rec.bollinger_lower,
-            rec.poly_imbalance, rec.price_velocity,
-            is_fb,
-            rec.binance_vol_100ms, ts_now,
-            rec.tape_speed_flag, rec.absorption_ratio, rec.spoofing_flag,
-        );
-        rec.master_signal = master;
-        rec.cp_uncertainty_range = cp_range;
-        rec.cp_valid_signal = cp_valid;
-    }
-    // ─── Dynamic macro context ────────────────────────────────────────────
-    let ctx = state.macro_ctx.read().await;
-    rec.dynamic_rsi = ctx.dynamic_rsi;
-    rec.vfi_confidence = ctx.vfi_confidence;
-    rec.db_accuracy_factor = ctx.db_accuracy_factor;
-
     // ─── Last Trade Prices (para tracking de evolución real en CSV) ──────
     {
         let lt_up = state.last_trade_up.read().await;
@@ -741,8 +678,7 @@ async fn capture_combined(
             rec.pnr_return_down = if rec.poly_bid > 0.0 { rec.poly_bid } else { 0.0 };
             rec.pnr_volatility_1m = rec.poly_liquidity_delta.abs();
             rec.pnr_confidence = ((rec.poly_mid - 0.5).abs() * 2.0).min(1.0);
-            rec.pnr_trend = if rec.predicted_bias.contains("UP") { 1 }
-                else if rec.predicted_bias.contains("DOWN") { -1 } else { 0 };
+            rec.pnr_trend = 0;
             rec.pnr_spread_pct = if rec.poly_mid > 0.0 { rec.poly_spread / rec.poly_mid } else { 0.0 };
             state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
                 rec.pnr_price, rec.pnr_return_up, rec.pnr_return_down);

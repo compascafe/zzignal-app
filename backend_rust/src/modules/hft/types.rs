@@ -105,31 +105,6 @@ pub struct CsvRecord {
     pub spoofing_flag:        u8,   // 1 = >30% vol drop with no poly trade
     pub tape_speed_flag:      u8,   // 1 = high volume spike detected
     pub gap_alert_flag:       u8,   // 1 = price gap > 0.05%
-    // ─── HFT Bollinger Bands & Confluence ─────────────────────────────────
-    pub bollinger_sma:         f64,   // SMA(200) of Binance mid prices
-    pub bollinger_upper:       f64,   // SMA + 2σ
-    pub bollinger_lower:       f64,   // SMA - 2σ
-    pub mean_reversion_signal: u8,    // 0=none, 1=Short (touch upper+neg imb), 2=Long (touch lower+pos imb)
-    pub technical_confluence:  u8,    // 1 = all confluence conditions met
-    pub trend_direction:       i8,    // -1=below SMA, 0=at SMA, 1=above SMA
-    pub signal_label:          String,// e.g. 'BOLLINGER_TOUCH', 'VOL_CONFLUENCE', 'GAP_ARBITRAGE', ''
-    // ─── Volatility & Master Signal ───────────────────────────────────────
-    pub realized_volatility:   f64,   // rolling std dev of last 200 binance prices (σ)
-    pub high_volatility_event: u8,    // 1 = current vol > 2x session average vol
-    pub bollinger_position:    i8,    // 1=above upper, -1=below lower, 0=inside bands
-    pub master_signal:         u8,    // 1=Buy (lower touch+imb>0.8+vel>0), 2=Sell (upper touch+imb<-0.8+vel<0)
-    // ─── Conformal Prediction Risk Validation ─────────────────────────────
-    pub cp_uncertainty_range:  f64,   // width of 95% confidence interval (USD)
-    pub cp_valid_signal:       u8,    // 1 = signal passes CP validation, 0 = blocked (too erratic)
-    // ─── Adaptive Risk Engine: Macro 24h + Feedback ───────────────────────
-    pub macro_slope:           f64,   // SMA200 slope via linear regression on last 50 points
-    pub vfi_value:             f64,   // Volume Flow Indicator (VFI) current value
-    pub macd_hist:             f64,   // MACD(3,10,16) histogram value
-    pub predicted_bias:        String,// "UP" or "DOWN" — initial bias from macro warm-up
-    pub is_feedback_adjusted:  u8,    // 1 = CP intervals widened due to low accuracy feedback
-    pub dynamic_rsi:            f64,   // Rolling RSI(14) updated each minute during session
-    pub vfi_confidence:         f64,   // VFI volume strength ratio (0-1 normalized)
-    pub db_accuracy_factor:     f64,   // Risk multiplier from historical memory (1.0 = neutral, >1 = widen)
     // ─── PNR: Point of No Return (last 5 min analysis) ─────────────────────
     pub pnr_active:             u8,    // 1 = inside last 300s window
     pub pnr_seconds_left:       i32,   // seconds until session close
@@ -391,27 +366,6 @@ impl Default for CsvRecord {
             spoofing_flag:        0,
             tape_speed_flag:      0,
             gap_alert_flag:       0,
-            bollinger_sma:        0.0,
-            bollinger_upper:      0.0,
-            bollinger_lower:      0.0,
-            mean_reversion_signal: 0,
-            technical_confluence:  0,
-            trend_direction:      0,
-            signal_label:         String::new(),
-            realized_volatility:   0.0,
-            high_volatility_event: 0,
-            bollinger_position:    0,
-            master_signal:         0,
-            cp_uncertainty_range:  0.0,
-            cp_valid_signal:       0,
-            macro_slope:           0.0,
-            vfi_value:             0.0,
-            macd_hist:             0.0,
-            predicted_bias:        String::new(),
-            is_feedback_adjusted:  0,
-            dynamic_rsi:           0.0,
-            vfi_confidence:        0.0,
-            db_accuracy_factor:    1.0,
             pnr_active:             0,
             pnr_seconds_left:       0,
             pnr_price:              0.0,
@@ -520,11 +474,6 @@ impl CsvRecord {
          liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,\
          trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
          price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
-         bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,\
-         technical_confluence,trend_direction,signal_label,realized_volatility,\
-         high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,\
-         cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,\
-         is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,\
          pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,\
          pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,\
          pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew,\
@@ -625,27 +574,6 @@ impl CsvRecord {
         f.push(self.spoofing_flag.to_string());
         f.push(self.tape_speed_flag.to_string());
         f.push(self.gap_alert_flag.to_string());
-        f.push(self.bollinger_sma.to_string());
-        f.push(self.bollinger_upper.to_string());
-        f.push(self.bollinger_lower.to_string());
-        f.push(self.mean_reversion_signal.to_string());
-        f.push(self.technical_confluence.to_string());
-        f.push(self.trend_direction.to_string());
-        f.push(self.signal_label.clone());
-        f.push(self.realized_volatility.to_string());
-        f.push(self.high_volatility_event.to_string());
-        f.push(self.bollinger_position.to_string());
-        f.push(self.master_signal.to_string());
-        f.push(self.cp_uncertainty_range.to_string());
-        f.push(self.cp_valid_signal.to_string());
-        f.push(self.macro_slope.to_string());
-        f.push(self.vfi_value.to_string());
-        f.push(self.macd_hist.to_string());
-        f.push(self.predicted_bias.clone());
-        f.push(self.is_feedback_adjusted.to_string());
-        f.push(self.dynamic_rsi.to_string());
-        f.push(self.vfi_confidence.to_string());
-        f.push(self.db_accuracy_factor.to_string());
         f.push(self.pnr_active.to_string());
         f.push(self.pnr_seconds_left.to_string());
         f.push(self.pnr_price.to_string());
