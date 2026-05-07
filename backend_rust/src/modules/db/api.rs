@@ -622,9 +622,7 @@ async fn build_fallback_csv(
                 ts: snap.ts,
                 event_type: "BOOK_UPDATE",
                 binance_price,
-                binance_micro_price: 0.0,
                 binance_imbalance: 0.0,
-                binance_vol_100ms: 0.0,
                 binance_vol_24h: 0.0,
                 poly_bid,
                 poly_ask,
@@ -653,9 +651,7 @@ async fn build_fallback_csv(
                 ts: t.ts,
                 event_type: "TRADE",
                 binance_price: t.btc_price.unwrap_or(0.0),
-                binance_micro_price: 0.0,
                 binance_imbalance: 0.0,
-                binance_vol_100ms: 0.0,
                 binance_vol_24h: 0.0,
                 poly_bid: 0.0,
                 poly_ask: 0.0,
@@ -697,9 +693,7 @@ async fn build_fallback_csv(
                     ts: r.ts,
                     event_type: "BOOK_UPDATE",
                     binance_price: r.btc_price_binance.unwrap_or(0.0),
-                    binance_micro_price: r.binance_micro_price_at_t.unwrap_or(0.0),
                     binance_imbalance: 0.0,
-                    binance_vol_100ms: 0.0,
                     binance_vol_24h: 0.0,
                     poly_bid: 0.0,
                     poly_ask: 0.0,
@@ -727,9 +721,7 @@ async fn build_fallback_csv(
                         .unwrap_or_else(|_| chrono::Utc::now()),
                     event_type: r.event_type.as_str(),
                     binance_price: r.binance_price,
-                    binance_micro_price: r.binance_micro_price,
                     binance_imbalance: r.binance_imbalance as f64,
-                    binance_vol_100ms: r.binance_vol_100ms,
                     binance_vol_24h: r.binance_vol_24h,
                     poly_bid: r.poly_bid,
                     poly_ask: r.poly_ask,
@@ -757,15 +749,15 @@ async fn build_fallback_csv(
 
     let mut data = String::new();
     // 61-column data header
-    data.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor\n");
+    data.push_str("ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_imbalance,binance_vol_24h,poly_bid,poly_ask,poly_mid,poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,bollinger_sma,bollinger_upper,bollinger_lower,mean_reversion_signal,technical_confluence,trend_direction,signal_label,realized_volatility,high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor\n");
 
     for r in &rows {
         let _ = writeln!(
             data,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             r.ts.to_rfc3339(), "", r.event_type,
-            r.latencia_ms, r.binance_price, r.binance_micro_price,
-            r.binance_imbalance, r.binance_vol_100ms, r.binance_vol_24h,
+            r.latencia_ms, r.binance_price,
+            r.binance_imbalance, r.binance_vol_24h,
             r.poly_bid, r.poly_ask, r.poly_mid, r.poly_spread,
             r.poly_bid_vol_all, r.poly_ask_vol_all, r.poly_imbalance,
             "N/A", "", 0.0, 0.0, 0.0, 0.0,
@@ -785,9 +777,7 @@ struct CsvFallbackRow {
     ts: chrono::DateTime<chrono::Utc>,
     event_type: &'static str,
     binance_price: f64,
-    binance_micro_price: f64,
     binance_imbalance: f64,
-    binance_vol_100ms: f64,
     binance_vol_24h: f64,
     poly_bid: f64,
     poly_ask: f64,

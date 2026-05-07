@@ -518,9 +518,7 @@ pub fn build_book_update(
         event_type:          EventType::BookUpdate,
         latencia_ms:         lag_ms,
         binance_price:       bb_mid,
-        binance_micro_price: mic_at_t,
         binance_imbalance:   bb_imb,
-        binance_vol_100ms:   bn_vol_100,
         binance_vol_24h:     binance.btc_volume_24h,
         poly_bid:            pb_bid,
         poly_ask:            pb_ask,
@@ -529,10 +527,8 @@ pub fn build_book_update(
         poly_bid_vol_all:    pb_bid_vol,
         poly_ask_vol_all:    pb_ask_vol,
         poly_imbalance:      if pb_imb.is_finite() { pb_imb } else { 0.0 },
-        trades_per_second:   trades_ps,
         price_velocity:      price_vel,
         poly_liquidity_delta: liq_delta,
-        absorption_ratio:    0.0,
         price_gap_ratio:     gap_pct,
         spoofing_flag:       spoof_flag,
         tape_speed_flag:     tape_flag,
@@ -563,9 +559,6 @@ pub fn build_trade_record(
     let (_delta, spoof) = compute_liquidity_delta(pb_ask_vol, tracking, true);
     rec.poly_liquidity_delta = _delta;
     rec.spoofing_flag = spoof;
-    rec.absorption_ratio = compute_absorption_ratio(
-        trade_size, pb_mid, tracking.last_poly_mid.lock().unwrap().clone(),
-    );
     // Store current state for next tick
     tracking.set_last_poly_ask_vol(pb_ask_vol);
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -607,11 +600,8 @@ pub fn build_binance_tick(
         event_type:          EventType::BinanceTick,
         latencia_ms:         now.timestamp_millis() - tick_ts,
         binance_price:       bb_mid,
-        binance_micro_price: bb_mic,
         binance_imbalance:   bb_imb,
-        binance_vol_100ms:   bb_vol_100,
         binance_vol_24h:     binance.btc_volume_24h,
-        trades_per_second:   tracking.trades_per_second(now.timestamp_millis()),
         price_velocity:      tracking.price_velocity(ring, now.timestamp_millis(), bb_mid),
         tape_speed_flag:     check_volume_spike(bb_vol_100, tracking, 0.0),
         ..Default::default()

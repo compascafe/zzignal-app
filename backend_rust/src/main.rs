@@ -649,14 +649,9 @@ async fn capture_combined(
         .unwrap_or(0);
     rec.session_id = active_sid;
 
-    // ─── Market Pressure: effective spread + pressure index + volume skew ──
+    // ─── Market Pressure: compute only (fields removed from CSV) ──────
     {
-        let pressure = analysis_metrics::compute_pressure(poly_bids, poly_asks, rec.poly_mid, 10.0);
-        rec.pressure_bid_floor   = pressure.bid_floor;
-        rec.pressure_ask_ceiling = pressure.ask_ceiling;
-        rec.pressure_band        = pressure.band;
-        rec.pressure_index       = pressure.index;
-        rec.pressure_skew        = pressure.skew;
+        let _pressure = analysis_metrics::compute_pressure(poly_bids, poly_asks, rec.poly_mid, 10.0);
     }
 
     let t_start = std::time::Instant::now();
@@ -677,16 +672,11 @@ async fn capture_combined(
         let secs_left = state.t5_manager.seconds_left(active_sid);
         rec.pnr_seconds_left = secs_left as i32;
         if secs_left >= 0 && secs_left <= 300 {
-            rec.pnr_active = 1;
-            rec.pnr_price = rec.poly_mid;
-            rec.pnr_return_up = if rec.poly_ask > 0.0 { 1.0 - rec.poly_ask } else { 0.0 };
-            rec.pnr_return_down = if rec.poly_bid > 0.0 { rec.poly_bid } else { 0.0 };
-            rec.pnr_volatility_1m = rec.poly_liquidity_delta.abs();
-            rec.pnr_confidence = ((rec.poly_mid - 0.5).abs() * 2.0).min(1.0);
-            rec.pnr_trend = 0;
-            rec.pnr_spread_pct = if rec.poly_mid > 0.0 { rec.poly_spread / rec.poly_mid } else { 0.0 };
+            let pnr_price = rec.poly_mid;
+            let pnr_ret_up = if rec.poly_ask > 0.0 { 1.0 - rec.poly_ask } else { 0.0 };
+            let pnr_ret_dn = if rec.poly_bid > 0.0 { rec.poly_bid } else { 0.0 };
             state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
-                rec.pnr_price, rec.pnr_return_up, rec.pnr_return_down);
+                pnr_price, pnr_ret_up, pnr_ret_dn);
         }
     } // end diagnostic_mode guard — solo Odiseo corre fuera
 
@@ -712,7 +702,7 @@ async fn capture_combined(
             tick_gap_ms: rec.tick_gap_ms,
             spoof: rec.spoofing_flag,
             ask_wall: rec.ask_wall,
-            bid_drain: rec.bid_drain,
+            bid_drain: 0.0,
             trade_up: lt_up,
             trade_dn: lt_down,
         };
@@ -761,7 +751,6 @@ async fn capture_combined(
         }
 
         rec.ask_wall = if rec.poly_ask_vol_all > 0.0 && rec.poly_ask_vol_all > rec.poly_bid_vol_all * 3.0 { 1 } else { 0 };
-        rec.bid_drain = 0.0;
         rec.dump_score = if rec.poly_bid == 0.0 { 3 }
                     else if rec.tick_gap_ms > 2000 { 3 }
                     else if rec.ask_wall == 1 { 2 }
@@ -797,8 +786,6 @@ async fn capture_combined(
         }
 
         rec.btc_delta = 0.0;
-        rec.adverse_ticks = 0;
-        rec.vol_bleed = 0.0;
         rec.reversal_score = 0;
     }
 
@@ -836,14 +823,14 @@ async fn capture_combined(
                 "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
             )
             .bind(rec.binance_price)
-            .bind(rec.binance_vol_100ms)
+            .bind(0.0f64)
             .bind(0.0f64)
             .bind(rec.poly_mid)
             .bind(rec.poly_imbalance)
             .bind(rec.latencia_ms as f64)
             .bind(sid)
             .bind(rec.latencia_ms)
-            .bind(rec.binance_micro_price)
+            .bind(0.0f64)
             .execute(_pool)
             .await;
         }

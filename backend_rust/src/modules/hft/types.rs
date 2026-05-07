@@ -65,9 +65,7 @@ pub struct CsvRecord {
     pub event_type:          EventType,
     pub latencia_ms:         i64,
     pub binance_price:       f64,
-    pub binance_micro_price: f64,
     pub binance_imbalance:   f32,
-    pub binance_vol_100ms:   f64,
     pub binance_vol_24h:     f64,
     pub btc_vol:             f64,   // real-time BTC volume from Binance aggTrade
     pub poly_bid:            f64,
@@ -80,31 +78,14 @@ pub struct CsvRecord {
     /// Session ID — para filtrar mem_hft y evitar fuga de datos entre sesiones.
     pub session_id:          i32,
     // ─── Advanced HFT Metrics ────────────────────────────────────────────
-    pub trades_per_second:    f64,  // Binance TRADE count in last rolling 1s
     pub price_velocity:       f64,  // Δprice/Δtime over 500ms window (USD/s)
     pub btc_acel:             f64,  // Δvelocity/Δtime (USD/s²) — price acceleration
     pub poly_liquidity_delta: f64,  // Δpoly_ask_vol_all vs previous tick
-    pub absorption_ratio:     f64,  // trade_vol / |Δprice| — high = absorption
     pub price_gap_ratio:      f64,  // (binance_micro - poly_mid) / binance_micro * 100
     pub spoofing_flag:        u8,   // 1 = >30% vol drop with no poly trade
     pub tape_speed_flag:      u8,   // 1 = high volume spike detected
     pub gap_alert_flag:       u8,   // 1 = price gap > 0.05%
-    // ─── PNR: Point of No Return (last 5 min analysis) ─────────────────────
-    pub pnr_active:             u8,    // 1 = inside last 300s window
     pub pnr_seconds_left:       i32,   // seconds until session close
-    pub pnr_price:              f64,   // poly_mid at this tick
-    pub pnr_return_up:          f64,   // 1.0 - poly_ask (expected return if UP)
-    pub pnr_return_down:        f64,   // poly_bid - 0.0 (expected return if DOWN)
-    pub pnr_volatility_1m:      f64,   // max price swing in last 60s
-    pub pnr_confidence:         f64,   // |poly_mid - 0.5| * 2 (0-1 scale)
-    pub pnr_trend:              i8,    // +1 UP, -1 DOWN, 0 flat
-    pub pnr_spread_pct:         f64,   // spread / mid (or 1.0 if one-sided)
-    // ─── Market Pressure metrics ──────────────────────────────────────────
-    pub pressure_bid_floor:     f64,   // lowest bid price with vol > 10
-    pub pressure_ask_ceiling:   f64,   // highest ask price with vol > 10
-    pub pressure_band:          f64,   // ask_ceiling - bid_floor (effective spread)
-    pub pressure_index:         f64,   // (mid - floor) / band → 0=DOWN, 1=UP
-    pub pressure_skew:          f64,   // (bid_vol - ask_vol) / total within band
     // ─── Odiseo Strategies — bidirectional momentum paper-trading ────────
     // Odiseo 83 UP (estrategia principal — entry≥0.83, tp=0.97, sl_hard=0.81)
     pub odiseo83_up_active:        u8,
@@ -132,8 +113,6 @@ pub struct CsvRecord {
     pub clob_trade_dn:         f64,   // último precio CLOB trade DOWN
     pub clob_trade_up_vol:     f64,   // volumen del último trade CLOB UP
     pub clob_trade_dn_vol:     f64,   // volumen del último trade CLOB DOWN
-    pub clob_trade_up_ts:      String,// timestamp HH:MM:SS.mmm último trade UP
-    pub clob_trade_dn_ts:      String,// timestamp HH:MM:SS.mmm último trade DOWN
     pub od83_event:            String, // IN_UP|IN_DN|OUT_UP|OUT_DN|empty — Odiseo 83 entry/exit marker
     pub od83_filters:          u8,    // enabled filter bitmask: 0=all_off 255=all_on (8 bits=8 filters)
     // ─── Odiseo 83 Timing ────────────────────────────────────────────────
@@ -145,14 +124,11 @@ pub struct CsvRecord {
     pub od83_dn_fill_ms:        i64,
     // ─── Anti-Flash Dump ──────────────────────────────────────────────────
     pub tick_gap_ms:            i64,    // ms since last tick (>2000 = frozen)
-    pub bid_drain:              f64,    // % bid_vol lost vs 5 ticks ago (-75% = whales leaving)
     pub ask_wall:               u8,     // 1 if ask_vol > 3x bid_vol (one-sided imminent)
     pub dump_score:             u8,     // 0=normal 1=warning 2=critical 3=dead
     // ─── Anti-Reversion ───────────────────────────────────────────────────
     pub btc_delta:              f64,    // BTC change in USD since Odiseo entered
     pub mid_from_entry:         f64,    // poly_mid - entry_price (distance from entry)
-    pub adverse_ticks:          u8,     // consecutive ticks moving against position
-    pub vol_bleed:              f64,    // % volume of position's side lost vs 5s ago
     pub reversal_score:         u8,     // 0=safe 1=alert 2=danger 3=exit
 }
 
@@ -164,9 +140,7 @@ impl Default for CsvRecord {
             event_type:          EventType::BookUpdate,
             latencia_ms:         0,
             binance_price:       0.0,
-            binance_micro_price: 0.0,
             binance_imbalance:   0.0,
-            binance_vol_100ms:   0.0,
             binance_vol_24h:     0.0,
             btc_vol:             0.0,
             poly_bid:            0.0,
@@ -177,29 +151,14 @@ impl Default for CsvRecord {
             poly_ask_vol_all:    0.0,
             poly_imbalance:      0.0,
             session_id:          0,
-            trades_per_second:    0.0,
             price_velocity:       0.0,
             btc_acel:             0.0,
             poly_liquidity_delta: 0.0,
-            absorption_ratio:     0.0,
             price_gap_ratio:      0.0,
             spoofing_flag:        0,
             tape_speed_flag:      0,
             gap_alert_flag:       0,
-            pnr_active:             0,
             pnr_seconds_left:       0,
-            pnr_price:              0.0,
-            pnr_return_up:          0.0,
-            pnr_return_down:        0.0,
-            pnr_volatility_1m:      0.0,
-            pnr_confidence:         0.0,
-            pnr_trend:              0,
-            pnr_spread_pct:         0.0,
-            pressure_bid_floor:      0.0,
-            pressure_ask_ceiling:    0.0,
-            pressure_band:           0.0,
-            pressure_index:          0.5,
-            pressure_skew:           0.0,
             odiseo83_up_active:       0, odiseo83_up_entry_price: 0.0, odiseo83_up_size: 0.0,
             odiseo83_up_pnl:          0.0, odiseo83_up_exit_price: 0.0, odiseo83_up_exit_reason: 0,
             odiseo83_up_balance:      20.0,
@@ -213,8 +172,6 @@ impl Default for CsvRecord {
             clob_trade_dn:        0.0,
             clob_trade_up_vol:    0.0,
             clob_trade_dn_vol:    0.0,
-            clob_trade_up_ts:     String::new(),
-            clob_trade_dn_ts:     String::new(),
             od83_event:            String::new(),
             od83_filters:          0,
             od83_up_mode:           String::new(),
@@ -224,13 +181,10 @@ impl Default for CsvRecord {
             od83_up_fill_ms:        0,
             od83_dn_fill_ms:        0,
             tick_gap_ms:            0,
-            bid_drain:              0.0,
             ask_wall:               0,
             dump_score:             0,
             btc_delta:              0.0,
             mid_from_entry:         0.0,
-            adverse_ticks:          0,
-            vol_bleed:              0.0,
             reversal_score:         0,
         }
     }
@@ -241,35 +195,36 @@ impl Default for CsvRecord {
 impl CsvRecord {
     /// Column names in exact order matching `to_csv_fields()`.
             pub fn csv_header() -> &'static str {
-        "time,ts_exchange,event,latencia_ms,binance_price,binance_micro_price,\
-         binance_imbalance,binance_vol_100ms,binance_vol_24h,btc_vol,bid,ask,mid,spread,\
-         bid_vol,ask_vol,imbalance,trades_per_second,btc_vel,btc_acel,\
-         poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoof,tape,gap,\
-         pnr_active,secs_left,pnr_price,pnr_return_up,pnr_return_down,\
-         pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,p_bid_lo,\
-         p_ask_hi,p_band,p_index,p_skew,od83_up,od83_up_entry,od83_up_sz,\
-         od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,od83_dn,od83_dn_entry,\
-         od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,live_up,\
-         live_dn,live_bal,od_signal,clob_trade_up,clob_trade_dn,\
-         clob_trade_up_vol,clob_trade_dn_vol,clob_trade_up_ts,clob_trade_dn_ts,od83_event,od83_filters,\
-         od83_up_mode,od83_dn_mode,\
-         od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,tick_gap_ms,\
-         bid_drain,ask_wall,dump_score,btc_delta,mid_from_entry,adverse_ticks,\
-         vol_bleed,reversal_score"
+        concat!(
+        "time,ts_exchange,event,latencia_ms,",
+        "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,",
+        "bid,ask,mid,spread,bid_vol,ask_vol,imbalance,",
+        "spoof,tape,gap,tick_gap_ms,ask_wall,dump_score,reversal_score,secs_left,",
+        "poly_liquidity_delta,price_gap_ratio,",
+        "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,od_signal,od83_filters,",
+        "od83_up,od83_up_entry,od83_up_sz,od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,",
+        "od83_dn,od83_dn_entry,od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,",
+        "od83_event,live_up,live_dn,live_bal,od83_up_mode,od83_dn_mode,",
+        "od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,",
+        "btc_delta,mid_from_entry",
+        )
     }    /// Returns 304 CSV fields as strings in the exact order of `csv_header()`.
     /// Used by all three CSV export paths (per-session file, live REST, DB fallback).
     pub fn to_csv_fields(&self) -> Vec<String> {
-        let mut f: Vec<String> = Vec::with_capacity(304);
+        let mut f: Vec<String> = Vec::with_capacity(64);
+        // ── FASE 0: IDENTIDAD (4) ──
         f.push(self.ts_local.clone());
         f.push(self.ts_exchange.clone());
         f.push(self.event_type.as_str().to_string());
         f.push(self.latencia_ms.to_string());
+        // ── FASE 1: MERCADO BTC (6) ──
         f.push(self.binance_price.to_string());
-        f.push(self.binance_micro_price.to_string());
         f.push(self.binance_imbalance.to_string());
-        f.push(self.binance_vol_100ms.to_string());
         f.push(self.binance_vol_24h.to_string());
         f.push(self.btc_vol.to_string());
+        f.push(self.price_velocity.to_string());
+        f.push(self.btc_acel.to_string());
+        // ── FASE 2: ORDER BOOK (7) ──
         f.push(self.poly_bid.to_string());
         f.push(self.poly_ask.to_string());
         f.push(self.poly_mid.to_string());
@@ -277,29 +232,26 @@ impl CsvRecord {
         f.push(self.poly_bid_vol_all.to_string());
         f.push(self.poly_ask_vol_all.to_string());
         f.push(self.poly_imbalance.to_string());
-        f.push(self.trades_per_second.to_string());
-        f.push(self.price_velocity.to_string());
-        f.push(self.btc_acel.to_string());
-        f.push(self.poly_liquidity_delta.to_string());
-        f.push(self.absorption_ratio.to_string());
-        f.push(self.price_gap_ratio.to_string());
+        // ── FASE 3: RIESGO (8) ──
         f.push(self.spoofing_flag.to_string());
         f.push(self.tape_speed_flag.to_string());
         f.push(self.gap_alert_flag.to_string());
-        f.push(self.pnr_active.to_string());
+        f.push(self.tick_gap_ms.to_string());
+        f.push(self.ask_wall.to_string());
+        f.push(self.dump_score.to_string());
+        f.push(self.reversal_score.to_string());
         f.push(self.pnr_seconds_left.to_string());
-        f.push(self.pnr_price.to_string());
-        f.push(self.pnr_return_up.to_string());
-        f.push(self.pnr_return_down.to_string());
-        f.push(self.pnr_volatility_1m.to_string());
-        f.push(self.pnr_confidence.to_string());
-        f.push(self.pnr_trend.to_string());
-        f.push(self.pnr_spread_pct.to_string());
-        f.push(self.pressure_bid_floor.to_string());
-        f.push(self.pressure_ask_ceiling.to_string());
-        f.push(self.pressure_band.to_string());
-        f.push(self.pressure_index.to_string());
-        f.push(self.pressure_skew.to_string());
+        // ── FASE 4: MICRO (2) ──
+        f.push(self.poly_liquidity_delta.to_string());
+        f.push(self.price_gap_ratio.to_string());
+        // ── FASE 5: TRIGGER (6) ──
+        f.push(self.clob_trade_up.to_string());
+        f.push(self.clob_trade_dn.to_string());
+        f.push(self.clob_trade_up_vol.to_string());
+        f.push(self.clob_trade_dn_vol.to_string());
+        f.push(self.odiseo_signal.to_string());
+        f.push(self.od83_filters.to_string());
+        // ── FASE 6: ODISEO UP (7) ──
         f.push(self.odiseo83_up_active.to_string());
         f.push(self.odiseo83_up_entry_price.to_string());
         f.push(self.odiseo83_up_size.to_string());
@@ -307,6 +259,7 @@ impl CsvRecord {
         f.push(self.odiseo83_up_exit_price.to_string());
         f.push(self.odiseo83_up_exit_reason.to_string());
         f.push(self.odiseo83_up_balance.to_string());
+        // ── FASE 7: ODISEO DOWN (7) ──
         f.push(self.odiseo83_down_active.to_string());
         f.push(self.odiseo83_down_entry_price.to_string());
         f.push(self.odiseo83_down_size.to_string());
@@ -314,33 +267,21 @@ impl CsvRecord {
         f.push(self.odiseo83_down_exit_price.to_string());
         f.push(self.odiseo83_down_exit_reason.to_string());
         f.push(self.odiseo83_down_balance.to_string());
+        // ── FASE 8: EVENTOS + LIVE (6) ──
+        f.push(self.od83_event.clone());
         f.push(self.odiseo83_up_live_pnl.to_string());
         f.push(self.odiseo83_down_live_pnl.to_string());
         f.push(self.live_usdc_balance.to_string());
-        f.push(self.odiseo_signal.to_string());
-        f.push(self.clob_trade_up.to_string());
-        f.push(self.clob_trade_dn.to_string());
-        f.push(self.clob_trade_up_vol.to_string());
-        f.push(self.clob_trade_dn_vol.to_string());
-        f.push(self.clob_trade_up_ts.clone());
-        f.push(self.clob_trade_dn_ts.clone());
-        f.push(self.od83_event.clone());
-        f.push(self.od83_filters.to_string());
         f.push(self.od83_up_mode.clone());
         f.push(self.od83_dn_mode.clone());
+        // ── FASE 9: TIMING (4) ──
         f.push(self.od83_up_at.clone());
         f.push(self.od83_dn_at.clone());
         f.push(self.od83_up_fill_ms.to_string());
         f.push(self.od83_dn_fill_ms.to_string());
-        f.push(self.tick_gap_ms.to_string());
-        f.push(self.bid_drain.to_string());
-        f.push(self.ask_wall.to_string());
-        f.push(self.dump_score.to_string());
+        // ── FASE 10: POSICIÓN (2) ──
         f.push(self.btc_delta.to_string());
         f.push(self.mid_from_entry.to_string());
-        f.push(self.adverse_ticks.to_string());
-        f.push(self.vol_bleed.to_string());
-        f.push(self.reversal_score.to_string());
         f
     }
 
