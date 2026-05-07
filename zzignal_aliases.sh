@@ -80,9 +80,10 @@ echo "  zz-live-on    zz-live-off   zz-odi83-on    zz-odi83-off"
 echo "  zz-reinv-on   zz-reinv-off  zz-odi-only83  zz-odi83-8"
 echo "  zz-balance    zz-btc        zz-log         zz-log-f"
 echo "  zz-orders     zz-fills      zz-restart     zz-status"
-echo "  zz-go N       <- activa todo con \$N (default \$7)"
+echo "  zz-go N       <- LIVE mode con \$N (default \$7)"
+echo "  zz-go-paper N <- PAPER mode con \$N (default \$7, sin dinero real)"
 
-# ── One-click setup ────────────────────────────
+# ── One-click setup — LIVE ─────────────────────
 zz-go() {
   local amt=${1:-7}
   echo "⚡ Activando Odiseo 83 LIVE con \$${amt}..."
@@ -110,4 +111,32 @@ zz-go() {
   # Verificar
   local bal=$(curl -s $ZZ_API/api/balance | python3 -c 'import sys,json;print(json.load(sys.stdin)["balance"])' 2>/dev/null || echo "?")
   echo "✅ Odiseo 83 LIVE \$${amt} | Balance: $bal"
+}
+
+# ── One-click setup — PAPER MONEY ──────────────
+zz-go-paper() {
+  local amt=${1:-7}
+  echo "📝 Activando Odiseo 83 PAPER (SIMULADO) con \$${amt}..."
+  
+  # DESACTIVAR LIVE explícitamente
+  local r0=$(curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": false}')
+  echo "  LIVE: $r0"
+  
+  # Apagar variantes 1-12
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d "{\"index\": $i, \"enable\": false}" > /dev/null
+  done
+  
+  # Activar Odiseo 83 (índice 0)
+  local r2=$(curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 0, "enable": true}')
+  echo "  Variant 0: $r2"
+  
+  # Budget
+  local r3=$(curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: application/json" -d "{\"index\": 0, \"amount\": $amt}")
+  echo "  Budget: $r3"
+  
+  # Reinvest ON
+  curl -sX POST $ZZ_API/api/odiseo/reinvest -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null
+  
+  echo "✅ Odiseo 83 PAPER \$${amt} | SIN dinero real | Monitorear: zz-monitor"
 }
