@@ -690,6 +690,9 @@ async fn capture_combined(
         }
     }
 
+    // ─── Trade-based spread (replaces book bid-ask) ──────────────────
+    rec.poly_spread = rec.clob_trade_up - rec.clob_trade_dn;
+
     // ─── ESTRATEGIAS — solo en modo normal ────────────────────────────────
     if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
         // ─── PNR ─────────────────────────────────────────────────────────
