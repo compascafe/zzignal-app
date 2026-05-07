@@ -103,6 +103,22 @@ pub struct CsvRecord {
     pub odiseo83_down_exit_price:    f64,
     pub odiseo83_down_exit_reason:   u8,
     pub odiseo83_down_balance:       f64,
+    // ─── Houdini 65 — entry>=0.65, TP=0.75, SL=0.60 (scalp de tendencia) ───
+    pub houdini65_up_active:        u8,
+    pub houdini65_up_entry_price:   f64,
+    pub houdini65_up_size:          f64,
+    pub houdini65_up_pnl:           f64,
+    pub houdini65_up_exit_price:    f64,
+    pub houdini65_up_exit_reason:   u8,
+    pub houdini65_up_balance:       f64,
+    pub houdini65_down_active:        u8,
+    pub houdini65_down_entry_price:   f64,
+    pub houdini65_down_size:          f64,
+    pub houdini65_down_pnl:           f64,
+    pub houdini65_down_exit_price:    f64,
+    pub houdini65_down_exit_reason:   u8,
+    pub houdini65_down_balance:       f64,
+    pub houdini65_event:            String, // IN_UP|OUT_UP|IN_DN|OUT_DN
     // ─── Last Trade Price ─────────────────────────────────────────────────
     pub clob_trade_up:         f64,   // último precio CLOB trade UP
     pub clob_trade_dn:         f64,   // último precio CLOB trade DOWN
@@ -158,6 +174,13 @@ impl Default for CsvRecord {
             odiseo83_down_active:     0, odiseo83_down_entry_price: 0.0, odiseo83_down_size: 0.0,
             odiseo83_down_pnl:        0.0, odiseo83_down_exit_price: 0.0, odiseo83_down_exit_reason: 0,
             odiseo83_down_balance:    20.0,
+            houdini65_up_active:       0, houdini65_up_entry_price: 0.0, houdini65_up_size: 0.0,
+            houdini65_up_pnl:          0.0, houdini65_up_exit_price: 0.0, houdini65_up_exit_reason: 0,
+            houdini65_up_balance:      20.0,
+            houdini65_down_active:     0, houdini65_down_entry_price: 0.0, houdini65_down_size: 0.0,
+            houdini65_down_pnl:        0.0, houdini65_down_exit_price: 0.0, houdini65_down_exit_reason: 0,
+            houdini65_down_balance:    20.0,
+            houdini65_event:           String::new(),
             clob_trade_up:        0.0,
             clob_trade_dn:        0.0,
             clob_trade_up_vol:    0.0,
@@ -192,7 +215,9 @@ impl CsvRecord {
         "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,clob_trade_count_up,clob_trade_count_dn,od83_filters,",
         "od83_up,od83_up_entry,od83_up_sz,od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,",
         "od83_dn,od83_dn_entry,od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,",
-        "od83_event,od83_up_mode,od83_dn_mode,",
+        "hd65_up,hd65_up_entry,hd65_up_sz,hd65_up_pnl,hd65_up_exit,hd65_up_r,hd65_up_bal,",
+        "hd65_dn,hd65_dn_entry,hd65_dn_sz,hd65_dn_pnl,hd65_dn_exit,hd65_dn_r,hd65_dn_bal,",
+        "od83_event,hd65_event,od83_up_mode,od83_dn_mode,",
         "od83_up_at,od83_dn_at,",
         "mid_from_entry",
         )
@@ -255,8 +280,25 @@ impl CsvRecord {
         f.push(self.odiseo83_down_exit_price.to_string());
         f.push(self.odiseo83_down_exit_reason.to_string());
         f.push(self.odiseo83_down_balance.to_string());
-        // ── FASE 8: EVENTOS + MODE (3) ──
+        // ── FASE 8: HOUDINI 65 UP (7) ──
+        f.push(self.houdini65_up_active.to_string());
+        f.push(self.houdini65_up_entry_price.to_string());
+        f.push(self.houdini65_up_size.to_string());
+        f.push(self.houdini65_up_pnl.to_string());
+        f.push(self.houdini65_up_exit_price.to_string());
+        f.push(self.houdini65_up_exit_reason.to_string());
+        f.push(self.houdini65_up_balance.to_string());
+        // ── FASE 9: HOUDINI 65 DOWN (7) ──
+        f.push(self.houdini65_down_active.to_string());
+        f.push(self.houdini65_down_entry_price.to_string());
+        f.push(self.houdini65_down_size.to_string());
+        f.push(self.houdini65_down_pnl.to_string());
+        f.push(self.houdini65_down_exit_price.to_string());
+        f.push(self.houdini65_down_exit_reason.to_string());
+        f.push(self.houdini65_down_balance.to_string());
+        // ── FASE 10: EVENTOS + MODE (4) ──
         f.push(self.od83_event.clone());
+        f.push(self.houdini65_event.clone());
         f.push(self.od83_up_mode.clone());
         f.push(self.od83_dn_mode.clone());
         // ── FASE 9: TIMING (2) ──

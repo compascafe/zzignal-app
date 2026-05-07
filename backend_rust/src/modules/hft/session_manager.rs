@@ -13,7 +13,7 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "# build_version={} built@{}", env!("GIT_VERSION"), env!("BUILD_TIME"));
     let _ = writeln!(w, "#");
     let _ = writeln!(w, "# ╔══════════════════════════════════════════════════════════════╗");
-    let _ = writeln!(w, "# ║  ZZIGNAL CSV — Odiseo 83 HFT Bot — 53-column Reference    ║");
+    let _ = writeln!(w, "# ║  ZZIGNAL CSV — Odiseo 83 HFT Bot — 66-column Reference    ║");
     let _ = writeln!(w, "# ╚══════════════════════════════════════════════════════════════╝");
     let _ = writeln!(w, "#");
     let _ = writeln!(w, "# STRATEGY: Odiseo 83 (entry >= 0.83, TP=0.97, SL-hard=0.81)");

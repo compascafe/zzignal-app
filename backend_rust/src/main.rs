@@ -755,6 +755,16 @@ async fn capture_combined(
                     else if rec.odiseo83_down_active == 2 && active == 0 && exit_reason > 0 { rec.od83_event = "OUT_DN".into(); }
                     rec.odiseo83_down_active = active; rec.odiseo83_down_entry_price = entry; rec.odiseo83_down_size = size; rec.odiseo83_down_pnl = pnl; rec.odiseo83_down_exit_price = exit_price; rec.odiseo83_down_exit_reason = exit_reason; rec.odiseo83_down_balance = balance;
                 }
+                "houdini65_up" => {
+                    if rec.houdini65_up_active == 0 && active == 2 { rec.houdini65_event = "IN_UP".into(); }
+                    else if rec.houdini65_up_active == 2 && active == 0 && exit_reason > 0 { rec.houdini65_event = "OUT_UP".into(); }
+                    rec.houdini65_up_active = active; rec.houdini65_up_entry_price = entry; rec.houdini65_up_size = size; rec.houdini65_up_pnl = pnl; rec.houdini65_up_exit_price = exit_price; rec.houdini65_up_exit_reason = exit_reason; rec.houdini65_up_balance = balance;
+                }
+                "houdini65_down" => {
+                    if rec.houdini65_down_active == 0 && active == 2 { rec.houdini65_event = "IN_DN".into(); }
+                    else if rec.houdini65_down_active == 2 && active == 0 && exit_reason > 0 { rec.houdini65_event = "OUT_DN".into(); }
+                    rec.houdini65_down_active = active; rec.houdini65_down_entry_price = entry; rec.houdini65_down_size = size; rec.houdini65_down_pnl = pnl; rec.houdini65_down_exit_price = exit_price; rec.houdini65_down_exit_reason = exit_reason; rec.houdini65_down_balance = balance;
+                }
                 _ => {}
             }
         }

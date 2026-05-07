@@ -41,6 +41,7 @@ struct OdiseoDef {
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
     OdiseoDef { name:"Odiseo 83", code:"odiseo83", entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false },
     OdiseoDef { name:"Wide 65", code:"odiseo65", entry_threshold:0.65, tp_price:0.95, sl_hard:0.63, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 86", code:"odiseo86", entry_threshold:0.86, tp_price:0.97, sl_hard:0.84, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Odiseo 87", code:"odiseo87", entry_threshold:0.87, tp_price:0.97, sl_hard:0.85, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
