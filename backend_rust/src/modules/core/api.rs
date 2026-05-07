@@ -465,6 +465,7 @@ async fn get_odiseo_status(State(s): State<Arc<AppState>>) -> Json<Value> {
         "reinvest": s.odiseo_trading.reinvest.load(std::sync::atomic::Ordering::Relaxed),
         "status": if live { "LIVE" } else { "PAPER" },
         "variants": stats_arr,
+        "session_history": s.odiseo_trading.session_summaries(),
     }))
 }
 

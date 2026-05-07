@@ -77,6 +77,19 @@ impl OdiseoStats { fn new(d:&OdiseoDef)->Self { Self {
     accuracy:0.0,total_pnl:0.0,avg_pnl:0.0,best:0.0,worst:0.0,sessions:0,last_10:Vec::with_capacity(10),
 }}}
 
+/// Per-session Odiseo 83 snapshot for frontend performance tracking
+#[derive(Debug, Clone, Serialize)]
+pub struct OdiseoSessionSummary {
+    pub session_id: i32,
+    pub variant: String,
+    pub pnl: f64,
+    pub balance: f64,
+    pub entries: u64,
+    pub exits: u64,
+    pub wins: u64,
+    pub pnl_pct: f64,  // pnl as % of budget (default $20)
+}
+
 pub struct OdiseoTradingManager {
     sessions:   Mutex<HashMap<i32, OdiseoSessionState>>,
     stats:      Mutex<Vec<OdiseoStats>>,
@@ -88,6 +101,8 @@ pub struct OdiseoTradingManager {
     sessions_done: Mutex<Vec<u32>>,     // completed session count per variant
     cmd_tx:     Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>,
     pub filter_chain: FilterChain,     // pre-entry filter layer
+    session_history: Mutex<Vec<OdiseoSessionSummary>>, // per-session snapshots
+    prev_snapshot: Mutex<HashMap<String, OdiseoStats>>, // previous stats for delta calc
 }
 
 impl OdiseoTradingManager {
@@ -96,7 +111,7 @@ impl OdiseoTradingManager {
         let mut enabled = Vec::with_capacity(n);
         for _ in 0..n { enabled.push(AtomicBool::new(true)); }
         let budgets = vec![20.0; n];
-        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain() }
+        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain(), session_history: Mutex::new(Vec::new()), prev_snapshot: Mutex::new(HashMap::new()) }
     }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
@@ -306,6 +321,49 @@ impl OdiseoTradingManager {
             }
         }
         for s in stats.iter_mut(){s.sessions+=1;}
+
+        // Snapshot Odiseo 83 performance for this session
+        self.snapshot_odiseo83(sid, &stats);
+    }
+
+    fn snapshot_odiseo83(&self, session_id: i32, stats: &[OdiseoStats]) {
+        let mut history = self.session_history.lock().unwrap();
+        let mut prev = self.prev_snapshot.lock().unwrap();
+
+        // Only track Odiseo 83 variant (index 0)
+        if let Some(ods) = stats.first() {
+            let budget = self.get_budget(0);
+            let prev_stats = prev.get("odiseo83");
+
+            let (entries_delta, exits_delta, wins_delta, pnl_delta, balance) = if let Some(ps) = prev_stats {
+                let ed = ods.trades_up + ods.trades_dn - ps.trades_up - ps.trades_dn;
+                let xd = (ods.tp_up + ods.tp_dn + ods.sl_up + ods.sl_dn) - (ps.tp_up + ps.tp_dn + ps.sl_up + ps.sl_dn);
+                let wd = ods.wins_up + ods.wins_dn - ps.wins_up - ps.wins_dn;
+                let pd = ods.total_pnl - ps.total_pnl;
+                (ed, xd, wd, pd, ods.balance)
+            } else {
+                (ods.trades_up + ods.trades_dn,
+                 ods.tp_up + ods.tp_dn + ods.sl_up + ods.sl_dn,
+                 ods.wins_up + ods.wins_dn,
+                 ods.total_pnl,
+                 ods.balance)
+            };
+
+            let summary = OdiseoSessionSummary {
+                session_id,
+                variant: "odiseo83".into(),
+                pnl: pnl_delta,
+                balance,
+                entries: entries_delta,
+                exits: exits_delta,
+                wins: wins_delta,
+                pnl_pct: if budget > 0.0 { (pnl_delta / budget) * 100.0 } else { 0.0 },
+            };
+
+            prev.insert("odiseo83".into(), ods.clone());
+            history.push(summary);
+            if history.len() > 50 { history.remove(0); } // keep last 50
+        }
     }
 
     fn settle(&self, pos:&OdiseoPosition, up:bool, outcome_up:bool, tie:bool, s:&mut OdiseoStats, sid:i32, name:&str, dir:&str) -> f64 {
@@ -328,5 +386,9 @@ impl OdiseoTradingManager {
             .find(|s| s.code == code)
             .map(|s| s.total_pnl)
             .unwrap_or(0.0)
+    }
+
+    pub fn session_summaries(&self) -> Vec<OdiseoSessionSummary> {
+        self.session_history.lock().unwrap().clone()
     }
 }
