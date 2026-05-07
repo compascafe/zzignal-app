@@ -777,7 +777,19 @@ async fn capture_combined(
             *state.prev_btc_vel.write().await = rec.price_velocity;
         }
 
-        rec.ask_wall = if rec.poly_ask_vol_all > 0.0 && rec.poly_ask_vol_all > rec.poly_bid_vol_all * 3.0 { 1 } else { 0 };
+        // ask_wall with hysteresis: only trigger after 3+ consecutive ticks
+        {
+            use std::sync::atomic::AtomicU8;
+            static ASK_WALL_COUNT: AtomicU8 = AtomicU8::new(0);
+            let is_wall = rec.poly_ask_vol_all > 0.0 && rec.poly_ask_vol_all > rec.poly_bid_vol_all * 3.0;
+            if is_wall {
+                let c = ASK_WALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                rec.ask_wall = if c >= 3 { 1 } else { 0 };
+            } else {
+                ASK_WALL_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+                rec.ask_wall = 0;
+            }
+        }
         rec.dump_score = if rec.poly_bid == 0.0 { 3 }
                     else if rec.tick_gap_ms > 2000 { 3 }
                     else if rec.ask_wall == 1 { 2 }
