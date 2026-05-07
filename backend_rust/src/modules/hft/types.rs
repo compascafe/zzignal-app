@@ -126,8 +126,12 @@ pub struct CsvRecord {
     pub live_usdc_balance:          f64,   // real USDC balance from Polymarket
     pub odiseo_signal:          u8,    // 0=none, 1=UP entry, 2=DOWN entry, 3=both
     // ─── Last Trade Price ─────────────────────────────────────────────────
-    pub last_trade_up:          f64,   // último precio de trade del token UP
-    pub last_trade_down:        f64,   // último precio de trade del token DOWN
+    pub clob_trade_up:         f64,   // último precio CLOB trade UP
+    pub clob_trade_dn:         f64,   // último precio CLOB trade DOWN
+    pub clob_trade_up_vol:     f64,   // volumen del último trade CLOB UP
+    pub clob_trade_dn_vol:     f64,   // volumen del último trade CLOB DOWN
+    pub clob_trade_up_ts:      String,// timestamp HH:MM:SS.mmm último trade UP
+    pub clob_trade_dn_ts:      String,// timestamp HH:MM:SS.mmm último trade DOWN
     // ─── Odiseo 83 Timing ────────────────────────────────────────────────
     pub od83_up_mode:           String, // PAPER | LIVE
     pub od83_dn_mode:           String, // PAPER | LIVE
@@ -199,8 +203,12 @@ impl Default for CsvRecord {
             odiseo83_up_live_pnl:      0.0, odiseo83_down_live_pnl: 0.0,
             live_usdc_balance:         0.0,
             odiseo_signal:           0,
-            last_trade_up:           0.0,
-            last_trade_down:         0.0,
+            clob_trade_up:        0.0,
+            clob_trade_dn:        0.0,
+            clob_trade_up_vol:    0.0,
+            clob_trade_dn_vol:    0.0,
+            clob_trade_up_ts:     String::new(),
+            clob_trade_dn_ts:     String::new(),
             od83_up_mode:           String::new(),
             od83_dn_mode:           String::new(),
             od83_up_at:             String::new(),
@@ -234,7 +242,7 @@ impl CsvRecord {
          p_ask_hi,p_band,p_index,p_skew,od83_up,od83_up_entry,od83_up_sz,\
          od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,od83_dn,od83_dn_entry,\
          od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,live_up,\
-         live_dn,live_bal,od_signal,trade_up,trade_dn,od83_up_mode,od83_dn_mode,\
+         live_dn,live_bal,od_signal,clob_trade_up,clob_trade_dn,od83_up_mode,od83_dn_mode,\
          od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,tick_gap_ms,\
          bid_drain,ask_wall,dump_score,btc_delta,mid_from_entry,adverse_ticks,\
          vol_bleed,reversal_score"
@@ -298,8 +306,12 @@ impl CsvRecord {
         f.push(self.odiseo83_down_live_pnl.to_string());
         f.push(self.live_usdc_balance.to_string());
         f.push(self.odiseo_signal.to_string());
-        f.push(self.last_trade_up.to_string());
-        f.push(self.last_trade_down.to_string());
+        f.push(self.clob_trade_up.to_string());
+        f.push(self.clob_trade_dn.to_string());
+        f.push(self.clob_trade_up_vol.to_string());
+        f.push(self.clob_trade_dn_vol.to_string());
+        f.push(self.clob_trade_up_ts.clone());
+        f.push(self.clob_trade_dn_ts.clone());
         f.push(self.od83_up_mode.clone());
         f.push(self.od83_dn_mode.clone());
         f.push(self.od83_up_at.clone());

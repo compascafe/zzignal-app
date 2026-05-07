@@ -155,8 +155,8 @@ pub enum AppMsg {
     Status(ConnStatus),
     BookUp(BookSnapshot),
     BookDown(BookSnapshot),
-    LastTradeUp(f64),
-    LastTradeDown(f64),
+    LastTradeUp { price: f64, size: f64 },
+    LastTradeDown { price: f64, size: f64 },
     Balance(f64),
     BtcOpen(f64),
     BtcTick { price: f64, volume: f64, event_time: i64 },
@@ -481,8 +481,8 @@ async fn run_cycle(
             Ok(Ok(r)) => {
                 let p: f64 = r.price.to_string().parse().unwrap_or(0.0);
                 if p > 0.0 {
-                    if is_up { let _ = tx.send(AppMsg::LastTradeUp(p));   }
-                    else      { let _ = tx.send(AppMsg::LastTradeDown(p)); }
+                    if is_up { let _ = tx.send(AppMsg::LastTradeUp { price: p, size: 0.0 });   }
+                    else      { let _ = tx.send(AppMsg::LastTradeDown { price: p, size: 0.0 }); }
                 }
             }
             Ok(Err(e)) => warn!("last_trade_price falló (up={}): {}", is_up, e),
@@ -1765,15 +1765,18 @@ fn dispatch_ws_msg(
             if let Some(p) = msg.get("price").and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<f64>().ok()).filter(|&p| p > 0.0)
             {
-                if is_up        { let _ = tx.send(AppMsg::LastTradeUp(p)); }
-                else if is_down { let _ = tx.send(AppMsg::LastTradeDown(p)); }
+                let sz = msg.get("size").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                if is_up        { let _ = tx.send(AppMsg::LastTradeUp { price: p, size: sz }); }
+                else if is_down { let _ = tx.send(AppMsg::LastTradeDown { price: p, size: sz }); }
 
                 if is_up {
-                    if let Some(json) = AppMsg::LastTradeUp(p).to_json() {
+                    let msg = AppMsg::LastTradeUp { price: p, size: sz };
+                    if let Some(json) = msg.to_json() {
                         let _ = broadcast_tx.send(json);
                     }
                 } else if is_down {
-                    if let Some(json) = AppMsg::LastTradeDown(p).to_json() {
+                    let msg = AppMsg::LastTradeDown { price: p, size: sz };
+                    if let Some(json) = msg.to_json() {
                         let _ = broadcast_tx.send(json);
                     }
                 }
@@ -1832,10 +1835,10 @@ impl AppMsg {
                     book_to_json(book)
                 ))
             }
-            AppMsg::LastTradeUp(price) => {
+            AppMsg::LastTradeUp { price, .. } => {
                 Some(format!(r#"{{"type":"trade","side":"up","price":{}}}"#, price))
             }
-            AppMsg::LastTradeDown(price) => {
+            AppMsg::LastTradeDown { price, .. } => {
                 Some(format!(r#"{{"type":"trade","side":"down","price":{}}}"#, price))
             }
             AppMsg::Balance(bal) => {

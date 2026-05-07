@@ -474,8 +474,8 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             capture_book_db(state, "down", &b.bids, &b.asks).await;
         }
 
-        AppMsg::LastTradeUp(p)   => { *state.last_trade_up.write().await   = Some(*p); }
-        AppMsg::LastTradeDown(p) => { *state.last_trade_down.write().await  = Some(*p); }
+        AppMsg::LastTradeUp { price, size }   => { *state.last_trade_up.write().await   = Some(*price); *state.last_trade_up_size.write().await = *size; }
+        AppMsg::LastTradeDown { price, size } => { *state.last_trade_down.write().await  = Some(*price); *state.last_trade_down_size.write().await = *size; }
         AppMsg::Balance(b)       => { *state.balance.write().await          = Some(*b); }
         AppMsg::BtcOpen(p)       => { *state.btc_open.write().await         = Some(*p); }
 
@@ -663,8 +663,10 @@ async fn capture_combined(
     {
         let lt_up = state.last_trade_up.read().await;
         let lt_down = state.last_trade_down.read().await;
-        rec.last_trade_up = lt_up.unwrap_or(0.0);
-        rec.last_trade_down = lt_down.unwrap_or(0.0);
+        rec.clob_trade_up = lt_up.unwrap_or(0.0);
+        rec.clob_trade_dn = lt_down.unwrap_or(0.0);
+        rec.clob_trade_up_vol = *state.last_trade_up_size.read().await;
+        rec.clob_trade_dn_vol = *state.last_trade_down_size.read().await;
     }
 
     // ─── ESTRATEGIAS — solo en modo normal ────────────────────────────────
