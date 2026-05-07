@@ -2,7 +2,8 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use chrono::Utc;
+use chrono::{FixedOffset, Utc};
+use chrono::TimeZone;
 use tracing::info;
 
 use crate::modules::core::worker::PriceLevel;
@@ -422,6 +423,9 @@ pub fn build_book_update(
     poly_event_ts:  i64,
 ) -> CsvRecord {
     let now = Utc::now();
+    let lima = FixedOffset::west_opt(5 * 3600).unwrap();
+    let ts_str = now.with_timezone(&lima).format("%Y-%m-%dT%H:%M:%S%.3f-05:00").to_string();
+
 
     let bb_bid  = binance.bids.first().map(|l| l.price).unwrap_or(0.0);
     let bb_ask  = binance.asks.first().map(|l| l.price).unwrap_or(0.0);
@@ -509,7 +513,7 @@ pub fn build_book_update(
     tracking.set_last_poly_mid(pb_mid, now.timestamp_millis());
 
     CsvRecord {
-        ts_local:            now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        ts_local:            ts_str,
         ts_exchange:         binance.event_time.to_string(),
         event_type:          EventType::BookUpdate,
         latencia_ms:         lag_ms,
@@ -579,6 +583,9 @@ pub fn build_binance_tick(
     _tick_volume:   f64,
 ) -> CsvRecord {
     let now = Utc::now();
+    let lima = FixedOffset::west_opt(5 * 3600).unwrap();
+    let ts_str = now.with_timezone(&lima).format("%Y-%m-%dT%H:%M:%S%.3f-05:00").to_string();
+
 
     let bb_bid  = binance.bids.first().map(|l| l.price).unwrap_or(0.0);
     let bb_ask  = binance.asks.first().map(|l| l.price).unwrap_or(0.0);
@@ -595,7 +602,7 @@ pub fn build_binance_tick(
 
     let bb_vol_100 = tracking.vol_100ms(now.timestamp_millis());
     CsvRecord {
-        ts_local:            now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        ts_local:            ts_str,
         ts_exchange:         tick_ts.to_string(),
         event_type:          EventType::BinanceTick,
         latencia_ms:         now.timestamp_millis() - tick_ts,

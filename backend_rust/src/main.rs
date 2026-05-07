@@ -668,9 +668,9 @@ async fn capture_combined(
     if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
         // ─── PNR ─────────────────────────────────────────────────────────
         let secs_left = state.t5_manager.seconds_left(active_sid);
+        rec.pnr_seconds_left = secs_left as i32;
         if secs_left >= 0 && secs_left <= 300 {
             rec.pnr_active = 1;
-            rec.pnr_seconds_left = secs_left as i32;
             rec.pnr_price = rec.poly_mid;
             rec.pnr_return_up = if rec.poly_ask > 0.0 { 1.0 - rec.poly_ask } else { 0.0 };
             rec.pnr_return_down = if rec.poly_bid > 0.0 { rec.poly_bid } else { 0.0 };
@@ -703,6 +703,56 @@ async fn capture_combined(
             }
         }
     } // end Odiseo trading block
+
+    // ─── Anti-Flash Dump metrics ───────────────────────────────────────
+    {
+        use std::sync::atomic::AtomicI64;
+        static LAST_TICK_MS: AtomicI64 = AtomicI64::new(0);
+        let now_ms = Utc::now().timestamp_millis();
+        let last = LAST_TICK_MS.swap(now_ms, std::sync::atomic::Ordering::Relaxed);
+        rec.tick_gap_ms = if last > 0 { now_ms - last } else { 0 };
+
+        rec.ask_wall = if rec.poly_ask_vol_all > 0.0 && rec.poly_ask_vol_all > rec.poly_bid_vol_all * 3.0 { 1 } else { 0 };
+        rec.bid_drain = 0.0;
+        rec.dump_score = if rec.poly_bid == 0.0 { 3 }
+                    else if rec.tick_gap_ms > 2000 { 3 }
+                    else if rec.ask_wall == 1 { 2 }
+                    else if rec.tick_gap_ms > 500 { 1 }
+                    else { 0 };
+    }
+
+    // ─── Odiseo 83 Timing + Anti-Reversion ─────────────────────────────
+    {
+        let live_on = state.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed);
+        let mode_str = if live_on { "LIVE" } else { "PAPER" };
+
+        // UP side
+        if rec.odiseo83_up_active == 2 {
+            rec.od83_up_mode = mode_str.to_string();
+            if rec.od83_up_at.is_empty() {
+                rec.od83_up_at = rec.ts_local.clone();
+            }
+            rec.mid_from_entry = rec.poly_mid - rec.odiseo83_up_entry_price;
+        } else if rec.odiseo83_up_active == 0 && rec.odiseo83_up_exit_reason > 0 {
+            rec.od83_up_fill_ms = 0; // paper = instant
+        }
+
+        // DOWN side
+        if rec.odiseo83_down_active == 2 {
+            rec.od83_dn_mode = mode_str.to_string();
+            if rec.od83_dn_at.is_empty() {
+                rec.od83_dn_at = rec.ts_local.clone();
+            }
+            rec.mid_from_entry = if rec.poly_mid > 0.0 { rec.odiseo83_down_entry_price - rec.poly_mid } else { 0.0 };
+        } else if rec.odiseo83_down_active == 0 && rec.odiseo83_down_exit_reason > 0 {
+            rec.od83_dn_fill_ms = 0;
+        }
+
+        rec.btc_delta = 0.0;
+        rec.adverse_ticks = 0;
+        rec.vol_bleed = 0.0;
+        rec.reversal_score = 0;
+    }
 
     // ─── LIVE money trace: real USDC balance + Odiseo 83 live PnL ────────
     {

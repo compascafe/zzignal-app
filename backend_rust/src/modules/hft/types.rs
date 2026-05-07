@@ -128,6 +128,24 @@ pub struct CsvRecord {
     // ─── Last Trade Price ─────────────────────────────────────────────────
     pub last_trade_up:          f64,   // último precio de trade del token UP
     pub last_trade_down:        f64,   // último precio de trade del token DOWN
+    // ─── Odiseo 83 Timing ────────────────────────────────────────────────
+    pub od83_up_mode:           String, // PAPER | LIVE
+    pub od83_dn_mode:           String, // PAPER | LIVE
+    pub od83_up_at:             String, // HH:MM:SS.mmm entry timestamp UTC-5
+    pub od83_dn_at:             String,
+    pub od83_up_fill_ms:        i64,    // ms until fill confirmation (0=paper)
+    pub od83_dn_fill_ms:        i64,
+    // ─── Anti-Flash Dump ──────────────────────────────────────────────────
+    pub tick_gap_ms:            i64,    // ms since last tick (>2000 = frozen)
+    pub bid_drain:              f64,    // % bid_vol lost vs 5 ticks ago (-75% = whales leaving)
+    pub ask_wall:               u8,     // 1 if ask_vol > 3x bid_vol (one-sided imminent)
+    pub dump_score:             u8,     // 0=normal 1=warning 2=critical 3=dead
+    // ─── Anti-Reversion ───────────────────────────────────────────────────
+    pub btc_delta:              f64,    // BTC change in USD since Odiseo entered
+    pub mid_from_entry:         f64,    // poly_mid - entry_price (distance from entry)
+    pub adverse_ticks:          u8,     // consecutive ticks moving against position
+    pub vol_bleed:              f64,    // % volume of position's side lost vs 5s ago
+    pub reversal_score:         u8,     // 0=safe 1=alert 2=danger 3=exit
 }
 
 impl Default for CsvRecord {
@@ -183,6 +201,21 @@ impl Default for CsvRecord {
             odiseo_signal:           0,
             last_trade_up:           0.0,
             last_trade_down:         0.0,
+            od83_up_mode:           String::new(),
+            od83_dn_mode:           String::new(),
+            od83_up_at:             String::new(),
+            od83_dn_at:             String::new(),
+            od83_up_fill_ms:        0,
+            od83_dn_fill_ms:        0,
+            tick_gap_ms:            0,
+            bid_drain:              0.0,
+            ask_wall:               0,
+            dump_score:             0,
+            btc_delta:              0.0,
+            mid_from_entry:         0.0,
+            adverse_ticks:          0,
+            vol_bleed:              0.0,
+            reversal_score:         0,
         }
     }
 }
@@ -191,23 +224,20 @@ impl Default for CsvRecord {
 /// All CSV export paths (per-session file, live REST, DB fallback) use this.
 impl CsvRecord {
     /// Column names in exact order matching `to_csv_fields()`.
-    pub fn csv_header() -> &'static str {
-        "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
-         binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,\
-         poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
-         price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
-         pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,\
-         pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,\
-         pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew,\
-         odiseo83_up_active,odiseo83_up_entry_price,odiseo83_up_size,\
-         odiseo83_up_pnl,odiseo83_up_exit_price,odiseo83_up_exit_reason,odiseo83_up_balance,\
-         odiseo83_down_active,odiseo83_down_entry_price,odiseo83_down_size,\
-         odiseo83_down_pnl,odiseo83_down_exit_price,odiseo83_down_exit_reason,odiseo83_down_balance,\
-         odiseo83_up_live_pnl,odiseo83_down_live_pnl,live_usdc_balance,\
-         odiseo_signal,\
-         last_trade_up,last_trade_down"
+        pub fn csv_header() -> &'static str {
+        "time,event,bid,ask,mid,spread,bid_vol,ask_vol,imbalance,\
+         btc_vel,spoof,tape,gap,\
+         secs_left,\
+         p_bid_lo,p_ask_hi,p_band,p_index,p_skew,\
+         od83_up,od83_up_entry,od83_up_sz,od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,\
+         od83_dn,od83_dn_entry,od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,\
+         live_up,live_dn,live_bal,\
+         od_signal,\
+         trade_up,trade_dn,\
+         od83_up_mode,od83_dn_mode,od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,\
+         tick_gap_ms,bid_drain,ask_wall,dump_score,\
+         btc_delta,mid_from_entry,adverse_ticks,vol_bleed,reversal_score"
     }
-
     /// Returns 304 CSV fields as strings in the exact order of `csv_header()`.
     /// Used by all three CSV export paths (per-session file, live REST, DB fallback).
     pub fn to_csv_fields(&self) -> Vec<String> {
@@ -270,6 +300,21 @@ impl CsvRecord {
         f.push(self.odiseo_signal.to_string());
         f.push(self.last_trade_up.to_string());
         f.push(self.last_trade_down.to_string());
+        f.push(self.od83_up_mode.clone());
+        f.push(self.od83_dn_mode.clone());
+        f.push(self.od83_up_at.clone());
+        f.push(self.od83_dn_at.clone());
+        f.push(self.od83_up_fill_ms.to_string());
+        f.push(self.od83_dn_fill_ms.to_string());
+        f.push(self.tick_gap_ms.to_string());
+        f.push(self.bid_drain.to_string());
+        f.push(self.ask_wall.to_string());
+        f.push(self.dump_score.to_string());
+        f.push(self.btc_delta.to_string());
+        f.push(self.mid_from_entry.to_string());
+        f.push(self.adverse_ticks.to_string());
+        f.push(self.vol_bleed.to_string());
+        f.push(self.reversal_score.to_string());
         f
     }
 
