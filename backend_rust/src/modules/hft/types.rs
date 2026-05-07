@@ -224,21 +224,21 @@ impl Default for CsvRecord {
 /// All CSV export paths (per-session file, live REST, DB fallback) use this.
 impl CsvRecord {
     /// Column names in exact order matching `to_csv_fields()`.
-        pub fn csv_header() -> &'static str {
-        "time,event,bid,ask,mid,spread,bid_vol,ask_vol,imbalance,\
-         btc_vel,spoof,tape,gap,\
-         secs_left,\
-         p_bid_lo,p_ask_hi,p_band,p_index,p_skew,\
-         od83_up,od83_up_entry,od83_up_sz,od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,\
-         od83_dn,od83_dn_entry,od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,\
-         live_up,live_dn,live_bal,\
-         od_signal,\
-         trade_up,trade_dn,\
-         od83_up_mode,od83_dn_mode,od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,\
-         tick_gap_ms,bid_drain,ask_wall,dump_score,\
-         btc_delta,mid_from_entry,adverse_ticks,vol_bleed,reversal_score"
-    }
-    /// Returns 304 CSV fields as strings in the exact order of `csv_header()`.
+            pub fn csv_header() -> &'static str {
+        "time,ts_exchange,event,latencia_ms,binance_price,binance_micro_price,\
+         binance_imbalance,binance_vol_100ms,binance_vol_24h,bid,ask,mid,spread,\
+         bid_vol,ask_vol,imbalance,trades_per_second,btc_vel,\
+         poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoof,tape,gap,\
+         pnr_active,secs_left,pnr_price,pnr_return_up,pnr_return_down,\
+         pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,p_bid_lo,\
+         p_ask_hi,p_band,p_index,p_skew,od83_up,od83_up_entry,od83_up_sz,\
+         od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,od83_dn,od83_dn_entry,\
+         od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,live_up,\
+         live_dn,live_bal,od_signal,trade_up,trade_dn,od83_up_mode,od83_dn_mode,\
+         od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,tick_gap_ms,\
+         bid_drain,ask_wall,dump_score,btc_delta,mid_from_entry,adverse_ticks,\
+         vol_bleed,reversal_score"
+    }    /// Returns 304 CSV fields as strings in the exact order of `csv_header()`.
     /// Used by all three CSV export paths (per-session file, live REST, DB fallback).
     pub fn to_csv_fields(&self) -> Vec<String> {
         let mut f: Vec<String> = Vec::with_capacity(304);
