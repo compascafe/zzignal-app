@@ -38,7 +38,24 @@ check_active() {
 import sys,json
 d=json.load(sys.stdin)
 active = [v['name'] for v in d.get('variants',[]) if v.get('enabled')]
-print(len(active))
+if active:
+    print(', '.join(active))
+else:
+    print('NINGUNA')
+" 2>/dev/null
+}
+
+# ── PnL por estrategia ─────────────────────────────────────
+check_pnl() {
+    curl -s "$API/api/odiseo/status" 2>/dev/null | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for v in d.get('variants',[]):
+    if v.get('enabled') and v.get('name'):
+        pnl = v.get('total_pnl',0)
+        bal = v.get('balance',20)
+        sign = '+' if pnl >= 0 else ''
+        print(f'{v[\"name\"]}: {sign}{pnl:.4f} (bal={bal:.1f})')
 " 2>/dev/null
 }
 
@@ -87,13 +104,14 @@ while true; do
     LIVE=$(check_live)
     BAL=$(check_balance)
     ACTIVE=$(check_active)
+    PNL=$(check_pnl)
     ORDERS=$(check_orders)
     
     # Color del estado LIVE
     if [ "$LIVE" = "LIVE" ]; then
-        LIVE_COLOR="${RED}${BOLD}${LIVE}${NC}"
+        LIVE_COLOR="${RED}${BOLD}● LIVE${NC}"
     else
-        LIVE_COLOR="${CYAN}${LIVE}${NC}"
+        LIVE_COLOR="${CYAN}○ PAPER${NC}"
     fi
     
     # Color del balance
@@ -106,7 +124,11 @@ while true; do
     # Barra de estado
     TIMESTAMP=$(date '+%H:%M:%S')
     echo -e "${BOLD}━━━ ${TIMESTAMP} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  Estado: ${LIVE_COLOR}  |  Balance: ${BAL_COLOR}  |  Active: ${ACTIVE} variantes  |  Órdenes: ${ORDERS}"
+    echo -e "  Estado: ${LIVE_COLOR}  |  Balance: ${BAL_COLOR}  |  Órdenes: ${ORDERS}"
+    echo -e "  ${YELLOW}Estrategia:${NC} ${ACTIVE}"
+    if [ -n "$PNL" ]; then
+        echo -e "  ${MAGENTA}${PNL}${NC}"
+    fi
     
     show_events
     
