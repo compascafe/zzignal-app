@@ -76,26 +76,8 @@ pub struct CsvRecord {
     pub poly_bid_vol_all:    f64,
     pub poly_ask_vol_all:    f64,
     pub poly_imbalance:      f64,
-    pub trade_side:          String,
-    pub trade_price:         f64,
-    pub trade_size:          f64,
-    pub is_informed:         u8,
     /// Session ID — para filtrar mem_hft y evitar fuga de datos entre sesiones.
     pub session_id:          i32,
-    // ─── Strategy A: Imbalance Divergence ────────────────────────────────
-    pub imba_status:          String,  // IDLE|OPEN|CLOSED
-    pub imba_side:            String,  // BUY|SELL
-    pub imba_entry_price:     f64,
-    pub imba_exit_price:      f64,
-    pub imba_trade_pnl:       f64,
-    pub imba_balance:         f64,
-    // ─── Strategy B: Liquidity Grabbing ──────────────────────────────────
-    pub liqb_status:          String,  // IDLE|OPEN|CLOSED
-    pub liqb_side:            String,  // BUY|SELL
-    pub liqb_entry_price:     f64,
-    pub liqb_exit_price:      f64,
-    pub liqb_trade_pnl:       f64,
-    pub liqb_balance:         f64,
     // ─── Advanced HFT Metrics ────────────────────────────────────────────
     pub trades_per_second:    f64,  // Binance TRADE count in last rolling 1s
     pub price_velocity:       f64,  // Δprice/Δtime over 500ms window (USD/s)
@@ -167,23 +149,7 @@ impl Default for CsvRecord {
             poly_bid_vol_all:    0.0,
             poly_ask_vol_all:    0.0,
             poly_imbalance:      0.0,
-            trade_side:          String::new(),
-            trade_price:         0.0,
-            trade_size:          0.0,
-            is_informed:         0,
             session_id:          0,
-            imba_status:         "IDLE".to_string(),
-            imba_side:           String::new(),
-            imba_entry_price:    0.0,
-            imba_exit_price:     0.0,
-            imba_trade_pnl:      0.0,
-            imba_balance:        0.0,
-            liqb_status:         "IDLE".to_string(),
-            liqb_side:           String::new(),
-            liqb_entry_price:    0.0,
-            liqb_exit_price:     0.0,
-            liqb_trade_pnl:      0.0,
-            liqb_balance:        0.0,
             trades_per_second:    0.0,
             price_velocity:       0.0,
             poly_liquidity_delta: 0.0,
@@ -228,11 +194,7 @@ impl CsvRecord {
     pub fn csv_header() -> &'static str {
         "ts_local,ts_exchange,event_type,latencia_ms,binance_price,binance_micro_price,\
          binance_imbalance,binance_vol_100ms,binance_vol_24h,poly_bid,poly_ask,poly_mid,\
-         poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trade_side,\
-         trade_price,trade_size,is_informed,\
-         imba_status,imba_side,imba_entry_price,imba_exit_price,imba_trade_pnl,imba_balance,\
-         liqb_status,liqb_side,liqb_entry_price,liqb_exit_price,liqb_trade_pnl,liqb_balance,\
-         trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
+         poly_spread,poly_bid_vol_all,poly_ask_vol_all,poly_imbalance,trades_per_second,price_velocity,poly_liquidity_delta,absorption_ratio,\
          price_gap_ratio,spoofing_flag,tape_speed_flag,gap_alert_flag,\
          pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,\
          pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,\
@@ -266,22 +228,6 @@ impl CsvRecord {
         f.push(self.poly_bid_vol_all.to_string());
         f.push(self.poly_ask_vol_all.to_string());
         f.push(self.poly_imbalance.to_string());
-        f.push(self.trade_side.clone());
-        f.push(self.trade_price.to_string());
-        f.push(self.trade_size.to_string());
-        f.push(self.is_informed.to_string());
-        f.push(self.imba_status.clone());
-        f.push(self.imba_side.clone());
-        f.push(self.imba_entry_price.to_string());
-        f.push(self.imba_exit_price.to_string());
-        f.push(self.imba_trade_pnl.to_string());
-        f.push(self.imba_balance.to_string());
-        f.push(self.liqb_status.clone());
-        f.push(self.liqb_side.clone());
-        f.push(self.liqb_entry_price.to_string());
-        f.push(self.liqb_exit_price.to_string());
-        f.push(self.liqb_trade_pnl.to_string());
-        f.push(self.liqb_balance.to_string());
         f.push(self.trades_per_second.to_string());
         f.push(self.price_velocity.to_string());
         f.push(self.poly_liquidity_delta.to_string());

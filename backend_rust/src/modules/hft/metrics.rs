@@ -525,10 +525,6 @@ pub fn build_book_update(
         poly_bid_vol_all:    pb_bid_vol,
         poly_ask_vol_all:    pb_ask_vol,
         poly_imbalance:      if pb_imb.is_finite() { pb_imb } else { 0.0 },
-        trade_side:          String::new(),
-        trade_price:         0.0,
-        trade_size:          0.0,
-        is_informed:         tracking.is_informed(now.timestamp_millis()),
         trades_per_second:   trades_ps,
         price_velocity:      price_vel,
         poly_liquidity_delta: liq_delta,
@@ -555,9 +551,6 @@ pub fn build_trade_record(
 ) -> CsvRecord {
     let mut rec = build_book_update(binance, ring, poly_bids, poly_asks, tracking, trade_ts);
     rec.event_type  = EventType::Trade;
-    rec.trade_side  = trade_side.to_string();
-    rec.trade_price = trade_price;
-    rec.trade_size  = trade_size;
     // Recompute with trade context
     let pb_ask_vol = poly_asks.iter().map(|l| l.size).sum::<f64>();
     let pb_mid = if let (Some(b), Some(a)) = (poly_bids.first(), poly_asks.first()) {

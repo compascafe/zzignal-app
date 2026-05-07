@@ -633,9 +633,7 @@ async fn capture_combined(
             ..Default::default()
         };
         if evt_type == EventType::Trade {
-            rec.trade_side = trade_side.to_string();
-            rec.trade_price = trade_price;
-            rec.trade_size = trade_size;
+
         }
         rec
     };
@@ -724,18 +722,6 @@ async fn capture_combined(
         let result = state.strategy_manager.lock().unwrap().evaluate(&rec);
         let mut mem = state.mem_hft.write().await;
         if let Some(last) = mem.last_mut() {
-            last.imba_status = result.imba.status;
-            last.imba_side = result.imba.side;
-            last.imba_entry_price = result.imba.entry_price;
-            last.imba_exit_price = result.imba.exit_price;
-            last.imba_trade_pnl = result.imba.trade_pnl;
-            last.imba_balance = result.imba.balance;
-            last.liqb_status = result.liqb.status;
-            last.liqb_side = result.liqb.side;
-            last.liqb_entry_price = result.liqb.entry_price;
-            last.liqb_exit_price = result.liqb.exit_price;
-            last.liqb_trade_pnl = result.liqb.trade_pnl;
-            last.liqb_balance = result.liqb.balance;
         }
     }
     // NO mid-session flush — all data stays in BufWriter + OS page cache
