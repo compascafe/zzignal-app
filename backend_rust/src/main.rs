@@ -731,15 +731,6 @@ async fn capture_combined(
 
     // ─── ESTRATEGIAS — solo en modo normal ────────────────────────────────
     if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
-        // ─── T-5 Certainty Strategy (Wisdom v2) ──────────────────────────
-        let (t5_pred, t5_entry, _t5_correct) = state.t5_manager.get_prediction(active_sid);
-        rec.t5_prediction = t5_pred;
-        rec.t5_entry_price = t5_entry;
-        // ─── T-3 Aggressive Strategy (Wisdom v3) ──────────────────────────
-        let (t3_pred, t3_entry, t3_active) = state.t3_manager.get_prediction(active_sid);
-        rec.t3_prediction = t3_pred;
-        rec.t3_entry_price = t3_entry;
-        rec.t3_active = if t3_active { 1 } else { 0 };
         // ─── PNR ─────────────────────────────────────────────────────────
         let secs_left = state.t5_manager.seconds_left(active_sid);
         if secs_left >= 0 && secs_left <= 300 {
@@ -755,32 +746,6 @@ async fn capture_combined(
             rec.pnr_spread_pct = if rec.poly_mid > 0.0 { rec.poly_spread / rec.poly_mid } else { 0.0 };
             state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
                 rec.pnr_price, rec.pnr_return_up, rec.pnr_return_down);
-        }
-        // ─── Insight Strategies: Cerbero + Fenix ─────────────────────────
-        let insights = state.insight_manager.on_tick(active_sid, rec.poly_mid);
-        for (code, active, dir) in insights {
-            match code.as_str() {
-                "cerbero70" => { rec.cerbero70_active = active; rec.cerbero70_price = if active>0 {rec.poly_mid} else {0.0}; rec.cerbero70_dir = dir as i8; }
-                "cerbero80" => { rec.cerbero80_active = active; rec.cerbero80_price = if active>0 {rec.poly_mid} else {0.0}; rec.cerbero80_dir = dir as i8; }
-                "cerbero90" => { rec.cerbero90_active = active; rec.cerbero90_price = if active>0 {rec.poly_mid} else {0.0}; rec.cerbero90_dir = dir as i8; }
-                "fenix35"   => { rec.fenix35_active = active; rec.fenix35_price = if active>0 {rec.poly_mid} else {0.0}; rec.fenix35_dir = dir as i8; }
-                "fenix30"   => { rec.fenix30_active = active; rec.fenix30_price = if active>0 {rec.poly_mid} else {0.0}; rec.fenix30_dir = dir as i8; }
-                "fenix45"   => { rec.fenix45_active = active; rec.fenix45_price = if active>0 {rec.poly_mid} else {0.0}; rec.fenix45_dir = dir as i8; }
-                _ => {}
-            }
-        }
-        // ─── Fenix Trading ───────────────────────────────────────────────
-        let (fenix_trades, fenix_signal) = state.fenix_trading.on_tick(active_sid, rec.poly_mid, rec.poly_bid, rec.poly_ask, &rec.predicted_bias, rec.poly_spread, rec.binance_vol_100ms, rec.trades_per_second, rec.poly_imbalance, rec.price_velocity, rec.poly_bid_vol_all, rec.poly_ask_vol_all);
-        rec.fenix_signal = fenix_signal;
-        for (code, active, entry, pnl, skip, target, exit) in fenix_trades {
-            match code.as_str() {
-                "fenix35"   => { rec.fenix35_trade = active; rec.fenix35_entry = entry; rec.fenix35_pnl = pnl; rec.fenix35_skip = skip; rec.fenix35_target = target; rec.fenix35_exit = exit; }
-                "fenix30"   => { rec.fenix30_trade = active; rec.fenix30_entry = entry; rec.fenix30_pnl = pnl; rec.fenix30_skip = skip; rec.fenix30_target = target; rec.fenix30_exit = exit; }
-                "fenix45"   => { rec.fenix45_trade = active; rec.fenix45_entry = entry; rec.fenix45_pnl = pnl; rec.fenix45_skip = skip; rec.fenix45_target = target; rec.fenix45_exit = exit; }
-                "fenix40"   => { rec.fenix40_trade = active; rec.fenix40_entry = entry; rec.fenix40_pnl = pnl; rec.fenix40_skip = skip; rec.fenix40_target = target; rec.fenix40_exit = exit; }
-                "fenix4550" => { rec.fenix4550_trade = active; rec.fenix4550_entry = entry; rec.fenix4550_pnl = pnl; rec.fenix4550_skip = skip; rec.fenix4550_target = target; rec.fenix4550_exit = exit; }
-                _ => {}
-            }
         }
     } // end diagnostic_mode guard — solo Odiseo corre fuera
 

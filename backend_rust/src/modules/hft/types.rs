@@ -130,14 +130,6 @@ pub struct CsvRecord {
     pub dynamic_rsi:            f64,   // Rolling RSI(14) updated each minute during session
     pub vfi_confidence:         f64,   // VFI volume strength ratio (0-1 normalized)
     pub db_accuracy_factor:     f64,   // Risk multiplier from historical memory (1.0 = neutral, >1 = widen)
-    // ─── T-5 Certainty Strategy (Wisdom v2) ─────────────────────────────────
-    pub t5_prediction:          String,// "UP", "DOWN", or "" — T-5 prediction
-    pub t5_entry_price:         f64,   // price at T-5 capture point
-    pub t5_correct:             u8,    // 1 = correct, filled at session close
-    // ─── T-3 Aggressive Strategy (Wisdom v3) ───────────────────────────────
-    pub t3_prediction:          String,
-    pub t3_entry_price:         f64,
-    pub t3_active:              u8,    // 1 = trade active
     // ─── PNR: Point of No Return (last 5 min analysis) ─────────────────────
     pub pnr_active:             u8,    // 1 = inside last 300s window
     pub pnr_seconds_left:       i32,   // seconds until session close
@@ -148,66 +140,6 @@ pub struct CsvRecord {
     pub pnr_confidence:         f64,   // |poly_mid - 0.5| * 2 (0-1 scale)
     pub pnr_trend:              i8,    // +1 UP, -1 DOWN, 0 flat
     pub pnr_spread_pct:         f64,   // spread / mid (or 1.0 if one-sided)
-    // ─── Cerbero 70-80: price in [0.70, 0.80] ─────────────────────────────
-    pub cerbero70_active:       u8,
-    pub cerbero70_price:        f64,
-    pub cerbero70_dir:          i8,    // 1=UP, -1=DOWN, 0=N/A
-    // ─── Cerbero 80-90: price in [0.80, 0.90] ─────────────────────────────
-    pub cerbero80_active:       u8,
-    pub cerbero80_price:        f64,
-    pub cerbero80_dir:          i8,
-    // ─── Cerbero 90-98: price in [0.90, 0.98] ─────────────────────────────
-    pub cerbero90_active:       u8,
-    pub cerbero90_price:        f64,
-    pub cerbero90_dir:          i8,
-    // ─── Fenix 35-65: price in [0.35, 0.65] ───────────────────────────────
-    pub fenix35_active:         u8,
-    pub fenix35_price:          f64,
-    pub fenix35_dir:            i8,
-    // ─── Fenix 30-50: price in [0.30, 0.50] ───────────────────────────────
-    pub fenix30_active:         u8,
-    pub fenix30_price:          f64,
-    pub fenix30_dir:            i8,
-    // ─── Fenix 45-55: price in [0.45, 0.55] ───────────────────────────────
-    pub fenix45_active:         u8,
-    pub fenix45_price:          f64,
-    pub fenix45_dir:            i8,
-    // ─── Fenix Trading (paper-trading simulation) ───────────────────────────
-    pub fenix35_trade:          u8,    // 1 = active trade
-    pub fenix30_trade:          u8,
-    pub fenix45_trade:          u8,
-    pub fenix40_trade:          u8,
-    pub fenix4550_trade:        u8,
-    // ─── Fenix skip reason (per-tick diagnostic) ────────────────────────────
-    pub fenix35_skip:           u8,    // 0=none, 1=trend blocked, 2=spread blocked, 3=volume blocked
-    pub fenix30_skip:           u8,
-    pub fenix45_skip:           u8,
-    pub fenix40_skip:           u8,
-    pub fenix4550_skip:         u8,
-    // ─── Fenix live PnL per strategy ───────────────────────────────────────
-    pub fenix35_entry:          f64,
-    pub fenix35_pnl:            f64,
-    pub fenix30_entry:          f64,
-    pub fenix30_pnl:            f64,
-    pub fenix45_entry:          f64,
-    pub fenix45_pnl:            f64,
-    pub fenix40_entry:          f64,
-    pub fenix40_pnl:            f64,
-    pub fenix4550_entry:        f64,
-    pub fenix4550_pnl:          f64,
-    // ─── Fenix target + exit ───────────────────────────────────────────────
-    pub fenix35_target:         f64,   // exit target price
-    pub fenix30_target:         f64,
-    pub fenix45_target:         f64,
-    pub fenix40_target:         f64,
-    pub fenix4550_target:       f64,
-    pub fenix35_exit:           u8,    // 1 = exited (target hit)
-    pub fenix30_exit:           u8,
-    pub fenix45_exit:           u8,
-    pub fenix40_exit:           u8,
-    pub fenix4550_exit:         u8,
-    // ─── Fenix delta + velocity composite signal ──────────────────────────
-    pub fenix_signal:           u8,    // 0=none, 1=UP, 2=DOWN (delta+velocity)
     // ─── Market Pressure metrics ──────────────────────────────────────────
     pub pressure_bid_floor:     f64,   // lowest bid price with vol > 10
     pub pressure_ask_ceiling:   f64,   // highest ask price with vol > 10
@@ -480,12 +412,6 @@ impl Default for CsvRecord {
             dynamic_rsi:           0.0,
             vfi_confidence:        0.0,
             db_accuracy_factor:    1.0,
-            t5_prediction:         String::new(),
-            t5_entry_price:        0.0,
-            t5_correct:            0,
-            t3_prediction:         String::new(),
-            t3_entry_price:        0.0,
-            t3_active:             0,
             pnr_active:             0,
             pnr_seconds_left:       0,
             pnr_price:              0.0,
@@ -495,38 +421,6 @@ impl Default for CsvRecord {
             pnr_confidence:         0.0,
             pnr_trend:              0,
             pnr_spread_pct:         0.0,
-            cerbero70_active:        0, cerbero70_price: 0.0, cerbero70_dir: 0,
-            cerbero80_active:        0, cerbero80_price: 0.0, cerbero80_dir: 0,
-            cerbero90_active:        0, cerbero90_price: 0.0, cerbero90_dir: 0,
-            fenix35_active:          0, fenix35_price: 0.0, fenix35_dir: 0,
-            fenix30_active:          0, fenix30_price: 0.0, fenix30_dir: 0,
-            fenix45_active:          0, fenix45_price: 0.0,             fenix45_dir:             0,
-            fenix35_trade:           0,
-            fenix30_trade:           0,
-            fenix45_trade:           0,
-            fenix40_trade:           0,
-            fenix4550_trade:         0,
-            fenix35_skip:            0,
-            fenix30_skip:            0,
-            fenix45_skip:            0,
-            fenix40_skip:            0,
-            fenix4550_skip:          0,
-            fenix35_entry:           0.0, fenix35_pnl: 0.0,
-            fenix30_entry:           0.0, fenix30_pnl: 0.0,
-            fenix45_entry:           0.0, fenix45_pnl: 0.0,
-            fenix40_entry:           0.0, fenix40_pnl: 0.0,
-            fenix4550_entry:         0.0, fenix4550_pnl: 0.0,
-            fenix35_target:          0.0,
-            fenix30_target:          0.0,
-            fenix45_target:          0.0,
-            fenix40_target:          0.0,
-            fenix4550_target:        0.0,
-            fenix35_exit:            0,
-            fenix30_exit:            0,
-            fenix45_exit:            0,
-            fenix40_exit:            0,
-            fenix4550_exit:          0,
-            fenix_signal:            0,
             pressure_bid_floor:      0.0,
             pressure_ask_ceiling:    0.0,
             pressure_band:           0.0,
@@ -631,23 +525,8 @@ impl CsvRecord {
          high_volatility_event,bollinger_position,master_signal,cp_uncertainty_range,\
          cp_valid_signal,macro_slope,vfi_value,macd_hist,predicted_bias,\
          is_feedback_adjusted,dynamic_rsi,vfi_confidence,db_accuracy_factor,\
-         t5_prediction,t5_entry_price,t5_correct,t3_prediction,t3_entry_price,t3_active,\
          pnr_active,pnr_seconds_left,pnr_price,pnr_return_up,pnr_return_down,\
          pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,\
-         cerbero70_active,cerbero70_price,cerbero70_dir,\
-         cerbero80_active,cerbero80_price,cerbero80_dir,\
-         cerbero90_active,cerbero90_price,cerbero90_dir,\
-         fenix35_active,fenix35_price,fenix35_dir,\
-         fenix30_active,fenix30_price,fenix30_dir,\
-         fenix45_active,fenix45_price,fenix45_dir,\
-         fenix35_trade,fenix30_trade,fenix45_trade,fenix40_trade,fenix4550_trade,\
-         fenix35_skip,fenix30_skip,fenix45_skip,fenix40_skip,fenix4550_skip,\
-         fenix35_entry,fenix35_pnl,fenix30_entry,fenix30_pnl,\
-         fenix45_entry,fenix45_pnl,fenix40_entry,fenix40_pnl,\
-         fenix4550_entry,fenix4550_pnl,\
-         fenix35_target,fenix30_target,fenix45_target,fenix40_target,fenix4550_target,\
-         fenix35_exit,fenix30_exit,fenix45_exit,fenix40_exit,fenix4550_exit,\
-         fenix_signal,\
          pressure_bid_floor,pressure_ask_ceiling,pressure_band,pressure_index,pressure_skew,\
          odiseo83_up_active,odiseo83_up_entry_price,odiseo83_up_size,\
          odiseo83_up_pnl,odiseo83_up_exit_price,odiseo83_up_exit_reason,odiseo83_up_balance,\
@@ -767,12 +646,6 @@ impl CsvRecord {
         f.push(self.dynamic_rsi.to_string());
         f.push(self.vfi_confidence.to_string());
         f.push(self.db_accuracy_factor.to_string());
-        f.push(self.t5_prediction.clone());
-        f.push(self.t5_entry_price.to_string());
-        f.push(self.t5_correct.to_string());
-        f.push(self.t3_prediction.clone());
-        f.push(self.t3_entry_price.to_string());
-        f.push(self.t3_active.to_string());
         f.push(self.pnr_active.to_string());
         f.push(self.pnr_seconds_left.to_string());
         f.push(self.pnr_price.to_string());
@@ -782,55 +655,6 @@ impl CsvRecord {
         f.push(self.pnr_confidence.to_string());
         f.push(self.pnr_trend.to_string());
         f.push(self.pnr_spread_pct.to_string());
-        f.push(self.cerbero70_active.to_string());
-        f.push(self.cerbero70_price.to_string());
-        f.push(self.cerbero70_dir.to_string());
-        f.push(self.cerbero80_active.to_string());
-        f.push(self.cerbero80_price.to_string());
-        f.push(self.cerbero80_dir.to_string());
-        f.push(self.cerbero90_active.to_string());
-        f.push(self.cerbero90_price.to_string());
-        f.push(self.cerbero90_dir.to_string());
-        f.push(self.fenix35_active.to_string());
-        f.push(self.fenix35_price.to_string());
-        f.push(self.fenix35_dir.to_string());
-        f.push(self.fenix30_active.to_string());
-        f.push(self.fenix30_price.to_string());
-        f.push(self.fenix30_dir.to_string());
-        f.push(self.fenix45_active.to_string());
-        f.push(self.fenix45_price.to_string());
-        f.push(self.fenix45_dir.to_string());
-        f.push(self.fenix35_trade.to_string());
-        f.push(self.fenix30_trade.to_string());
-        f.push(self.fenix45_trade.to_string());
-        f.push(self.fenix40_trade.to_string());
-        f.push(self.fenix4550_trade.to_string());
-        f.push(self.fenix35_skip.to_string());
-        f.push(self.fenix30_skip.to_string());
-        f.push(self.fenix45_skip.to_string());
-        f.push(self.fenix40_skip.to_string());
-        f.push(self.fenix4550_skip.to_string());
-        f.push(self.fenix35_entry.to_string());
-        f.push(self.fenix35_pnl.to_string());
-        f.push(self.fenix30_entry.to_string());
-        f.push(self.fenix30_pnl.to_string());
-        f.push(self.fenix45_entry.to_string());
-        f.push(self.fenix45_pnl.to_string());
-        f.push(self.fenix40_entry.to_string());
-        f.push(self.fenix40_pnl.to_string());
-        f.push(self.fenix4550_entry.to_string());
-        f.push(self.fenix4550_pnl.to_string());
-        f.push(self.fenix35_target.to_string());
-        f.push(self.fenix30_target.to_string());
-        f.push(self.fenix45_target.to_string());
-        f.push(self.fenix40_target.to_string());
-        f.push(self.fenix4550_target.to_string());
-        f.push(self.fenix35_exit.to_string());
-        f.push(self.fenix30_exit.to_string());
-        f.push(self.fenix45_exit.to_string());
-        f.push(self.fenix40_exit.to_string());
-        f.push(self.fenix4550_exit.to_string());
-        f.push(self.fenix_signal.to_string());
         f.push(self.pressure_bid_floor.to_string());
         f.push(self.pressure_ask_ceiling.to_string());
         f.push(self.pressure_band.to_string());
