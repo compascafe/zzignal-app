@@ -251,6 +251,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
                         state3.recording_sessions.write().await.push(child_id);
                         state3.session_manager.start_session(child_id).ok();
+                        // Reset trade prices to avoid stale triggers from previous session
+                        *state3.last_trade_up.write().await = None;
+                        *state3.last_trade_down.write().await = None;
                         state3.adaptive_engine.lock().await.reset_session_warmup();
                         session_repo::start_session_recording(&state3, child_id, btc_price).await.ok();
                         info!("Auto-started indefinite session: parent #{}, child #{} ({})", parent_id, child_id, child_name);
