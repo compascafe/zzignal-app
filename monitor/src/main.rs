@@ -1,4 +1,4 @@
-/// ZZIGNAL MONITOR v0.3 — Odiseo 83 TUI
+/// ZZIGNAL MONITOR v0.4 — Odiseo 83 TUI + Paper tracking
 /// Teclas: p=PANIC  r=reinvertir  l=LIVE/PAPER  q=salir  c=copiar log
 use std::collections::VecDeque;
 use std::io;
@@ -95,6 +95,7 @@ struct State {
     connected: bool,
     btc: f64,
     btc_open: f64,
+    btc_entry: f64,
     bal: f64,
     live: bool,
     reinvest: bool,
@@ -121,12 +122,14 @@ struct State {
     last_btc_poll: Instant,
     last_ws: Instant,
     warnings: VecDeque<String>,
+    last_t_up: i64,
+    last_t_dn: i64,
 }
 
 impl State {
     fn new() -> Self {
         Self {
-            connected: false, btc: 0.0, btc_open: 0.0, bal: 0.0, live: false, reinvest: false,
+            connected: false, btc: 0.0, btc_open: 0.0, btc_entry: 0.0, bal: 0.0, live: false, reinvest: false,
             odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 9.0,
             odi_t_up: 0, odi_t_dn: 0, odi_w_up: 0, odi_w_dn: 0,
             odi_tp_up: 0, odi_tp_dn: 0, odi_sl_up: 0, odi_sl_dn: 0,
@@ -135,6 +138,7 @@ impl State {
             orders: 0, log: VecDeque::with_capacity(100),
             last_poll: Instant::now(), last_btc_poll: Instant::now(), last_ws: Instant::now(),
             warnings: VecDeque::with_capacity(20),
+            last_t_up: 0, last_t_dn: 0,
         }
     }
     fn add_log(&mut self, text: String, color: Color) {
@@ -247,7 +251,29 @@ async fn main() -> io::Result<()> {
                         s.odi_worst = v.worst;
                         s.odi_enabled = v.enabled.unwrap_or(true);
 
-                        // Warnings
+                        // Trade detection — ENTER/EXIT from counter deltas
+                        let delta_up = v.trades_up - s.last_t_up;
+                        let delta_dn = v.trades_dn - s.last_t_dn;
+                        if delta_up > 0 {
+                            let mode = if s.live { "LIVE" } else { "PAPER" };
+                            s.btc_entry = s.btc;
+                            s.add_log(format!("⬆️ ENTER UP  [{mode}]  BTC ${:.0}", s.btc), Color::Green);
+                        }
+                        if delta_dn > 0 {
+                            let mode = if s.live { "LIVE" } else { "PAPER" };
+                            s.btc_entry = s.btc;
+                            s.add_log(format!("⬇️ ENTER DN  [{mode}]  BTC ${:.0}", s.btc), Color::Red);
+                        }
+                        if delta_up < 0 {
+                            let mode = if s.live { "LIVE" } else { "PAPER" };
+                            s.add_log(format!("⬆️ EXIT  UP  [{mode}]"), Color::Yellow);
+                        }
+                        if delta_dn < 0 {
+                            let mode = if s.live { "LIVE" } else { "PAPER" };
+                            s.add_log(format!("⬇️ EXIT  DN  [{mode}]"), Color::Yellow);
+                        }
+                        s.last_t_up = v.trades_up;
+                        s.last_t_dn = v.trades_dn;
                         let total_sl = v.sl_up + v.sl_dn;
                         let total_trades = v.trades_up + v.trades_dn;
                         if total_trades > 0 && total_sl >= 3 {
@@ -320,7 +346,7 @@ async fn main() -> io::Result<()> {
 }
 
 fn draw(f: &mut Frame, s: &State) {
-    let has_banner = s.live;
+    let has_banner = s.live || (s.odi_enabled && !s.live);
     let banner_h = if has_banner { 1 } else { 0 };
     let warn_h = if s.warnings.is_empty() { 0 } else { (s.warnings.len().min(3) as u16).max(1) };
 
@@ -341,11 +367,13 @@ fn draw(f: &mut Frame, s: &State) {
     let h = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1,6); 6]).split(m[idx]); idx += 1;
 
-    // BTC: current + delta from open
-    let btc_delta = if s.btc_open > 0.0 { s.btc - s.btc_open } else { 0.0 };
-    let btc_delta_pct = if s.btc_open > 0.0 { btc_delta / s.btc_open * 100.0 } else { 0.0 };
+    // BTC: current + delta from entry (or open if no entry)
+    let btc_ref = if s.btc_entry > 0.0 { s.btc_entry } else { s.btc_open };
+    let btc_delta = if btc_ref > 0.0 { s.btc - btc_ref } else { 0.0 };
+    let btc_delta_pct = if btc_ref > 0.0 { btc_delta / btc_ref * 100.0 } else { 0.0 };
     let btc_c = if btc_delta > 0.0 { Color::Green } else if btc_delta < 0.0 { Color::Red } else { Color::Yellow };
-    let btc_txt = format!("BTC ${:.0} ({:+.0} {:+.1}%)", s.btc, btc_delta, btc_delta_pct);
+    let entry_label = if s.btc_entry > 0.0 { format!("ent {}", s.btc_entry as i64) } else { "open".into() };
+    let btc_txt = format!("BTC ${:.0} ({}{:+.0} {:+.1}%)", s.btc, entry_label, btc_delta, btc_delta_pct);
     f.render_widget(Paragraph::new(btc_txt).style(Style::default().fg(btc_c).add_modifier(Modifier::BOLD)).block(Block::default().borders(Borders::ALL)), h[0]);
 
     let bal_c = if s.bal > s.odi_budget { Color::Green } else if s.bal > s.odi_budget * 0.8 { Color::Yellow } else { Color::Red };
@@ -363,11 +391,17 @@ fn draw(f: &mut Frame, s: &State) {
     let reinv_c = if s.reinvest { Color::Green } else { Color::DarkGray };
     f.render_widget(Paragraph::new(if s.reinvest {"Reinv ON"}else{"Reinv OFF"}).style(Style::default().fg(reinv_c)).block(Block::default().borders(Borders::ALL)), h[5]);
 
-    // ─── LIVE BANNER ────────────────────────────────────────────────────
+    // ─── LIVE BANNER or PAPER RECORDING ──────────────────────────────────
     if has_banner {
         let warn = Paragraph::new("DINERO REAL ACTIVO — ODISEO 83 EN VIVO")
             .style(Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD));
         f.render_widget(warn, m[idx]); idx += 1;
+    } else if s.odi_enabled && !s.live {
+        let paper = Paragraph::new("📝 PAPER MONEY — GRABANDO — Sin dinero real")
+            .style(Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD));
+        f.render_widget(paper, m[idx]); idx += 1;
+    } else {
+        // no banner line — adjust rest of layout
     }
 
     // ─── ODISEO 83 PANEL ────────────────────────────────────────────────
