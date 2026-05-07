@@ -782,6 +782,18 @@ async fn capture_combined(
             rec.btc_vol_ratio = if ob_vol > 0.0 { rec.btc_vol / ob_vol } else { 0.0 };
         }
 
+        // Liquidity indicators: Amihud illiquidity + depth concentration
+        {
+            let trade_vol = rec.clob_trade_up_vol + rec.clob_trade_dn_vol;
+            rec.price_impact = if trade_vol > 0.0 {
+                (rec.clob_trade_up - rec.clob_trade_dn).abs() / trade_vol.max(0.01)
+            } else { 0.0 };
+            let total_depth = rec.poly_bid_vol_all + rec.poly_ask_vol_all;
+            rec.depth_concentration = if total_depth > 0.0 {
+                rec.poly_bid_vol_all.max(rec.poly_ask_vol_all) / total_depth
+            } else { 0.5 };
+        }
+
         // ask_wall with hysteresis: only trigger after 3+ consecutive ticks
         {
             use std::sync::atomic::AtomicU8;

@@ -81,7 +81,9 @@ pub struct CsvRecord {
     pub price_velocity:       f64,  // Δprice/Δtime over 500ms window (USD/s)
     pub btc_acel:             f64,  // Δvelocity/Δtime (USD/s²) — price acceleration
     pub btc_vol_ratio:        f64,  // btc_vol / (bid_vol+ask_vol) — real vs resting liquidity
-    pub poly_liquidity_delta: f64,  // Δpoly_ask_vol_all vs previous tick
+    pub poly_liquidity_delta: f64,  // 3-tick avg Δask_vol — liquidity change
+    pub price_impact:         f64,  // |trade_up-trade_dn|/(vol_up+vol_dn) — Amihud illiquidity
+    pub depth_concentration:  f64,  // max(bid_vol,ask_vol)/(total) — one-sided depth
     pub spoofing_flag:        u8,   // 1 = >30% vol drop with no poly trade
     pub pnr_seconds_left:       i32,   // seconds until session close
     // ─── Odiseo Strategies — bidirectional momentum paper-trading ────────
@@ -146,6 +148,8 @@ impl Default for CsvRecord {
             btc_acel:             0.0,
             btc_vol_ratio:        0.0,
             poly_liquidity_delta: 0.0,
+            price_impact:         0.0,
+            depth_concentration:  0.5,
             spoofing_flag:        0,
             pnr_seconds_left:       0,
             odiseo83_up_active:       0, odiseo83_up_entry_price: 0.0, odiseo83_up_size: 0.0,
@@ -184,7 +188,7 @@ impl CsvRecord {
         "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,btc_vol_ratio,",
         "bid,ask,mid,spread,bid_vol,ask_vol,imbalance,",
         "spoof,tick_gap_ms,ask_wall,dump_score,secs_left,",
-        "poly_liquidity_delta,",
+        "poly_liquidity_delta,price_impact,depth_concentration,",
         "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,clob_trade_count_up,clob_trade_count_dn,od83_filters,",
         "od83_up,od83_up_entry,od83_up_sz,od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,",
         "od83_dn,od83_dn_entry,od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,",
@@ -223,8 +227,10 @@ impl CsvRecord {
         f.push(self.ask_wall.to_string());
         f.push(self.dump_score.to_string());
         f.push(self.pnr_seconds_left.to_string());
-        // ── FASE 4: MICRO (1) ──
+        // ── FASE 4: LIQUIDITY (3) ──
         f.push(self.poly_liquidity_delta.to_string());
+        f.push(self.price_impact.to_string());
+        f.push(self.depth_concentration.to_string());
         // ── FASE 5: TRIGGER (7) ──
         f.push(self.clob_trade_up.to_string());
         f.push(self.clob_trade_dn.to_string());
