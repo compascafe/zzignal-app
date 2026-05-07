@@ -135,6 +135,7 @@ pub struct CsvRecord {
     pub clob_trade_up_ts:      String,// timestamp HH:MM:SS.mmm último trade UP
     pub clob_trade_dn_ts:      String,// timestamp HH:MM:SS.mmm último trade DOWN
     pub od83_event:            String, // IN_UP|IN_DN|OUT_UP|OUT_DN|empty — Odiseo 83 entry/exit marker
+    pub od83_filters:          u8,    // enabled filter bitmask: 0=all_off 255=all_on (8 bits=8 filters)
     // ─── Odiseo 83 Timing ────────────────────────────────────────────────
     pub od83_up_mode:           String, // PAPER | LIVE
     pub od83_dn_mode:           String, // PAPER | LIVE
@@ -215,6 +216,7 @@ impl Default for CsvRecord {
             clob_trade_up_ts:     String::new(),
             clob_trade_dn_ts:     String::new(),
             od83_event:            String::new(),
+            od83_filters:          0,
             od83_up_mode:           String::new(),
             od83_dn_mode:           String::new(),
             od83_up_at:             String::new(),
@@ -249,7 +251,7 @@ impl CsvRecord {
          od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,od83_dn,od83_dn_entry,\
          od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,live_up,\
          live_dn,live_bal,od_signal,clob_trade_up,clob_trade_dn,\
-         clob_trade_up_vol,clob_trade_dn_vol,clob_trade_up_ts,clob_trade_dn_ts,od83_event,\
+         clob_trade_up_vol,clob_trade_dn_vol,clob_trade_up_ts,clob_trade_dn_ts,od83_event,od83_filters,\
          od83_up_mode,od83_dn_mode,\
          od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,tick_gap_ms,\
          bid_drain,ask_wall,dump_score,btc_delta,mid_from_entry,adverse_ticks,\
@@ -323,6 +325,7 @@ impl CsvRecord {
         f.push(self.clob_trade_up_ts.clone());
         f.push(self.clob_trade_dn_ts.clone());
         f.push(self.od83_event.clone());
+        f.push(self.od83_filters.to_string());
         f.push(self.od83_up_mode.clone());
         f.push(self.od83_dn_mode.clone());
         f.push(self.od83_up_at.clone());

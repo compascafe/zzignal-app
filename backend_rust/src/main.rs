@@ -726,6 +726,7 @@ async fn capture_combined(
             &filter_ctx,
         );
         rec.odiseo_signal = odiseo_signal;
+        rec.od83_filters = state.odiseo_trading.filter_chain.enabled_mask();
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
             match code.as_str() {
                 "odiseo83_up"   => { 

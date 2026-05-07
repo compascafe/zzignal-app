@@ -69,6 +69,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/odiseo/budget",   post(post_odiseo_budget))
         .route("/api/odiseo/reinvest", post(post_odiseo_reinvest))
         .route("/api/odiseo/max-sessions", post(post_odiseo_max_sessions))
+        .route("/api/odiseo/filters", post(post_odiseo_filters))
         .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
@@ -506,8 +507,29 @@ struct OdiseoLiveBody { enable: bool }
 
 async fn post_odiseo_live(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoLiveBody>) -> Json<Value> {
     s.odiseo_trading.set_live_mode(body.enable);
-    let live = s.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed);
-    Json(json!({"live_mode": live, "status": if live { "LIVE" } else { "PAPER" }}))
+    Json(json!({"ok": true, "live_mode": s.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed)}))
+}
+
+#[derive(Deserialize)]
+struct OdiseoFiltersBody { all: Option<bool>, name: Option<String>, enable: Option<bool> }
+
+async fn post_odiseo_filters(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoFiltersBody>) -> Json<Value> {
+    if let Some(name) = &body.name {
+        if body.enable.unwrap_or(true) {
+            s.odiseo_trading.filter_chain.enable(name);
+        } else {
+            s.odiseo_trading.filter_chain.disable(name);
+        }
+    } else if body.all == Some(false) {
+        s.odiseo_trading.filter_chain.disable_all();
+    } else if body.all == Some(true) {
+        s.odiseo_trading.filter_chain.enable_all();
+    }
+    Json(json!({
+        "ok": true,
+        "enabled_mask": s.odiseo_trading.filter_chain.enabled_mask(),
+        "filters": s.odiseo_trading.filter_chain.list_filters(),
+    }))
 }
 
 async fn export_wisdom(State(s): State<Arc<AppState>>) -> Response {

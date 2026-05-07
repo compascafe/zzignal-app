@@ -158,6 +158,31 @@ impl FilterChain {
         info!("[OdiseoFilter] ❌ DISABLED {}", name);
     }
 
+    pub fn disable_all(&self) {
+        let mut d = self.disabled.lock().unwrap();
+        for f in &self.filters {
+            d.insert(f.name().to_string());
+        }
+        info!("[OdiseoFilter] ALL DISABLED — Odiseo running RAW (no filters)");
+    }
+
+    pub fn enable_all(&self) {
+        self.disabled.lock().unwrap().clear();
+        info!("[OdiseoFilter] ALL ENABLED");
+    }
+
+    /// Returns u8 bitmask: bit 0=frozen, 1=spread, 2=dump, 3=volume, 4=trend, 5=reversal, 6=spoof, 7=wall
+    pub fn enabled_mask(&self) -> u8 {
+        let d = self.disabled.lock().unwrap();
+        let mut mask = 0u8;
+        for (i, f) in self.filters.iter().enumerate() {
+            if !d.contains(f.name()) {
+                mask |= 1 << i;
+            }
+        }
+        mask
+    }
+
     pub fn is_enabled(&self, name: &str) -> bool {
         !self.disabled.lock().unwrap().contains(name)
     }
