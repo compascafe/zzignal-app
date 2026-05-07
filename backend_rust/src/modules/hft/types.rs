@@ -166,6 +166,7 @@ impl Default for CsvRecord {
             binance_imbalance:   0.0,
             binance_vol_100ms:   0.0,
             binance_vol_24h:     0.0,
+            btc_vol:             0.0,
             poly_bid:            0.0,
             poly_ask:            0.0,
             poly_mid:            0.0,

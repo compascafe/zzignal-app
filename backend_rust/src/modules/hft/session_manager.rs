@@ -24,8 +24,8 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "# TIMEZONE: UTC-5 (Lima/Bogota)");
     let _ = writeln!(w, "#");
     let _ = writeln!(w, "# QUICK START FOR LLMs:");
-    let _ = writeln!(w, "#   1. Find entries: filter rows WHERE od83_event = "IN_UP" OR od83_event = "IN_DN"");
-    let _ = writeln!(w, "#   2. Find exits:  filter rows WHERE od83_event = "OUT_UP" OR od83_event = "OUT_DN"");
+    let _ = writeln!(w, "#   1. Find entries: filter rows WHERE od83_event = IN_UP OR od83_event = IN_DN");
+    let _ = writeln!(w, "#   2. Find exits:  filter rows WHERE od83_event = OUT_UP OR od83_event = OUT_DN");
     let _ = writeln!(w, "#   3. PnL per trade: od83_up_pnl at exit row (where od83_event contains OUT)");
     let _ = writeln!(w, "#   4. Win rate: count(exit rows WHERE od83_up_pnl > 0) / count(all exit rows)");
     let _ = writeln!(w, "#   5. Flash dumps: rows WHERE dump_score >= 2 OR tick_gap_ms > 1000");
