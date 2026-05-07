@@ -21,6 +21,7 @@ use crate::modules::core::credentials::ClobCredentials;
 use crate::modules::core::state::AppState;
 use crate::modules::core::persistence as db;
 use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType, PolyDepthFrame};
+use crate::modules::hft::odiseo_filters::FilterContext;
 use crate::modules::hft::ring_buffer::PriceRingBuffer;
 use crate::modules::hft::metrics::{self, TrackingState};
 use crate::modules::analysis::metrics as analysis_metrics;
@@ -693,12 +694,36 @@ async fn capture_combined(
     {
         let lt_up = *state.last_trade_up.read().await;
         let lt_down = *state.last_trade_down.read().await;
+
+        let filter_ctx = FilterContext {
+            px: 0.0, is_up: true, // overwritten per-direction in process()
+            seconds_left: state.t5_manager.seconds_left(active_sid) as i32,
+            budget: 20.0, // overwritten per-variant in process()
+            binance_price: rec.binance_price,
+            btc_vel: rec.price_velocity,
+            btc_acel: rec.btc_acel,
+            spread: rec.poly_spread,
+            mid: rec.poly_mid,
+            bid_vol: rec.poly_bid_vol_all,
+            ask_vol: rec.poly_ask_vol_all,
+            imbalance: rec.poly_imbalance,
+            dump_score: rec.dump_score,
+            reversal_score: rec.reversal_score,
+            tick_gap_ms: rec.tick_gap_ms,
+            spoof: rec.spoofing_flag,
+            ask_wall: rec.ask_wall,
+            bid_drain: rec.bid_drain,
+            trade_up: lt_up,
+            trade_dn: lt_down,
+        };
+
         let (odiseo_trades, odiseo_signal) = state.odiseo_trading.on_tick(
             active_sid,
             state.t5_manager.seconds_left(active_sid) as i32,
             rec.poly_bid_vol_all, rec.poly_ask_vol_all,
             rec.poly_imbalance, rec.price_velocity,
             lt_up, lt_down,
+            &filter_ctx,
         );
         rec.odiseo_signal = odiseo_signal;
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
@@ -725,6 +750,14 @@ async fn capture_combined(
         let now_ms = Utc::now().timestamp_millis();
         let last = LAST_TICK_MS.swap(now_ms, std::sync::atomic::Ordering::Relaxed);
         rec.tick_gap_ms = if last > 0 { now_ms - last } else { 0 };
+
+        // BTC price acceleration: Δvelocity / Δtime
+        {
+            let dt_secs = (rec.tick_gap_ms as f64 / 1000.0).max(0.001);
+            let prev_vel = *state.prev_btc_vel.read().await;
+            rec.btc_acel = (rec.price_velocity - prev_vel) / dt_secs;
+            *state.prev_btc_vel.write().await = rec.price_velocity;
+        }
 
         rec.ask_wall = if rec.poly_ask_vol_all > 0.0 && rec.poly_ask_vol_all > rec.poly_bid_vol_all * 3.0 { 1 } else { 0 };
         rec.bid_drain = 0.0;

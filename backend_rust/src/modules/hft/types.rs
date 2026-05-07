@@ -82,6 +82,7 @@ pub struct CsvRecord {
     // ─── Advanced HFT Metrics ────────────────────────────────────────────
     pub trades_per_second:    f64,  // Binance TRADE count in last rolling 1s
     pub price_velocity:       f64,  // Δprice/Δtime over 500ms window (USD/s)
+    pub btc_acel:             f64,  // Δvelocity/Δtime (USD/s²) — price acceleration
     pub poly_liquidity_delta: f64,  // Δpoly_ask_vol_all vs previous tick
     pub absorption_ratio:     f64,  // trade_vol / |Δprice| — high = absorption
     pub price_gap_ratio:      f64,  // (binance_micro - poly_mid) / binance_micro * 100
@@ -177,6 +178,7 @@ impl Default for CsvRecord {
             session_id:          0,
             trades_per_second:    0.0,
             price_velocity:       0.0,
+            btc_acel:             0.0,
             poly_liquidity_delta: 0.0,
             absorption_ratio:     0.0,
             price_gap_ratio:      0.0,
@@ -239,14 +241,16 @@ impl CsvRecord {
             pub fn csv_header() -> &'static str {
         "time,ts_exchange,event,latencia_ms,binance_price,binance_micro_price,\
          binance_imbalance,binance_vol_100ms,binance_vol_24h,btc_vol,bid,ask,mid,spread,\
-         bid_vol,ask_vol,imbalance,trades_per_second,btc_vel,\
+         bid_vol,ask_vol,imbalance,trades_per_second,btc_vel,btc_acel,\
          poly_liquidity_delta,absorption_ratio,price_gap_ratio,spoof,tape,gap,\
          pnr_active,secs_left,pnr_price,pnr_return_up,pnr_return_down,\
          pnr_volatility_1m,pnr_confidence,pnr_trend,pnr_spread_pct,p_bid_lo,\
          p_ask_hi,p_band,p_index,p_skew,od83_up,od83_up_entry,od83_up_sz,\
          od83_up_pnl,od83_up_exit,od83_up_r,od83_up_bal,od83_dn,od83_dn_entry,\
          od83_dn_sz,od83_dn_pnl,od83_dn_exit,od83_dn_r,od83_dn_bal,live_up,\
-         live_dn,live_bal,od_signal,clob_trade_up,clob_trade_dn,od83_up_mode,od83_dn_mode,\
+         live_dn,live_bal,od_signal,clob_trade_up,clob_trade_dn,\
+         clob_trade_up_vol,clob_trade_dn_vol,clob_trade_up_ts,clob_trade_dn_ts,od83_event,\
+         od83_up_mode,od83_dn_mode,\
          od83_up_at,od83_dn_at,od83_up_fill_ms,od83_dn_fill_ms,tick_gap_ms,\
          bid_drain,ask_wall,dump_score,btc_delta,mid_from_entry,adverse_ticks,\
          vol_bleed,reversal_score"
@@ -273,6 +277,7 @@ impl CsvRecord {
         f.push(self.poly_imbalance.to_string());
         f.push(self.trades_per_second.to_string());
         f.push(self.price_velocity.to_string());
+        f.push(self.btc_acel.to_string());
         f.push(self.poly_liquidity_delta.to_string());
         f.push(self.absorption_ratio.to_string());
         f.push(self.price_gap_ratio.to_string());

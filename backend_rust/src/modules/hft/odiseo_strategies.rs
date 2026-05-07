@@ -25,6 +25,7 @@ use serde::Serialize;
 use tracing::info;
 
 use crate::modules::core::worker::{CmdMsg, OrderSide, Outcome as WorkerOutcome};
+use crate::modules::hft::odiseo_filters::{FilterChain, FilterContext, FilterResult};
 
 #[derive(Debug, Clone)]
 struct OdiseoDef {
@@ -86,6 +87,7 @@ pub struct OdiseoTradingManager {
     pub max_sessions: Mutex<Vec<u32>>,  // 0 = unlimited, N = auto-off after N sessions
     sessions_done: Mutex<Vec<u32>>,     // completed session count per variant
     cmd_tx:     Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>,
+    pub filter_chain: FilterChain,     // pre-entry filter layer
 }
 
 impl OdiseoTradingManager {
@@ -94,7 +96,7 @@ impl OdiseoTradingManager {
         let mut enabled = Vec::with_capacity(n);
         for _ in 0..n { enabled.push(AtomicBool::new(true)); }
         let budgets = vec![20.0; n];
-        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx }
+        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain() }
     }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
@@ -109,6 +111,7 @@ impl OdiseoTradingManager {
     pub fn on_tick(&self, session_id:i32, seconds_left:i32,
                    bid_vol:f64, ask_vol:f64, imb:f64, vel:f64,
                    lt_up:Option<f64>, lt_dn:Option<f64>,
+                   ctx: &FilterContext,  // pre-entry filter context
     ) -> (Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, u8)
     {
         let mut sessions = self.sessions.lock().unwrap();
@@ -130,15 +133,16 @@ impl OdiseoTradingManager {
                 results.push((format!("{}_down",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
                 continue;
             }
-            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i], seconds_left);
-            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i], seconds_left);
+            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i], seconds_left, ctx);
+            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i], seconds_left, ctx);
         }
         (results, sig)
     }
 
     fn process(&self, is_up:bool, t:&mut OdiseoSessionTrade, def:&OdiseoDef, sid:i32,
                bv:f64, av:f64, imb:f64, vel:f64, lt:Option<f64>, sig:&mut u8,
-               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64, seconds_left:i32)
+               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64, seconds_left:i32,
+               ctx: &FilterContext)
     {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
@@ -230,6 +234,20 @@ impl OdiseoTradingManager {
         }
 
         if !pos.entered && px >= def.entry_threshold && px <= def.tp_price {
+            // ── PRE-ENTRY FILTER LAYER ──────────────────────────────
+            {
+                let mut fctx = ctx.clone();
+                fctx.px = px;
+                fctx.is_up = is_up;
+                fctx.budget = budget;
+                if let FilterResult::Block { reason } = self.filter_chain.check(&fctx, &code, sid) {
+                    info!("[Odiseo] #{} {} FILTERED OUT: {}", sid, code, reason);
+                    let status = 1u8;
+                    r.push((code, status, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
+                    return;
+                }
+            }
+            // ─────────────────────────────────────────────────────────
             pos.entered = true; pos.entry_price = px;
             pos.size = (budget/px).floor().max(1.0);
             pos.max_price = px; pos.prev_vol = if is_up{av}else{bv};

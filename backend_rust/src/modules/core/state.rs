@@ -109,6 +109,7 @@ pub struct AppState {
     /// Latency tracking (ms) for health endpoint
     pub latency_binance: RwLock<u64>,
     pub latency_poly:    RwLock<u64>,
+    pub prev_btc_vel:    RwLock<f64>,  // previous tick's btc_vel for acceleration calc
 
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
@@ -176,6 +177,7 @@ impl AppState {
             diagnostic_mode: AtomicBool::new(true),  // solo Odiseo activo
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
+            prev_btc_vel:      RwLock::new(0.0),
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })

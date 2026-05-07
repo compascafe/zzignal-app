@@ -13,3 +13,4 @@ pub mod pnr_strategy;
 pub mod insight_strategies;
 pub mod fenix_trading;
 pub mod odiseo_strategies;
+pub mod odiseo_filters;
