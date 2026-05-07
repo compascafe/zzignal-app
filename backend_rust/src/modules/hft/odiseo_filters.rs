@@ -135,10 +135,9 @@ impl FilterChain {
         // F8: Ask wall (one-sided market = probable dump inminente)
         chain.add(Box::new(AskWallFilter));
 
-        // ─── Deshabilitar filtros agresivos por defecto ─────────────
-        // (se habilitan cuando quieras probarlos)
-        chain.disable("spoof_protection");
-        chain.disable("ask_wall");
+        // ─── ALL FILTERS OFF by default (RAW mode) ────────────────
+        // Enable individual filters via POST /api/odiseo/filters
+        chain.disable_all();
 
         chain
     }
