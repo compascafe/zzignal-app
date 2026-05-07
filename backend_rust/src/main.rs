@@ -88,6 +88,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (*creds).clone(),
     );
 
+    // ─── Always enable Odiseo 83 + Houdini 65 (default ON) ──────────────
+    state.odiseo_trading.set_variant(0, true); // Odiseo 83
+    state.odiseo_trading.set_variant(1, true); // Houdini 65
+
     // ─── Import Wisdom from file (CLI: --import-wisdom <path>) ──────────────
     if let Some(pos) = std::env::args().position(|a| a == "--import-wisdom") {
         let path = std::env::args().nth(pos + 1);
