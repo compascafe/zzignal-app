@@ -12,8 +12,7 @@ const TAB_NAMES: &[&str] = &["Dashboard", "Trading", "Sessions", "Signals"];
 pub fn draw(f: &mut Frame, s: &State) {
     let area = f.area();
 
-    let pos_h = if s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn { 1 } else { 1 };
-    let budget_h = if s.input_mode == InputMode::Budget { 3 } else { 0 };
+    let pos_h = 1;
     let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
 
     let mut constraints = vec![
@@ -22,7 +21,6 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Min(1),        // main content
     ];
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
-    if budget_h > 0 { constraints.push(Constraint::Length(budget_h)); }
     constraints.push(Constraint::Length(2)); // footer
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -53,9 +51,9 @@ pub fn draw(f: &mut Frame, s: &State) {
     }
     ci += 1;
 
-    // ─── INPUT MODAL (command / budget) ────────────────────────────
-    if cmd_h > 0 || budget_h > 0 {
-        draw_budget_input(f, chunks[ci], s);
+    // ─── COMMAND BAR (modal) ────────────────────────────────────
+    if cmd_h > 0 {
+        draw_command_bar(f, chunks[ci], s);
         ci += 1;
     }
 
@@ -826,31 +824,15 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
 // BUDGET INPUT MODAL
 // ═══════════════════════════════════════════════════════════════════
 
-fn draw_budget_input(f: &mut Frame, area: Rect, s: &State) {
-    // Command mode
-    if s.input_mode == InputMode::Command {
-        let text = format!(
-            "▶ /{}_   [/h10 Houdini $10] [/o20 Odiseo $20] [/p PANIC] [/b30 budget] [/r reinv] [Enter]ok [Esc]cancel",
-            s.input_buf
-        );
-        f.render_widget(
-            Paragraph::new(text)
-                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Green))),
-            area,
-        );
-        return;
-    }
-    // Budget mode
-    let variant = if s.selected_variant == 0 { "Odiseo 83" } else { "Houdini 65" };
+fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
     let text = format!(
-        "{} | Budget: ${}_   [Enter]confirm [Esc]cancel",
-        variant, s.input_buf
+        "▶ /{}_\n/h10 /o20 /p /h /o",
+        s.input_buf
     );
     f.render_widget(
         Paragraph::new(text)
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))),
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Green)).title("CMD")),
         area,
     );
 }
@@ -860,20 +842,12 @@ fn draw_budget_input(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
-    let variant = if s.selected_variant == 0 { "O83" } else { "H65" };
-
-    let line1 = format!(
-        "[←→]tab  [h]H65:{}/{}  [o]O83:{}/{}  [p]PANIC  [/]cmd  [b]budget  [-/+]±$5  [1-0]preset  [q]quit",
-        if s.h65_enabled {"ON"}else{"OFF"},
-        s.h65_budget as i32,
-        if s.odi_enabled {"ON"}else{"OFF"},
-        s.odi_budget as i32,
-    );
-    let line2 = format!(
-        "▲ {} seleccionado  [j/k]cambiar variante  [r]reinv:{}",
-        variant,
-        if s.reinvest {"ON"}else{"OFF"}
-    );
+    let line1 = "[/]comandos  /h15 /o20 /p  [←→]tab  [q]salir";
+    let line2 = if s.pos_h65_up || s.pos_h65_dn {
+        "POSICION ABIERTA — /p para liquidar"
+    } else {
+        "Sin posicion abierta — /h15 para activar Houdini $15"
+    };
 
     f.render_widget(
         Paragraph::new(format!("{}\n{}", line1, line2))

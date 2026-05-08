@@ -15,17 +15,8 @@ use tokio_tungstenite::connect_async;
 
 use api::*;
 
-const FILTER_KEYS: &[(char, &str)] = &[
-    ('1', "frozen_market"), ('2', "spread_health"), ('3', "flash_dump"),
-    ('4', "min_volume"), ('5', "btc_trend_confirm"), ('6', "reversal_risk"),
-    ('7', "spoof_protection"), ('8', "ask_wall"), ('9', "mid_price_sanity"),
-    ('0', "imbalance_sanity"),
-    // Filters 11-14: session_age, reentry_cooldown, liquidity_depth, depth_balance
-    // Use a=all-ON / z=all-OFF to manage these together with the first 10.
-];
-
 #[derive(Clone, Copy, PartialEq)]
-pub enum InputMode { Normal, Budget, Command }
+pub enum InputMode { Normal, Command }
 
 struct State {
     connected: bool,
@@ -140,7 +131,7 @@ impl State {
     }
 }
 
-/// Slash command parser: /h10 /o20 /p /r /b30
+/// Slash command parser: /h10 /o20 /p
 async fn exec_slash_command(cmd: &str, s: &mut State) {
     let cmd = cmd.trim();
     if cmd.is_empty() { return; }
@@ -150,15 +141,10 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
 
     match first {
         'p' => {
-            s.add_log("PANIC SELL!", Color::Red);
+            s.add_log("PANIC — liquidando todo + market sell", Color::Red);
             s.pos_h65_up = false; s.pos_h65_dn = false;
             s.pos_odi_up = false; s.pos_odi_dn = false;
             http_post("/api/panic", "{}").await;
-        }
-        'r' => {
-            s.reinvest = !s.reinvest;
-            s.add_log(format!("Reinvest: {}", if s.reinvest {"ON"}else{"OFF"}), Color::Yellow);
-            http_post("/api/odiseo/reinvest", &format!("{{\"enable\":{}}}", s.reinvest)).await;
         }
         'h' => {
             let idx = 1;
@@ -189,16 +175,6 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                 s.selected_variant = 0;
                 s.add_log(format!("O83 ON ${:.0}", amt), Color::Green);
                 http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await;
-                http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await;
-            }
-        }
-        'b' => {
-            if let Ok(amt) = rest.parse::<f64>() {
-                let amt = amt.clamp(1.0, 200.0);
-                let idx = s.selected_variant;
-                if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
-                let name = if idx == 0 { "O83" } else { "H65" };
-                s.add_log(format!("{} budget ${:.0}", name, amt), Color::Cyan);
                 http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await;
             }
         }
@@ -444,208 +420,62 @@ async fn main() -> io::Result<()> {
 
         // ─── Keyboard ────────────────────────────────────────────────
         while let Ok(k) = irx.try_recv() {
-            // ── Command mode: /h10 /p /l /o /r /b20 ──
+            // ── Command mode ──────────────────────────────────────
             if s.input_mode == InputMode::Command {
                 match k {
                     KeyCode::Esc => { s.input_mode = InputMode::Normal; s.input_buf.clear(); }
                     KeyCode::Enter => {
-                        let cmd = s.input_buf.trim().to_string();
-                        exec_slash_command(&cmd, &mut s).await;
+                        let c = s.input_buf.trim().to_string();
+                        exec_slash_command(&c, &mut s).await;
                         s.input_mode = InputMode::Normal; s.input_buf.clear();
                     }
                     KeyCode::Backspace => { s.input_buf.pop(); }
-                    KeyCode::Char(c) => {
-                        if s.input_buf.len() < 20 { s.input_buf.push(c); }
-                    }
+                    KeyCode::Char(c) => { if s.input_buf.len() < 20 { s.input_buf.push(c); } }
                     _ => {}
                 }
                 continue;
             }
 
-            // ── Budget input mode ──────────────────────────────────
-            if s.input_mode == InputMode::Budget {
-                match k {
-                    KeyCode::Esc => { s.input_mode = InputMode::Normal; s.input_buf.clear(); }
-                    KeyCode::Enter => {
-                        if let Ok(amt) = s.input_buf.parse::<f64>() {
-                            let amt = amt.clamp(1.0, 200.0);
-                            let idx = s.selected_variant;
-                            if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
-                            s.add_log(format!("Budget ${:.0}", amt), Color::Yellow);
-                            http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
-                        }
-                        s.input_mode = InputMode::Normal; s.input_buf.clear();
-                    }
-                    KeyCode::Backspace => { s.input_buf.pop(); }
-                    KeyCode::Char(c @ ('0'..='9')) => {
-                        if s.input_buf.len() < 4 { s.input_buf.push(c); }
-                    }
-                    KeyCode::Char('.') => {
-                        if !s.input_buf.contains('.') && s.input_buf.len() < 4 { s.input_buf.push('.'); }
-                    }
-                    _ => {}
-                }
-                continue;
-            }
-
-            // ── Normal key handling ─────────────────────────────
-            match (s.tab, k) {
-                // ── GLOBAL (all tabs) ───────────────────────────────
-                (_, KeyCode::Esc) | (_, KeyCode::Char('q')) => {
+            match k {
+                KeyCode::Esc | KeyCode::Char('q') => {
                     disable_raw_mode()?;
                     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
                     terminal.show_cursor()?;
                     return Ok(());
                 }
-                (_, KeyCode::Right) | (_, KeyCode::Tab) => { s.tab = (s.tab + 1) % 4; }
-                (_, KeyCode::Left)  => { s.tab = if s.tab == 0 { 3 } else { s.tab - 1 }; }
-
-                (_, KeyCode::Char('/')) => {
+                KeyCode::Right | KeyCode::Tab => { s.tab = (s.tab + 1) % 4; }
+                KeyCode::Left => { s.tab = if s.tab == 0 { 3 } else { s.tab - 1 }; }
+                KeyCode::Down | KeyCode::Char('j') if s.tab == 2 => {
+                    if s.selected_session + 1 < s.sessions.len() { s.selected_session += 1; }
+                }
+                KeyCode::Up | KeyCode::Char('k') if s.tab == 2 => {
+                    if s.selected_session > 0 { s.selected_session -= 1; }
+                }
+                KeyCode::Char('/') => {
                     s.input_mode = InputMode::Command; s.input_buf.clear();
                 }
-                // ── TRADING HOTKEYS (global, all tabs) ───────────────
-                (_, KeyCode::Char('r')) => {
-                    let nv = !s.reinvest; s.reinvest = nv;
-                    s.add_log(format!("Reinvest: {}", if nv{"ON"}else{"OFF"}), Color::Yellow);
-                    http_post("/api/odiseo/reinvest", &format!("{{\"enable\":{nv}}}")).await;
-                }
-                (_, KeyCode::Char('p')) => {
-                    s.add_log("PANIC SELL!", Color::Red);
-                    s.pos_h65_up = false; s.pos_h65_dn = false;
-                    s.pos_odi_up = false; s.pos_odi_dn = false;
-                    http_post("/api/panic", "{}").await;
-                }
-                (_, KeyCode::Char('o')) => {
-                    let nv = !s.odi_enabled; s.odi_enabled = nv;
-                    s.add_log(format!("Odiseo 83: {}", if nv{"ON"}else{"OFF"}), if nv{Color::Green}else{Color::DarkGray});
-                    http_post("/api/odiseo/variant", &format!("{{\"index\":0,\"enable\":{nv}}}")).await;
-                }
-                (_, KeyCode::Char('h')) => {
-                    let nv = !s.h65_enabled; s.h65_enabled = nv;
-                    s.add_log(format!("Houdini 65: {}", if nv{"ON"}else{"OFF"}), if nv{Color::Green}else{Color::DarkGray});
-                    http_post("/api/odiseo/variant", &format!("{{\"index\":1,\"enable\":{nv}}}")).await;
-                }
-                (_, KeyCode::Char('-')) | (_, KeyCode::Char('_')) => {
-                    let idx = s.selected_variant;
-                    let amt = if idx == 0 { s.odi_budget - 5.0 } else { s.h65_budget - 5.0 };
-                    let amt = amt.max(1.0);
-                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
-                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
-                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
-                }
-                (_, KeyCode::Char('=')) | (_, KeyCode::Char('+')) => {
-                    let idx = s.selected_variant;
-                    let amt = if idx == 0 { s.odi_budget + 5.0 } else { s.h65_budget + 5.0 };
-                    let amt = amt.min(200.0);
-                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
-                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
-                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
-                }
-                (_, KeyCode::Char('b')) => {
-                    s.input_mode = InputMode::Budget; s.input_buf.clear();
-                    let idx = s.selected_variant;
-                    let cur = if idx == 0 { s.odi_budget } else { s.h65_budget };
-                    s.input_buf = format!("{:.0}", cur);
-                }
-                (_, KeyCode::Char('j')) => { s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 }; }
-                (_, KeyCode::Char('k')) => { s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 }; }
-                (_, KeyCode::Up) => { s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 }; }
-                (_, KeyCode::Down) => { s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 }; }
-
-                // ── BUDGET PRESETS: digits in tabs 0,2,3 (not Trading) ──
-                (0|2|3, KeyCode::Char(c @ ('1'..='9' | '0'))) => {
-                    let presets: [(char, f64); 10] = [
-                        ('1', 5.0), ('2', 10.0), ('3', 15.0), ('4', 20.0),
-                        ('5', 30.0), ('6', 50.0), ('7', 75.0), ('8', 100.0),
-                        ('9', 150.0), ('0', 200.0),
-                    ];
-                    if let Some(&(_, amt)) = presets.iter().find(|&&(k, _)| k == c) {
-                        let idx = s.selected_variant;
-                        if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
-                        let name = if idx == 0 { "O83" } else { "H65" };
-                        s.add_log(format!("{} budget ${:.0}", name, amt), Color::Cyan);
-                        http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
-                    }
-                }
-
-                // ── TRADING TAB (1) ─────────────────────────────────
-                (1, KeyCode::Char('a')) => {
-                    s.add_log("All variants ON", Color::Green);
-                    for i in 0..13 { http_post("/api/odiseo/variant", &format!("{{\"index\":{i},\"enable\":true}}")).await; }
-                    s.odi_enabled = true; s.h65_enabled = true;
-                    http_post("/api/odiseo/filters", "{\"all\":true}").await;
-                }
-                (1, KeyCode::Char('z')) => {
-                    s.add_log("All filters OFF", Color::Red);
-                    http_post("/api/odiseo/filters", "{\"all\":false}").await;
-                }
-                (1, KeyCode::Char('t')) => {
-                    let idx = s.selected_variant;
-                    let name = if idx == 0 { "Odiseo 83" } else { "Houdini 65" };
-                    s.add_log(format!("Only {}", name), Color::Yellow);
-                    for i in 0..13 {
-                        let on = i == idx;
-                        http_post("/api/odiseo/variant", &format!("{{\"index\":{i},\"enable\":{on}}}")).await;
-                    }
-                    s.odi_enabled = idx == 0; s.h65_enabled = idx == 1;
-                }
-                (1, KeyCode::Char('[')) => {
-                    let idx = s.selected_variant;
-                    let amt = if idx == 0 { s.odi_budget - 5.0 } else { s.h65_budget - 5.0 };
-                    let amt = amt.max(5.0);
-                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
-                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
-                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
-                }
-                (1, KeyCode::Char(']')) => {
-                    let idx = s.selected_variant;
-                    let amt = if idx == 0 { s.odi_budget + 5.0 } else { s.h65_budget + 5.0 };
-                    let amt = amt.min(100.0);
-                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
-                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
-                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
-                }
-                // Filter toggles (only in Trading tab)
-                (1, KeyCode::Char(c @ ('1'..='9' | '0'))) => {
-                    if let Some(&(_, name)) = FILTER_KEYS.iter().find(|&&(k,_)| k == c) {
-                        let bit = 1u16 << FILTER_KEYS.iter().position(|&(k,_)| k == c).unwrap();
-                        let currently_on = s.odi_filters & bit != 0;
-                        let enable = !currently_on;
-                        s.add_log(format!("Filter {}: {}", name, if enable {"ON"}else{"OFF"}), if enable {Color::Yellow}else{Color::DarkGray});
-                        http_post("/api/odiseo/filters", &format!("{{\"name\":\"{}\",\"enable\":{}}}", name, enable)).await;
-                    }
-                }
-
-                // ── SESSIONS TAB ────────────────────────────────────
-                (2, KeyCode::Char('s')) => {
-                    s.add_log("Starting 15-min indefinite session...", Color::Green);
+                // ── Sessions tab ──
+                KeyCode::Char('s') if s.tab == 2 => {
+                    s.add_log("Starting 15-min session...", Color::Green);
                     let now = chrono::Utc::now();
                     let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
-                    let body = format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name);
-                    http_post("/api/sessions/start", &body).await;
+                    http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await;
                 }
-                (2, KeyCode::Char('S')) => {
+                KeyCode::Char('S') if s.tab == 2 => {
                     let stop_id = s.sessions.get(s.selected_session)
-                        .filter(|sess| sess.status == "recording")
-                        .map(|sess| sess.id);
+                        .filter(|s| s.status == "recording")
+                        .map(|s| s.id);
                     if let Some(id) = stop_id {
                         s.add_log(format!("Stopping session #{}", id), Color::Yellow);
-                        let path = format!("/api/sessions/{}/stop", id);
-                        http_post(&path, "{}").await;
+                        http_post(&format!("/api/sessions/{}/stop", id), "{}").await;
                     }
                 }
-                (2, KeyCode::Char('e')) => {
-                    if let Some(sess) = s.sessions.get(s.selected_session) {
-                        let url = format!("{}/api/sessions/{}/export", API_URL, sess.id);
-                        s.add_log(format!("Export: {}", url), Color::Cyan);
+                KeyCode::Char('e') if s.tab == 2 => {
+                    let export_id = s.sessions.get(s.selected_session).map(|s| s.id);
+                    if let Some(id) = export_id {
+                        s.add_log(format!("Export: {}/api/sessions/{}/export", API_URL, id), Color::Cyan);
                     }
                 }
-
-                // ── SIGNALS TAB ────────────────────────────────────
-                (3, KeyCode::Char(' ')) => {
-                    s.add_log("Signal view refresh toggle", Color::Gray);
-                }
-
                 _ => {}
             }
         }
