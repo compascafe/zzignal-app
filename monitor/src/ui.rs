@@ -266,116 +266,197 @@ fn draw_houdini_panel(f: &mut Frame, area: Rect, s: &State) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// TAB 1: TRADING
+// TAB 1: TRADING — Strategias + Filtros + Leyenda
 // ═══════════════════════════════════════════════════════════════════
 
+const FILTER_NAMES: &[(&str, &str)] = &[
+    ("1","frozen_market"), ("2","spread_health"), ("3","flash_dump"),
+    ("4","min_volume"), ("5","btc_trend_confirm"), ("6","reversal_risk"),
+    ("7","spoof_protection"), ("8","ask_wall"), ("9","mid_price_sanity"),
+    ("0","imbalance_sanity"), ("-","session_age"), ("=","reentry_cooldown"),
+    ("[","liquidity_depth"), ("]","depth_balance"),
+];
+
 fn draw_trading(f: &mut Frame, area: Rect, s: &State) {
+    let chunks = Layout::default().direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(10),  // strategy status + filter grid
+            Constraint::Length(10),  // legend + budget
+            Constraint::Min(0),
+        ]).split(area);
+
+    draw_filter_grid(f, chunks[0], s);
+    draw_trading_legend(f, chunks[1], s);
+}
+
+fn draw_filter_grid(f: &mut Frame, area: Rect, s: &State) {
+    let half = (area.width as usize / 2).min(50);
+    let grid = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Length(half as u16), Constraint::Length(half as u16)]).split(area);
+
+    // Left column: strategies + filters 1-7
+    let mut left: Vec<Line> = Vec::new();
+    let ts = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+
+    // Strategy status
+    let o83_st = if s.odi_enabled { Color::Green } else { Color::DarkGray };
+    let h65_st = if s.h65_enabled { Color::Green } else { Color::DarkGray };
+    let o83_act = s.hft.od83_up.max(s.hft.od83_dn);
+    let h65_act = s.hft.hd65_up.max(s.hft.hd65_dn);
+    let o83_state = match o83_act { 2 => "ACTIVO", 1 => "espera", _ => "inactivo" };
+    let h65_state = match h65_act { 2 => "ACTIVO", 1 => "espera", _ => "inactivo" };
+    let o83_state_c = match o83_act { 2 => Color::Green, 1 => Color::Yellow, _ => Color::DarkGray };
+    let h65_state_c = match h65_act { 2 => Color::Green, 1 => Color::Yellow, _ => Color::DarkGray };
+
+    left.push(Line::from(Span::styled("── ESTRATEGIAS ──", ts)));
+    left.push(Line::from(vec![
+        Span::styled("[o] Odiseo 83 ", Style::default().fg(o83_st).add_modifier(Modifier::BOLD)),
+        Span::styled(if s.odi_enabled {"ON"}else{"OFF"}, Style::default().fg(o83_st)),
+        Span::styled(format!("  state:{}", o83_state), Style::default().fg(o83_state_c)),
+        Span::styled(format!("  ${:.0}", s.odi_budget), Style::default().fg(Color::Gray)),
+    ]));
+    left.push(Line::from(vec![
+        Span::styled("[h] Houdini 65", Style::default().fg(h65_st).add_modifier(Modifier::BOLD)),
+        Span::styled(if s.h65_enabled {"ON"}else{"OFF"}, Style::default().fg(h65_st)),
+        Span::styled(format!("  state:{}", h65_state), Style::default().fg(h65_state_c)),
+        Span::styled(format!("  ${:.0}", s.h65_budget), Style::default().fg(Color::Gray)),
+    ]));
+    let mode_st = if s.live { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Cyan) };
+    left.push(Line::from(vec![
+        Span::styled("[l] Modo: ", Style::default().fg(Color::White)),
+        Span::styled(if s.live {"LIVE ⚡"}else{"PAPER"}, mode_st.add_modifier(Modifier::BOLD)),
+        Span::styled("  [r]Reinv:", Style::default().fg(Color::White)),
+        Span::styled(if s.reinvest {"ON"}else{"OFF"}, if s.reinvest { Color::Green } else { Color::DarkGray }),
+    ]));
+    left.push(Line::from(""));
+    left.push(Line::from(Span::styled("── FILTROS (1-9,0) ──", ts)));
+
+    // Filters 1-7
+    for &(key, name) in &FILTER_NAMES[..7] {
+        let bit = 1u16 << (FILTER_NAMES.iter().position(|&(k,_)| k==key).unwrap());
+        let active = s.odi_filters & bit != 0;
+        let st = if active { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
+        let marker = if active { "▣" } else { "□" };
+        left.push(Line::from(vec![
+            Span::styled(format!(" [{key}] "), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{marker} {name}"), st),
+        ]));
+    }
+
+    // Right column: filters 8-14 + quick actions
+    let mut right: Vec<Line> = Vec::new();
+    right.push(Line::from(""));
+    right.push(Line::from(""));
+    right.push(Line::from(""));
+    right.push(Line::from(""));
+    right.push(Line::from(""));
+    right.push(Line::from(""));
+    right.push(Line::from(Span::styled("── FILTROS (cont) ──", ts)));
+
+    for &(key, name) in &FILTER_NAMES[7..] {
+        let bit = 1u16 << (FILTER_NAMES.iter().position(|&(k,_)| k==key).unwrap());
+        let active = s.odi_filters & bit != 0;
+        let st = if active { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
+        let marker = if active { "▣" } else { "□" };
+        right.push(Line::from(vec![
+            Span::styled(format!(" [{key}] "), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{marker} {name}"), st),
+        ]));
+    }
+    right.push(Line::from(""));
+    right.push(Line::from(Span::styled("── ACCIONES ──", ts)));
+    right.push(Line::from(Span::styled(" [a] ALL filters ON", Color::Green)));
+    right.push(Line::from(Span::styled(" [z] ALL filters OFF", Color::Red)));
+    right.push(Line::from(Span::styled(" [t] Only THIS variant", Color::Yellow)));
+    right.push(Line::from(Span::styled(" [p] PANIC SELL", Color::Red)));
+
+    f.render_widget(
+        Paragraph::new(left).block(Block::default().borders(Borders::ALL).title("Control Estrategias + Filtros")),
+        grid[0]);
+    f.render_widget(
+        Paragraph::new(right).block(Block::default().borders(Borders::ALL)),
+        grid[1]);
+}
+
+fn draw_trading_legend(f: &mut Frame, area: Rect, s: &State) {
     let chunks = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)]).split(area);
 
-    // Left: Variant control
-    draw_variant_control(f, chunks[0], s);
+    let ts = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let g = Style::default().fg(Color::Gray);
 
-    // Right: Quick commands + filter hint
-    draw_quick_commands(f, chunks[1], s);
-}
-
-fn draw_variant_control(f: &mut Frame, area: Rect, s: &State) {
-    let mut lines: Vec<Line> = Vec::new();
-
-    let title_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-    lines.push(Line::from(Span::styled("── ODISEO 83 ──", title_style)));
-
-    // Variant 0: Odiseo 83
-    let o83_st = if s.odi_enabled { Color::Green } else { Color::DarkGray };
-    let o83_sel = if s.selected_variant == 0 { "▸ " } else { "  " };
-    let o83_onoff = if s.odi_enabled { "ON" } else { "OFF" };
-    lines.push(Line::from(vec![
-        Span::styled(format!("{o83_sel}[o] Odiseo 83 "), Style::default().fg(o83_st).add_modifier(Modifier::BOLD)),
-        Span::styled(o83_onoff, Style::default().fg(o83_st)),
-        Span::styled(format!(" budget=${:.0} PnL={:+.2}", s.odi_budget, s.odi_pnl), Style::default().fg(Color::Gray)),
+    let mut legend: Vec<Line> = Vec::new();
+    legend.push(Line::from(Span::styled("── TECLAS ──", ts)));
+    legend.push(Line::from(Span::styled("", g)));
+    legend.push(Line::from(Span::styled(" ESTRATEGIAS", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
+    legend.push(Line::from(vec![
+        Span::styled("  o", Style::default().fg(Color::Yellow)), Span::styled(" = toggle Odiseo 83", g),
     ]));
-
-    // Variant 1: Houdini 65
-    let h65_st = if s.h65_enabled { Color::Green } else { Color::DarkGray };
-    let h65_sel = if s.selected_variant == 1 { "▸ " } else { "  " };
-    let h65_onoff = if s.h65_enabled { "ON" } else { "OFF" };
-    lines.push(Line::from(vec![
-        Span::styled(format!("{h65_sel}[h] Houdini 65 "), Style::default().fg(h65_st).add_modifier(Modifier::BOLD)),
-        Span::styled(h65_onoff, Style::default().fg(h65_st)),
-        Span::styled(format!(" budget=${:.0} PnL={:+.2}", s.h65_budget, s.h65_pnl), Style::default().fg(Color::Gray)),
+    legend.push(Line::from(vec![
+        Span::styled("  h", Style::default().fg(Color::Yellow)), Span::styled(" = toggle Houdini 65", g),
     ]));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("── GENERAL ──", title_style)));
-
-    let live_st = if s.live { Color::Red } else { Color::Cyan };
-    lines.push(Line::from(vec![
-        Span::styled("[l] LIVE: ", Style::default().fg(Color::White)),
-        Span::styled(if s.live {"ON ⚡"}else{"OFF"}, Style::default().fg(live_st).add_modifier(Modifier::BOLD)),
+    legend.push(Line::from(vec![
+        Span::styled("  t", Style::default().fg(Color::Yellow)), Span::styled(" = solo variante seleccionada", g),
     ]));
-
-    let r_st = if s.reinvest { Color::Green } else { Color::DarkGray };
-    lines.push(Line::from(vec![
-        Span::styled("[r] Reinvest: ", Style::default().fg(Color::White)),
-        Span::styled(if s.reinvest {"ON"}else{"OFF"}, Style::default().fg(r_st)),
+    legend.push(Line::from(Span::styled("", g)));
+    legend.push(Line::from(Span::styled(" FILTROS", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
+    legend.push(Line::from(vec![
+        Span::styled("  1-9,0", Style::default().fg(Color::Yellow)), Span::styled(" = toggle filtro 1-10", g),
     ]));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("── TECLAS RÁPIDAS ──", title_style)));
-    lines.push(Line::from(Span::styled(" [o] toggle Odiseo 83    [h] toggle Houdini 65", Color::Gray)));
-    lines.push(Line::from(Span::styled(" [l] toggle LIVE/PAPER   [r] toggle Reinvest", Color::Gray)));
-    lines.push(Line::from(Span::styled(" [p] PANIC sell          [a] All ON   [z] All OFF", Color::Gray)));
-    lines.push(Line::from(Span::styled(" [1-4] Odi-budget $5/10/20/40   [5-8] H65-budget $5/10/20/40", Color::Gray)));
-    lines.push(Line::from(Span::styled(" [f] Filter menu         [t] Only THIS variant", Color::Gray)));
+    legend.push(Line::from(vec![
+        Span::styled("  a", Style::default().fg(Color::Yellow)), Span::styled(" = todos ON", g),
+        Span::styled("    z", Style::default().fg(Color::Yellow)), Span::styled(" = todos OFF", g),
+    ]));
+    legend.push(Line::from(Span::styled("  F11-14 sin hotkey — usa a/z", g)));
+    legend.push(Line::from(Span::styled("", g)));
+    legend.push(Line::from(Span::styled(" MODO / DINERO", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
+    legend.push(Line::from(vec![
+        Span::styled("  l", Style::default().fg(Color::Yellow)), Span::styled(" = LIVE/PAPER", g),
+        Span::styled("    r", Style::default().fg(Color::Yellow)), Span::styled(" = Reinvest", g),
+        Span::styled("    p", Style::default().fg(Color::Yellow)), Span::styled(" = PANIC", g),
+    ]));
+    legend.push(Line::from(Span::styled("", g)));
+    legend.push(Line::from(Span::styled(" PRESUPUESTO", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
+    legend.push(Line::from(vec![
+        Span::styled("  ↑↓", Style::default().fg(Color::Yellow)), Span::styled(" = seleccionar variante", g),
+    ]));
+    legend.push(Line::from(vec![
+        Span::styled("  [", Style::default().fg(Color::Yellow)), Span::styled(" / ", g),
+        Span::styled("]", Style::default().fg(Color::Yellow)), Span::styled(" = bajar/subir budget", g),
+    ]));
+    legend.push(Line::from(Span::styled("", g)));
+    legend.push(Line::from(Span::styled(" NAVEGACIÓN", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
+    legend.push(Line::from(vec![
+        Span::styled("  ←→", Style::default().fg(Color::Yellow)), Span::styled(" o Tab = cambiar pestaña", g),
+    ]));
+    legend.push(Line::from(vec![
+        Span::styled("  q", Style::default().fg(Color::Yellow)), Span::styled(" o Esc = salir", g),
+    ]));
 
     f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Control de Variantes")),
-        area,
-    );
-}
+        Paragraph::new(legend).block(Block::default().borders(Borders::ALL).title("Leyenda Completa")),
+        chunks[0]);
 
-fn draw_quick_commands(f: &mut Frame, area: Rect, s: &State) {
-    let chunks = Layout::default().direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1)]).split(area);
-
-    // PANIC button
-    let panic_style = Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD);
-    f.render_widget(
-        Paragraph::new(" [p] = PANIC SELL ").style(panic_style).block(Block::default().borders(Borders::ALL)),
-        chunks[0],
-    );
-
-    // Filter status
-    let mut lines: Vec<Line> = Vec::new();
-    let filter_names: &[&str] = &[
-        "F1:dump_score", "F2:tick_gap", "F3:spread", "F4:imbalance",
-        "F5:ask_wall", "F6:spoof", "F7:btc_vel", "F8:btc_acel",
-        "F9:price_impact", "F10:depth_concentration", "F11:liquidity_depth", "F12:depth_balance",
-        "F13:liq_depth", "F14:depth_bal",
-    ];
-    lines.push(Line::from(Span::styled("── FILTROS (bitmask) ──", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
-
-    let mask = s.odi_filters;
-    for (i, name) in filter_names.iter().enumerate() {
-        let bit = 1u16 << i;
-        let active = mask & bit != 0;
-        let st = if active { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
-        let marker = if active { "▣" } else { "□" };
-        let text = format!(" {marker} {name}");
-        if i % 2 == 0 {
-            lines.push(Line::from(Span::styled(text, st)));
-        } else {
-            if let Some(last) = lines.last_mut() {
-                last.spans.push(Span::styled(format!("    {text}"), st));
-            }
-        }
-    }
+    // Right: budget quick set + PANIC
+    let mut quick: Vec<Line> = Vec::new();
+    quick.push(Line::from(Span::styled("── BUDGET RÁPIDO ──", ts)));
+    quick.push(Line::from(""));
+    let sel = if s.selected_variant == 0 { "Odiseo 83" } else { "Houdini 65" };
+    let cur = if s.selected_variant == 0 { s.odi_budget } else { s.h65_budget };
+    quick.push(Line::from(Span::styled(format!("Variante: {sel}  Budget: ${cur:.0}"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))));
+    quick.push(Line::from(""));
+    quick.push(Line::from(Span::styled(" [ or ]  =  ajustar budget", g)));
+    quick.push(Line::from(Span::styled("", g)));
+    quick.push(Line::from(Span::styled("── PANIC ──", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))));
+    quick.push(Line::from(""));
+    quick.push(Line::from(Span::styled("   [p] = PANIC SELL", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD))));
+    quick.push(Line::from(""));
+    quick.push(Line::from(Span::styled("Cancela todas las órdenes", g)));
+    quick.push(Line::from(Span::styled("y vende a mercado.", g)));
 
     f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Filtros Activos [f]")),
-        chunks[1],
-    );
+        Paragraph::new(quick).block(Block::default().borders(Borders::ALL).title("Acciones Rápidas")),
+        chunks[1]);
 }
 
 // ═══════════════════════════════════════════════════════════════════

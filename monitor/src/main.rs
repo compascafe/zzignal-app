@@ -15,8 +15,14 @@ use tokio_tungstenite::connect_async;
 
 use api::*;
 
-const ODI_BUDGETS: [f64; 4] = [5.0, 10.0, 20.0, 40.0];
-const H65_BUDGETS: [f64; 4] = [5.0, 10.0, 20.0, 40.0];
+const FILTER_KEYS: &[(char, &str)] = &[
+    ('1', "frozen_market"), ('2', "spread_health"), ('3', "flash_dump"),
+    ('4', "min_volume"), ('5', "btc_trend_confirm"), ('6', "reversal_risk"),
+    ('7', "spoof_protection"), ('8', "ask_wall"), ('9', "mid_price_sanity"),
+    ('0', "imbalance_sanity"),
+    // Filters 11-14: session_age, reentry_cooldown, liquidity_depth, depth_balance
+    // Use a=all-ON / z=all-OFF to manage these together with the first 10.
+];
 
 struct State {
     connected: bool,
@@ -339,11 +345,12 @@ async fn main() -> io::Result<()> {
                     s.add_log("All variants ON", Color::Green);
                     for i in 0..13 { http_post("/api/odiseo/variant", &format!("{{\"index\":{i},\"enable\":true}}")).await; }
                     s.odi_enabled = true; s.h65_enabled = true;
+                    // Also all filters ON for 'a' in Trading tab
+                    http_post("/api/odiseo/filters", "{\"all\":true}").await;
                 }
                 (1, KeyCode::Char('z')) => {
-                    s.add_log("All variants OFF", Color::Red);
-                    for i in 0..13 { http_post("/api/odiseo/variant", &format!("{{\"index\":{i},\"enable\":false}}")).await; }
-                    s.odi_enabled = false; s.h65_enabled = false;
+                    s.add_log("All filters OFF", Color::Red);
+                    http_post("/api/odiseo/filters", "{\"all\":false}").await;
                 }
                 (1, KeyCode::Char('t')) => {
                     // Only THIS variant
@@ -356,35 +363,33 @@ async fn main() -> io::Result<()> {
                     }
                     s.odi_enabled = idx == 0; s.h65_enabled = idx == 1;
                 }
-                (1, KeyCode::Up) | (1, KeyCode::Char('k')) => {
-                    s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 };
+                (1, KeyCode::Up) | (1, KeyCode::Char('k')) => { s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 }; }
+                (1, KeyCode::Down) | (1, KeyCode::Char('j')) => { s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 }; }
+                // Budget adjust
+                (1, KeyCode::Char('[')) => {
+                    let idx = s.selected_variant;
+                    let amt = if idx == 0 { s.odi_budget - 5.0 } else { s.h65_budget - 5.0 };
+                    let amt = amt.max(5.0);
+                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
+                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
+                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
                 }
-                (1, KeyCode::Down) | (1, KeyCode::Char('j')) => {
-                    s.selected_variant = if s.selected_variant == 0 { 1 } else { 0 };
+                (1, KeyCode::Char(']')) => {
+                    let idx = s.selected_variant;
+                    let amt = if idx == 0 { s.odi_budget + 5.0 } else { s.h65_budget + 5.0 };
+                    let amt = amt.min(100.0);
+                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
+                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
+                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
                 }
-                // Budget: 1-4 = Odiseo, 5-8 = Houdini
-                (1, KeyCode::Char(c @ '1'..='4')) => {
-                    let idx = (c as u8 - b'1') as usize;
-                    let amt = ODI_BUDGETS[idx];
-                    s.odi_budget = amt;
-                    s.add_log(format!("Odiseo budget: ${:.0}", amt), Color::Yellow);
-                    http_post("/api/odiseo/budget", &format!("{{\"index\":0,\"amount\":{amt}}}")).await;
-                }
-                (1, KeyCode::Char(c @ '5'..='8')) => {
-                    let idx = (c as u8 - b'5') as usize;
-                    let amt = H65_BUDGETS[idx];
-                    s.h65_budget = amt;
-                    s.add_log(format!("H65 budget: ${:.0}", amt), Color::Yellow);
-                    http_post("/api/odiseo/budget", &format!("{{\"index\":1,\"amount\":{amt}}}")).await;
-                }
-                (1, KeyCode::Char('f')) => {
-                    // Toggle all filters on/off
-                    let nv = s.odi_filters == 0;
-                    s.add_log(format!("Filters: {}", if nv {"ALL ON"}else{"ALL OFF"}), Color::Yellow);
-                    if nv {
-                        http_post("/api/odiseo/filters", "{\"enable\":true}").await;
-                    } else {
-                        http_post("/api/odiseo/filters", "{\"enable\":false}").await;
+                // Individual filter toggles (1-9, 0)
+                (1, KeyCode::Char(c @ ('1'..='9' | '0'))) => {
+                    if let Some(&(_, name)) = FILTER_KEYS.iter().find(|&&(k,_)| k == c) {
+                        let bit = 1u16 << FILTER_KEYS.iter().position(|&(k,_)| k == c).unwrap();
+                        let currently_on = s.odi_filters & bit != 0;
+                        let enable = !currently_on;
+                        s.add_log(format!("Filter {}: {}", name, if enable {"ON"}else{"OFF"}), if enable {Color::Yellow}else{Color::DarkGray});
+                        http_post("/api/odiseo/filters", &format!("{{\"name\":\"{}\",\"enable\":{}}}", name, enable)).await;
                     }
                 }
 
