@@ -134,6 +134,18 @@ impl FilterChain {
         // F8: Ask wall (one-sided market = probable dump inminente)
         chain.add(Box::new(AskWallFilter));
 
+        // F9: Mid price sanity (block if mid stuck at default 0.50 = stale book)
+        chain.add(Box::new(MidPriceSanityFilter { mid_dead_zone: 0.01 }));
+
+        // F10: Imbalance sanity (block corrupted/infinite imbalance values)
+        chain.add(Box::new(ImbalanceSanityFilter { max_imbalance: 10.0 }));
+
+        // F11: Session age (block entries at session boundaries)
+        chain.add(Box::new(SessionAgeFilter { min_secs: 30, max_secs: 840 }));
+
+        // F12: Re-entry cooldown (prevent thrashing)
+        chain.add(Box::new(ReEntryCooldownFilter::new(30)));
+
         // ─── ALL FILTERS OFF by default (RAW mode) ────────────────
         // Enable individual filters via POST /api/odiseo/filters
         chain.disable_all();
@@ -168,10 +180,10 @@ impl FilterChain {
         info!("[OdiseoFilter] ALL ENABLED");
     }
 
-    /// Returns u8 bitmask: bit 0=frozen, 1=spread, 2=dump, 3=volume, 4=trend, 5=reversal, 6=spoof, 7=wall
-    pub fn enabled_mask(&self) -> u8 {
+    /// Returns u16 bitmask: bit 0=frozen, 1=spread, 2=dump, 3=volume, 4=trend, 5=reversal, 6=spoof, 7=wall, 8=mid, 9=imbalance, 10=age, 11=cooldown
+    pub fn enabled_mask(&self) -> u16 {
         let d = self.disabled.lock().unwrap();
-        let mut mask = 0u8;
+        let mut mask = 0u16;
         for (i, f) in self.filters.iter().enumerate() {
             if !d.contains(f.name()) {
                 mask |= 1 << i;
@@ -358,6 +370,92 @@ impl OdiseoEntryFilter for AskWallFilter {
         if ctx.ask_wall == 1 {
             return FilterResult::block("ask wall detected (ask_vol > 3x bid_vol)".to_string());
         }
+        FilterResult::Pass
+    }
+}
+
+// ─── F9: MidPriceSanityFilter ──────────────────────────────────────────────
+/// Bloquea entrada si el mid price está en el valor default/stale (~0.50).
+/// Un mid exactamente en 0.5000 significa que el orderbook aún no tiene
+/// ofertas reales — los datos son basura de inicio de sesion.
+/// Afecta especialmente a H65 que dispara a precios bajos (0.65).
+pub struct MidPriceSanityFilter { pub mid_dead_zone: f64 }
+impl OdiseoEntryFilter for MidPriceSanityFilter {
+    fn name(&self) -> &'static str { "mid_price_sanity" }
+    fn check(&self, ctx: &FilterContext) -> FilterResult {
+        if (ctx.mid - 0.50).abs() < self.mid_dead_zone {
+            return FilterResult::block(format!(
+                "mid price stale ({:.4} within {:.3} of 0.50 — no real market)", ctx.mid, self.mid_dead_zone
+            ));
+        }
+        FilterResult::Pass
+    }
+}
+
+// ─── F10: ImbalanceSanityFilter ────────────────────────────────────────────
+/// Bloquea entrada si el imbalance tiene valores imposibles/corruptos.
+/// Valores > 100 o astronomicos (1e77) indican datos corruptos en
+/// bordes de sesion donde bid_vol y ask_vol son cero o negativos.
+pub struct ImbalanceSanityFilter { pub max_imbalance: f64 }
+impl OdiseoEntryFilter for ImbalanceSanityFilter {
+    fn name(&self) -> &'static str { "imbalance_sanity" }
+    fn check(&self, ctx: &FilterContext) -> FilterResult {
+        if ctx.imbalance < 0.0 || ctx.imbalance > self.max_imbalance {
+            return FilterResult::block(format!(
+                "imbalance corrupt ({:.2} outside [0, {:.0}] — stale boundary data)", ctx.imbalance, self.max_imbalance
+            ));
+        }
+        FilterResult::Pass
+    }
+}
+
+// ─── F11: SessionAgeFilter ─────────────────────────────────────────────────
+/// Bloquea entrada si estamos muy cerca del borde de la sesion.
+/// Primeros 90s: orderbook no formado, precios volatiles.
+/// Ultimos 30s: mercado muere, flash-protection blockea posiciones abiertas.
+/// Defensa extra sobre el boundary_protection del engine.
+pub struct SessionAgeFilter { pub min_secs: i32, pub max_secs: i32 }
+impl OdiseoEntryFilter for SessionAgeFilter {
+    fn name(&self) -> &'static str { "session_age" }
+    fn check(&self, ctx: &FilterContext) -> FilterResult {
+        if ctx.seconds_left > self.max_secs {
+            return FilterResult::block(format!(
+                "session too early ({}s left > {}s max — orderbook not formed)", ctx.seconds_left, self.max_secs
+            ));
+        }
+        if ctx.seconds_left < self.min_secs {
+            return FilterResult::block(format!(
+                "session too late ({}s left < {}s min — market dying)", ctx.seconds_left, self.min_secs
+            ));
+        }
+        FilterResult::Pass
+    }
+}
+
+// ─── F12: ReEntryCooldownFilter ────────────────────────────────────────────
+/// Bloquea re-entrada en la misma direccion si pasaron menos de N segundos
+/// desde la ultima entrada. Evita thrashing (entrar/salir en loop).
+/// Usa un Mutex interno para trackear timestamps por variant+side.
+pub struct ReEntryCooldownFilter { pub cooldown_secs: u64, last_entry: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> }
+impl ReEntryCooldownFilter {
+    pub fn new(cooldown_secs: u64) -> Self {
+        Self { cooldown_secs, last_entry: std::sync::Mutex::new(std::collections::HashMap::new()) }
+    }
+}
+impl OdiseoEntryFilter for ReEntryCooldownFilter {
+    fn name(&self) -> &'static str { "reentry_cooldown" }
+    fn check(&self, ctx: &FilterContext) -> FilterResult {
+        let key = format!("{}_{}", if ctx.is_up {"up"}else{"dn"}, ctx.px as i64);
+        let mut map = self.last_entry.lock().unwrap();
+        if let Some(t) = map.get(&key) {
+            let elapsed = t.elapsed().as_secs();
+            if elapsed < self.cooldown_secs {
+                return FilterResult::block(format!(
+                    "re-entry cooldown ({}s elapsed < {}s required)", elapsed, self.cooldown_secs
+                ));
+            }
+        }
+        map.insert(key, std::time::Instant::now());
         FilterResult::Pass
     }
 }

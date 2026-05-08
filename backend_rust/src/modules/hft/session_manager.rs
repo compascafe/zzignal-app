@@ -41,7 +41,7 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "# STATUS: 0=idle/blocked  1=WATCHING  2=ACTIVE");
     let _ = writeln!(w, "# EXIT:   0=active  1=TP  2=SL-micro  3=SL-trend  4=SL-hard  5=settle  6=flash_protect");
     let _ = writeln!(w, "# DUMP:   0=safe  1=warn(gap>500ms)  2=critical(ask_wall)  3=dead(bid=0 or gap>2s)");
-    let _ = writeln!(w, "# FILTERS (od83_filters bitmask): 0=frozen 1=spread 2=dump 3=volume 4=trend 5=reversal 6=spoof 7=wall");
+    let _ = writeln!(w, "# FILTERS (od83_filters bitmask): 0=frozen 1=spread 2=dump 3=volume 4=trend 5=reversal 6=spoof 7=wall 8=mid_price 9=imbalance 10=session_age 11=cooldown");
     let _ = writeln!(w, "#");
     let _ = writeln!(w, "# ═══════════════════════════════════════════════════════════════");
     let _ = writeln!(w, "# FASE 0: IDENTIDAD (cols 1-4)");
@@ -102,7 +102,7 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "#   28 | clob_trade_dn_vol   | float       | Total volume of trades in DOWN window");
     let _ = writeln!(w, "#   29 | clob_trade_count_up | int         | Number of qualifying trades in UP window (0-10)");
     let _ = writeln!(w, "#   30 | clob_trade_count_dn | int         | Number of qualifying trades in DOWN window (0-10)");
-    let _ = writeln!(w, "#   31 | od83_filters        | int         | Filter bitmask: 0=RAW(all_off) 63=all_on. Configurable via API");
+    let _ = writeln!(w, "#   31 | od83_filters        | int         | Filter bitmask: 0=RAW(all_off) 4095=all_on. Configurable via API");
     let _ = writeln!(w, "#");
     let _ = writeln!(w, "# ═══════════════════════════════════════════════════════════════");
     let _ = writeln!(w, "# FASE 6: ★ ODISEO 83 UP (cols 34-40) — Long position tracking");

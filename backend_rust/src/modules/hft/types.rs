@@ -127,7 +127,7 @@ pub struct CsvRecord {
     pub clob_trade_count_up:  u16,   // N° of qualifying trades in UP window
     pub clob_trade_count_dn:  u16,   // N° of qualifying trades in DOWN window
     pub od83_event:            String, // IN_UP|IN_DN|OUT_UP|OUT_DN|empty — Odiseo 83 entry/exit marker
-    pub od83_filters:          u8,    // enabled filter bitmask: 0=all_off 255=all_on (8 bits=8 filters)
+    pub od83_filters:          u16,   // enabled filter bitmask: 0=all_off 4095=all_on (12 bits=12 filters)
     // ─── Odiseo 83 Timing ────────────────────────────────────────────────
     pub od83_up_mode:           String, // PAPER | LIVE
     pub od83_dn_mode:           String, // PAPER | LIVE
