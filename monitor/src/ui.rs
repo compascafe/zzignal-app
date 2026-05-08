@@ -4,16 +4,27 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
 use ratatui::Frame;
 
-use super::State;
+use crate::InputMode;
+use crate::State;
 
 const TAB_NAMES: &[&str] = &["Dashboard", "Trading", "Sessions", "Signals"];
 
 pub fn draw(f: &mut Frame, s: &State) {
     let area = f.area();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(2)])
-        .split(area);
+
+    let pos_h = if s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn { 2 } else { 1 };
+    let budget_h = if s.input_mode == InputMode::Budget { 3 } else { 0 };
+
+    let mut constraints = vec![
+        Constraint::Length(1),     // tab bar
+        Constraint::Length(pos_h), // position bar
+        Constraint::Min(1),        // main content
+    ];
+    if budget_h > 0 { constraints.push(Constraint::Length(budget_h)); }
+    constraints.push(Constraint::Length(2)); // footer
+
+    let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
+    let mut ci = 0;
 
     // ─── TAB BAR ──────────────────────────────────────────────────────
     let tab_titles: Vec<Line> = TAB_NAMES.iter().enumerate().map(|(i, name)| {
@@ -24,29 +35,30 @@ pub fn draw(f: &mut Frame, s: &State) {
         };
         Line::from(Span::styled(format!(" {name} "), style))
     }).collect();
-    f.render_widget(Tabs::new(tab_titles).block(Block::default().borders(Borders::BOTTOM)), chunks[0]);
+    f.render_widget(Tabs::new(tab_titles).block(Block::default().borders(Borders::BOTTOM)), chunks[ci]);
+    ci += 1;
+
+    // ─── POSITION BAR (always visible) ─────────────────────────────────
+    draw_position_bar(f, chunks[ci], s); ci += 1;
 
     // ─── MAIN CONTENT ─────────────────────────────────────────────────
     match s.tab {
-        0 => draw_dashboard(f, chunks[1], s),
-        1 => draw_trading(f, chunks[1], s),
-        2 => draw_sessions(f, chunks[1], s),
-        3 => draw_signals(f, chunks[1], s),
+        0 => draw_dashboard(f, chunks[ci], s),
+        1 => draw_trading(f, chunks[ci], s),
+        2 => draw_sessions(f, chunks[ci], s),
+        3 => draw_signals(f, chunks[ci], s),
         _ => {}
+    }
+    ci += 1;
+
+    // ─── BUDGET INPUT (modal) ─────────────────────────────────────────
+    if budget_h > 0 {
+        draw_budget_input(f, chunks[ci], s);
+        ci += 1;
     }
 
     // ─── FOOTER ───────────────────────────────────────────────────────
-    let footer_text = match s.tab {
-        0 => "[←→]tab [l]LIVE [p]PANIC [r]Reinv [o]Odi83 [h]H65 [-/+]budget [q]quit",
-        1 => "[←→]tab [o/h]tog-strat [1-9,0]filtros [a/z]all-filt [p]PANIC [-/+]budget [t]only [q]quit",
-        2 => "[←→]tab [s]start-session [S]stop-session [e]export [↑↓]select [q]quit",
-        3 => "[←→]tab — BTC metrics + triggers live [q]quit",
-        _ => "[q]quit",
-    };
-    f.render_widget(
-        Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray)),
-        chunks[2],
-    );
+    draw_footer(f, chunks[ci], s);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -735,4 +747,112 @@ fn draw_market_state(f: &mut Frame, area: Rect, s: &State) {
             s.hft.event,
         )).block(Block::default().borders(Borders::ALL).title("Último Tick")),
         chunks[4]);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// POSITION BAR — visible in ALL tabs
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
+    let mode_str = if s.live { "LIVE" } else { "PAPER" };
+
+    let h65_pos = if s.pos_h65_up {
+        let entry = s.pos_h65_entry_up;
+        let current = s.hft.clob_trade_up;
+        let delta = current - entry;
+        let delta_pct = if entry > 0.0 { delta / entry * 100.0 } else { 0.0 };
+        format!("H65 ▲ UP  entrada:{:.4}  actual:{:.4}  {:+.1}%", entry, current, delta_pct)
+    } else if s.pos_h65_dn {
+        let entry = s.pos_h65_entry_dn;
+        let current = s.hft.clob_trade_dn;
+        let delta = current - entry;
+        let delta_pct = if entry > 0.0 { delta / entry * 100.0 } else { 0.0 };
+        format!("H65 ▼ DN  entrada:{:.4}  actual:{:.4}  {:+.1}%", entry, current, delta_pct)
+    } else if s.h65_enabled {
+        format!("H65 ◆ esperando ({:.0} {})", s.h65_budget, mode_str)
+    } else {
+        "H65 ○ OFF".to_string()
+    };
+
+    let h65_c = if s.pos_h65_up || s.pos_h65_dn {
+        let delta = if s.pos_h65_up { s.hft.clob_trade_up - s.pos_h65_entry_up }
+                   else { s.hft.clob_trade_dn - s.pos_h65_entry_dn };
+        if delta > 0.0 { Color::Green } else { Color::Red }
+    } else if s.h65_enabled { Color::Yellow } else { Color::DarkGray };
+
+    let odi_pos = if s.pos_odi_up {
+        let entry = s.pos_odi_entry_up;
+        let current = s.hft.clob_trade_up;
+        format!("O83 ▲ UP  @{:.4}→{:.4}", entry, current)
+    } else if s.pos_odi_dn {
+        let entry = s.pos_odi_entry_dn;
+        let current = s.hft.clob_trade_dn;
+        format!("O83 ▼ DN  @{:.4}→{:.4}", entry, current)
+    } else if s.odi_enabled {
+        format!("O83 ◆ esperando ({:.0} {})", s.odi_budget, mode_str)
+    } else {
+        "O83 ○ OFF".to_string()
+    };
+
+    let odi_c = if s.pos_odi_up || s.pos_odi_dn { Color::Green } else if s.odi_enabled { Color::Yellow } else { Color::DarkGray };
+
+    let h = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 2); 2]).split(area);
+
+    f.render_widget(
+        Paragraph::new(h65_pos).style(Style::default().fg(h65_c).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL).title("Houdini 65")),
+        h[0]);
+
+    f.render_widget(
+        Paragraph::new(odi_pos).style(Style::default().fg(odi_c).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL).title("Odiseo 83")),
+        h[1]);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BUDGET INPUT MODAL
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_budget_input(f: &mut Frame, area: Rect, s: &State) {
+    let variant = if s.selected_variant == 0 { "Odiseo 83" } else { "Houdini 65" };
+    let text = format!(
+        "{} | Budget: ${}_   [Enter]confirm [Esc]cancel",
+        variant, s.input_buf
+    );
+    f.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan))),
+        area,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FOOTER — hotkeys permanentes
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
+    let variant = if s.selected_variant == 0 { "O83" } else { "H65" };
+    let mode = if s.live { "LIVE" } else { "PAPER" };
+
+    let line1 = format!(
+        "[←→]tab  [h]H65:{}/{}  [o]O83:{}/{}  [l]{}  [p]PANIC  [b]budget  [-/+]±$5  [1-0]preset  [q]quit",
+        if s.h65_enabled {"ON"}else{"OFF"},
+        s.h65_budget as i32,
+        if s.odi_enabled {"ON"}else{"OFF"},
+        s.odi_budget as i32,
+        mode,
+    );
+    let line2 = format!(
+        "▲ {} seleccionado  [j/k]cambiar variante  [r]reinv:{}",
+        variant,
+        if s.reinvest {"ON"}else{"OFF"}
+    );
+
+    f.render_widget(
+        Paragraph::new(format!("{}\n{}", line1, line2))
+            .style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
 }
