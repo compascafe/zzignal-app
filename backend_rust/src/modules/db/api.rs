@@ -838,9 +838,19 @@ async fn export_session(
         }
     };
 
+    let safe_name = session.name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect::<String>();
+    let filename = if safe_name.is_empty() {
+        format!("session_{:04}_hft.csv", id)
+    } else {
+        format!("session_{:04}_{}_hft.csv", id, safe_name)
+    };
+
     (StatusCode::OK,
      [("Content-Type", "text/csv; charset=utf-8"),
-      ("Content-Disposition", &format!("attachment; filename=\"session_{}_hft.csv\"", id))],
+      ("Content-Disposition", &format!("attachment; filename=\"{}\"", filename))],
      csv).into_response()
 }
 
