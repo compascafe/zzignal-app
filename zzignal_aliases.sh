@@ -73,7 +73,7 @@ zz-emergency() {
 # ── Monitoreo ──────────────────────────────────
 alias zz-log='sudo journalctl -u zzignal-app --no-pager -n 30 | grep -E "ENTER|EXIT|Order result|Odiseo|error"'
 alias zz-log-f='sudo journalctl -u zzignal-app -f | grep --line-buffered -E "ENTER|EXIT|Order result|Odiseo|error"'
-alias zz-monitor='cd /home/ubuntu/zzignal-app && ./monitor/target/release/zzignal-monitor'
+alias zz-monitor='cd /home/ubuntu/zzignal-app && ./zzignal-monitor'
 alias zz-orders='curl -s $ZZ_API/api/orders | python3 -m json.tool'
 alias zz-fills='curl -s $ZZ_API/api/fills | python3 -m json.tool'
 
