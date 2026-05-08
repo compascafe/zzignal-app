@@ -896,6 +896,41 @@ async fn capture_combined(
     // ─── Perf: processing time (micros) ──────────────────────────────────
     let _proc_us = t_start.elapsed().as_micros() as u64;
 
+    // ─── Update latest HFT state for TUI real-time signal view ───────────
+    {
+        let mut hft = state.latest_hft.write().await;
+        hft.time = rec.ts_local.clone();
+        hft.event = rec.event_type.as_str().to_string();
+        hft.btc_price = rec.binance_price;
+        hft.mid = rec.poly_mid;
+        hft.spread = rec.poly_spread;
+        hft.imbalance = rec.poly_imbalance;
+        hft.bid_vol = rec.poly_bid_vol_all;
+        hft.ask_vol = rec.poly_ask_vol_all;
+        hft.clob_trade_up = rec.clob_trade_up;
+        hft.clob_trade_dn = rec.clob_trade_dn;
+        hft.clob_trade_up_vol = rec.clob_trade_up_vol;
+        hft.clob_trade_dn_vol = rec.clob_trade_dn_vol;
+        hft.btc_vel = rec.price_velocity;
+        hft.btc_acel = rec.btc_acel;
+        hft.spoof = rec.spoofing_flag;
+        hft.dump_score = rec.dump_score;
+        hft.ask_wall = rec.ask_wall;
+        hft.tick_gap_ms = rec.tick_gap_ms;
+        hft.secs_left = rec.pnr_seconds_left;
+        hft.od83_up = rec.odiseo83_up_active;
+        hft.od83_dn = rec.odiseo83_down_active;
+        hft.hd65_up = rec.houdini65_up_active;
+        hft.hd65_dn = rec.houdini65_down_active;
+        hft.od83_up_bal = rec.odiseo83_up_balance;
+        hft.od83_dn_bal = rec.odiseo83_down_balance;
+        hft.hd65_up_bal = rec.houdini65_up_balance;
+        hft.hd65_dn_bal = rec.houdini65_down_balance;
+        hft.od83_filters = rec.od83_filters;
+        hft.od83_event = rec.od83_event.clone();
+        hft.hd65_event = rec.houdini65_event.clone();
+    }
+
     // Per-session CSV file (multi-writer: each session gets its own file)
     state.session_manager.push(&rec);
 

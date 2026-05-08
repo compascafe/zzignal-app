@@ -82,6 +82,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Diagnostic mode toggle
         .route("/api/mode",            get(get_mode))
         .route("/api/mode/diagnostic", post(post_diagnostic_mode))
+        // Live HFT triggers for TUI
+        .route("/api/hft/latest",      get(get_hft_latest))
         // Candles (live desde estado en memoria)
         .route("/api/candles",         get(get_candles))
         .route("/api/candles/interval",post(set_interval))
@@ -1280,6 +1282,13 @@ async fn post_diagnostic_mode(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async fn get_hft_latest(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let hft = state.latest_hft.read().await.clone();
+    Json(serde_json::to_value(hft).unwrap_or_default())
+}
+
+// ─── Helpers (continued) ──────────────────────────────────────────────────────
 
 fn parse_side(s: &str) -> Result<OrderSide, String> {
     match s.to_lowercase().as_str() {

@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +24,40 @@ use crate::modules::hft::pnr_strategy::PnrManager;
 use crate::modules::hft::insight_strategies::InsightManager;
 use crate::modules::hft::fenix_trading::FenixTradingManager;
 use crate::modules::hft::odiseo_strategies::OdiseoTradingManager;
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct LatestHftState {
+    pub time: String,
+    pub event: String,
+    pub btc_price: f64,
+    pub mid: f64,
+    pub spread: f64,
+    pub imbalance: f64,
+    pub bid_vol: f64,
+    pub ask_vol: f64,
+    pub clob_trade_up: f64,
+    pub clob_trade_dn: f64,
+    pub clob_trade_up_vol: f64,
+    pub clob_trade_dn_vol: f64,
+    pub btc_vel: f64,
+    pub btc_acel: f64,
+    pub spoof: u8,
+    pub dump_score: u8,
+    pub ask_wall: u8,
+    pub tick_gap_ms: i64,
+    pub secs_left: i32,
+    pub od83_up: u8,
+    pub od83_dn: u8,
+    pub hd65_up: u8,
+    pub hd65_dn: u8,
+    pub od83_up_bal: f64,
+    pub od83_dn_bal: f64,
+    pub hd65_up_bal: f64,
+    pub hd65_dn_bal: f64,
+    pub od83_filters: u16,
+    pub od83_event: String,
+    pub hd65_event: String,
+}
 
 pub struct AppState {
     // Estado en memoria (actualizado por el consumer de AppMsg)
@@ -106,6 +141,9 @@ pub struct AppState {
     /// Modo diagnóstico: solo captura datos crudos + health, sin estrategias.
     pub diagnostic_mode: std::sync::atomic::AtomicBool,
 
+    /// Latest HFT trigger state for TUI real-time signal view
+    pub latest_hft: RwLock<LatestHftState>,
+
     /// Latency tracking (ms) for health endpoint
     pub latency_binance: RwLock<u64>,
     pub latency_poly:    RwLock<u64>,
@@ -175,6 +213,7 @@ impl AppState {
             odiseo_trading:    Arc::new(OdiseoTradingManager::new(Some(cmd_tx_clone))),
             poly_depth_history: RwLock::new(VecDeque::with_capacity(300)),
             diagnostic_mode: AtomicBool::new(false),
+            latest_hft: RwLock::new(LatestHftState::default()),
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
             prev_btc_vel:      RwLock::new(0.0),
