@@ -1,8 +1,18 @@
 name: Deploy App
 
+# ═══════════════════════════════════════════════════════════
+# DESHABILITADO — GitHub Actions bloqueado (deuda)
+# Deploy manual en el servidor:
+#   ssh ubuntu@<ip> 'cd ~/zzignal-app && git pull &&
+#     cargo build --release --manifest-path backend_rust/Cargo.toml &&
+#     cargo build --release --manifest-path monitor/Cargo.toml &&
+#     sudo systemctl restart zzignal-app'
+# ═══════════════════════════════════════════════════════════
+
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:  # solo manual
+  # push:             # deshabilitado 2026-05-08
+  #   branches: [main]
 
 concurrency:
   group: deploy-production
