@@ -697,11 +697,12 @@ async fn capture_combined(
     // ─── Trade-based spread (replaces book bid-ask) ──────────────────
     rec.poly_spread = rec.clob_trade_up - rec.clob_trade_dn;
 
-    // ─── ESTRATEGIAS — solo en modo normal ────────────────────────────────
+    // ─── secs_left siempre poblado (necesario para CSV + estrategias) ─────
+    let secs_left = state.t5_manager.seconds_left(active_sid);
+    rec.pnr_seconds_left = secs_left as i32;
+
+    // ─── PNR — solo en modo normal ────────────────────────────────────────
     if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
-        // ─── PNR ─────────────────────────────────────────────────────────
-        let secs_left = state.t5_manager.seconds_left(active_sid);
-        rec.pnr_seconds_left = secs_left as i32;
         if secs_left >= 0 && secs_left <= 300 {
             let pnr_price = rec.poly_mid;
             let pnr_ret_up = if rec.poly_ask > 0.0 { 1.0 - rec.poly_ask } else { 0.0 };
@@ -709,7 +710,7 @@ async fn capture_combined(
             state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
                 pnr_price, pnr_ret_up, pnr_ret_dn);
         }
-    } // end diagnostic_mode guard — solo Odiseo corre fuera
+    } // end diagnostic_mode guard
 
     // ─── Odiseo Trading v4 (trade window average + anti-whale limit-buy) ─
     {

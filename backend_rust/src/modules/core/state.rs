@@ -174,7 +174,7 @@ impl AppState {
             fenix_trading:     Arc::new(FenixTradingManager::new()),
             odiseo_trading:    Arc::new(OdiseoTradingManager::new(Some(cmd_tx_clone))),
             poly_depth_history: RwLock::new(VecDeque::with_capacity(300)),
-            diagnostic_mode: AtomicBool::new(true),  // solo Odiseo activo
+            diagnostic_mode: AtomicBool::new(false),
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
             prev_btc_vel:      RwLock::new(0.0),
