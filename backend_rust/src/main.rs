@@ -736,6 +736,8 @@ async fn capture_combined(
             ask_wall: rec.ask_wall,
             trade_up: lt_up,
             trade_dn: lt_down,
+            price_impact: rec.price_impact,
+            depth_concentration: rec.depth_concentration,
         };
 
         let (odiseo_trades, _odiseo_signal) = state.odiseo_trading.on_tick(

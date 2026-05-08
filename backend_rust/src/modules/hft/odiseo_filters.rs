@@ -51,6 +51,10 @@ pub struct FilterContext {
     pub ask_vol:           f64,  // volumen total ask side
     pub imbalance:         f64,  // bid_vol / (bid_vol + ask_vol)
 
+    // ── Liquidity Metrics ──
+    pub price_impact:        f64,  // |up-dn|/(vol_up+vol_dn) — Amihud illiquidity
+    pub depth_concentration: f64,  // max(bid_vol,ask_vol)/total — one-sided risk
+
     // ── Risk Signals ──
     pub dump_score:        u8,   // 0=safe 1=warning 2=critical 3=dead
     pub tick_gap_ms:       i64,  // ms desde último tick
@@ -145,6 +149,12 @@ impl FilterChain {
 
         // F12: Re-entry cooldown (prevent thrashing)
         chain.add(Box::new(ReEntryCooldownFilter::new(30)));
+
+        // F13: Liquidity depth (total volume + Amihud impact for H65 thin books)
+        chain.add(Box::new(LiquidityDepthFilter { min_total_vol: 2000.0, max_price_impact: 0.001 }));
+
+        // F14: Depth balance (block one-sided orderbooks >75%)
+        chain.add(Box::new(DepthBalanceFilter { max_concentration: 0.75 }));
 
         // ─── ALL FILTERS OFF by default (RAW mode) ────────────────
         // Enable individual filters via POST /api/odiseo/filters
@@ -456,6 +466,53 @@ impl OdiseoEntryFilter for ReEntryCooldownFilter {
             }
         }
         map.insert(key, std::time::Instant::now());
+        FilterResult::Pass
+    }
+}
+
+// ─── F13: LiquidityDepthFilter ─────────────────────────────────────────────
+/// Bloquea entrada si no hay suficiente profundidad en el orderbook para
+/// absorber el trade sin slippage excesivo.
+/// Para H65 (entry ~0.65, size ~$20/0.65 = ~30 shares):
+///   - min_total_vol = 2000 (60x cobertura)
+///   - max_price_impact = 0.001 (Amihud: >0.1% por dolar)
+pub struct LiquidityDepthFilter {
+    pub min_total_vol:    f64,
+    pub max_price_impact: f64,
+}
+impl OdiseoEntryFilter for LiquidityDepthFilter {
+    fn name(&self) -> &'static str { "liquidity_depth" }
+    fn check(&self, ctx: &FilterContext) -> FilterResult {
+        let total = ctx.bid_vol + ctx.ask_vol;
+        if total < self.min_total_vol {
+            return FilterResult::block(format!(
+                "low total depth (total={:.0} < {:.0})", total, self.min_total_vol
+            ));
+        }
+        if ctx.price_impact > self.max_price_impact && ctx.price_impact > 0.0 {
+            return FilterResult::block(format!(
+                "high price impact ({:.6} > {:.6} — thin book)", ctx.price_impact, self.max_price_impact
+            ));
+        }
+        FilterResult::Pass
+    }
+}
+
+// ─── F14: DepthBalanceFilter ───────────────────────────────────────────────
+/// Bloquea entrada si el orderbook esta muy desbalanceado hacia un lado.
+/// depth_concentration > 0.75 → un lado tiene >75% del volumen total
+/// → mercado facil de manipular, probable dump/pump falso.
+pub struct DepthBalanceFilter { pub max_concentration: f64 }
+impl OdiseoEntryFilter for DepthBalanceFilter {
+    fn name(&self) -> &'static str { "depth_balance" }
+    fn check(&self, ctx: &FilterContext) -> FilterResult {
+        if ctx.depth_concentration > self.max_concentration {
+            let dominant = if ctx.bid_vol > ctx.ask_vol { "bid" } else { "ask" };
+            return FilterResult::block(format!(
+                "one-sided depth (concentration={:.2} > {:.2}, {} heavy)",
+                ctx.depth_concentration, self.max_concentration, dominant
+            ));
+        }
         FilterResult::Pass
     }
 }
