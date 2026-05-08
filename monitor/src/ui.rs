@@ -38,9 +38,9 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── FOOTER ───────────────────────────────────────────────────────
     let footer_text = match s.tab {
         0 => "[←→]tab [l]LIVE [p]PANIC [r]Reinv [o]Odi83 [h]H65 [q]quit",
-        1 => "[←→]tab [1-4]Odi-budget [5-8]H65-budget [a/z]all-ON/OFF [f]filters [t]only-this [q]quit",
+        1 => "[←→]tab [o/h]tog-strat [1-9,0]filtros [a/z]all-filt [p]PANIC [/]budget [t]only [q]quit",
         2 => "[←→]tab [s]start-session [S]stop-session [e]export [↑↓]select [q]quit",
-        3 => "[←→]tab [space]pause [q]quit",
+        3 => "[←→]tab — BTC metrics + triggers live [q]quit",
         _ => "[q]quit",
     };
     f.render_widget(
