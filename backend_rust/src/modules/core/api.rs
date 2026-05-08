@@ -886,7 +886,10 @@ struct PanicBody {
 }
 
 async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>) -> Json<Value> {
-    info!("🚨 PANIC — cancel all + market sell");
+    info!("🚨 PANIC — cancel all + market sell + disable all strategies");
+
+    // 0. Apagar TODAS las estrategias automáticas (Odiseo LIVE + variantes)
+    s.odiseo_trading.disable_all();
 
     // 1. Cancelar todas las órdenes
     let _ = s.cmd_tx.send(CmdMsg::CancelMarket);
@@ -918,7 +921,7 @@ async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>)
         });
     }
 
-    Json(json!({"ok": true, "message": format!("PANIC executed: cancelled all + market sell {:?}", outcomes)}))
+    Json(json!({"ok": true, "message": format!("PANIC executed: cancelled all + market sell {:?} + all strategies disabled", outcomes)}))
 }
 
 // ─── Fills ────────────────────────────────────────────────────────────────────

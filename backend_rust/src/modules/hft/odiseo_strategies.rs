@@ -115,6 +115,11 @@ impl OdiseoTradingManager {
     }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
+    pub fn disable_all(&self) {
+        self.live_mode.store(false, Ordering::Relaxed);
+        for en in &self.enabled { en.store(false, Ordering::Relaxed); }
+        info!("[Odiseo] ALL strategies DISABLED — live_mode OFF, all variants OFF");
+    }
     pub fn is_enabled(&self, idx:usize) -> bool { idx < self.enabled.len() && self.enabled[idx].load(Ordering::Relaxed) }
     pub fn set_budget(&self, idx:usize, amount:f64) { if let Some(b) = self.budgets.lock().unwrap().get_mut(idx) { *b = amount.max(5.0).min(100.0); } }
     pub fn get_budget(&self, idx:usize) -> f64 { self.budgets.lock().unwrap().get(idx).copied().unwrap_or(20.0) }
