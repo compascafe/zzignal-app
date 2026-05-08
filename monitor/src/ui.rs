@@ -53,8 +53,8 @@ pub fn draw(f: &mut Frame, s: &State) {
     }
     ci += 1;
 
-    // ─── BUDGET INPUT (modal) ─────────────────────────────────────────
-    if budget_h > 0 {
+    // ─── INPUT MODAL (command / budget) ────────────────────────────
+    if cmd_h > 0 || budget_h > 0 {
         draw_budget_input(f, chunks[ci], s);
         ci += 1;
     }
@@ -756,7 +756,6 @@ fn draw_market_state(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
-    let mode_str = if s.live { "LIVE" } else { "PAPER" };
     let tab_name = TAB_NAMES[s.tab];
 
     let h65_pos = if s.pos_h65_up {
@@ -776,7 +775,7 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
         format!("▼ DN  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  [{:.1}%]  CONFIRMADO",
             invested, pnl, entry, current, if entry>0.0{(current/entry-1.0)*100.0}else{0.0})
     } else if s.h65_enabled {
-        format!("◆ esperando ${:.0} {}", s.h65_budget, mode_str)
+        format!("◆ esperando ${:.0}", s.h65_budget)
     } else {
         "○ OFF".to_string()
     };
@@ -802,7 +801,7 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
         let pnl = current_val - invested;
         format!("▼ DN  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  CONFIRMADO", invested, pnl, entry, current)
     } else if s.odi_enabled {
-        format!("◆ esperando ${:.0} {}", s.odi_budget, mode_str)
+        format!("◆ esperando ${:.0}", s.odi_budget)
     } else {
         "○ OFF".to_string()
     };
