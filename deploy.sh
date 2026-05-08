@@ -8,6 +8,7 @@ echo "╚═══════════════════════�
 
 echo ""
 echo "=== 1/4 Pull latest ==="
+cd "$SCRIPT_DIR"
 git pull
 
 echo ""
