@@ -297,7 +297,22 @@ async fn main() -> io::Result<()> {
     tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = itx.send(k.code).await; } } });
 
     let mut s = State::new(paper_mode);
-    s.add_log("ZZIGNAL MONITOR v1.0 — Control Total", Color::Magenta);
+    let mode_label = if s.live { "DINERO REAL" } else { "PAPER MONEY" };
+    s.add_log(format!("ZZIGNAL MONITOR — {}", mode_label), Color::Magenta);
+
+    // Force backend live_mode to match our binary mode
+    if s.live {
+        http_post("/api/odiseo/live", "{\"enable\":true}").await;
+        s.add_log("DINERO REAL — esperando comandos", Color::Red);
+    } else {
+        http_post("/api/odiseo/live", "{\"enable\":false}").await;
+        // Paper mode: auto-enable both strategies for data collection
+        http_post("/api/odiseo/variant", "{\"index\":0,\"enable\":true}").await;
+        http_post("/api/odiseo/variant", "{\"index\":1,\"enable\":true}").await;
+        s.odi_enabled = true;
+        s.h65_enabled = true;
+        s.add_log("PAPER MONEY — ambas estrategias ON", Color::Cyan);
+    }
 
     loop {
         // ─── Drain WS ─────────────────────────────────────────────────
@@ -325,7 +340,7 @@ async fn main() -> io::Result<()> {
             s.last_poll_odiseo = Instant::now();
             if let Some(data) = http_get::<OdiseoStatus>("/api/odiseo/status").await {
                 s.last_api_ok = Instant::now();
-                s.live = data.live_mode;
+                // Don't overwrite live from API — mode is fixed per binary
                 s.reinvest = data.reinvest.unwrap_or(false);
 
                 let odi_v = data.variants.iter().find(|v| {

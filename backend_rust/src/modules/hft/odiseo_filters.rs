@@ -145,7 +145,7 @@ impl FilterChain {
         chain.add(Box::new(ImbalanceSanityFilter { max_imbalance: 10.0 }));
 
         // F11: Session age (block entries at session boundaries)
-        chain.add(Box::new(SessionAgeFilter { min_secs: 30, max_secs: 840 }));
+        chain.add(Box::new(SessionAgeFilter { min_secs: 20, max_secs: 880 }));
 
         // F12: Re-entry cooldown (prevent thrashing)
         chain.add(Box::new(ReEntryCooldownFilter::new(30)));

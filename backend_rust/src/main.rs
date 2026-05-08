@@ -88,9 +88,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (*creds).clone(),
     );
 
-    // ─── Always enable Odiseo 83 + Houdini 65 (default ON) ──────────────
-    state.odiseo_trading.set_variant(0, true); // Odiseo 83
-    state.odiseo_trading.set_variant(1, true); // Houdini 65
+    // ─── Variants start OFF — trader must activate via /h10 or /o20 ───
+    state.odiseo_trading.set_variant(0, false); // Odiseo 83
+    state.odiseo_trading.set_variant(1, false); // Houdini 65
 
     // ─── Import Wisdom from file (CLI: --import-wisdom <path>) ──────────────
     if let Some(pos) = std::env::args().position(|a| a == "--import-wisdom") {
