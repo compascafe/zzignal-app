@@ -37,8 +37,8 @@ pub fn draw(f: &mut Frame, s: &State) {
 
     // ─── FOOTER ───────────────────────────────────────────────────────
     let footer_text = match s.tab {
-        0 => "[←→]tab [l]LIVE [p]PANIC [r]Reinv [o]Odi83 [h]H65 [q]quit",
-        1 => "[←→]tab [o/h]tog-strat [1-9,0]filtros [a/z]all-filt [p]PANIC [/]budget [t]only [q]quit",
+        0 => "[←→]tab [l]LIVE [p]PANIC [r]Reinv [o]Odi83 [h]H65 [-/+]budget [q]quit",
+        1 => "[←→]tab [o/h]tog-strat [1-9,0]filtros [a/z]all-filt [p]PANIC [-/+]budget [t]only [q]quit",
         2 => "[←→]tab [s]start-session [S]stop-session [e]export [↑↓]select [q]quit",
         3 => "[←→]tab — BTC metrics + triggers live [q]quit",
         _ => "[q]quit",
@@ -128,12 +128,23 @@ fn draw_header(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(if s.live {" LIVE "}else{"PAPER"}).style(mode_style).block(Block::default().borders(Borders::ALL)),
         h[2]);
 
-    // WS
-    let wsc = if s.connected { Color::Green } else { Color::Red };
+    // HEALTH — combined WS + API latency
+    let latency_ms = s.last_api_ok.elapsed().as_millis() as u64;
+    let health_txt: String;
+    let health_c: Color;
+    if !s.connected {
+        health_txt = "NO CONEXION".into(); health_c = Color::Red;
+    } else if latency_ms > 10_000 {
+        health_txt = "SIN DATOS".into(); health_c = Color::Red;
+    } else if latency_ms > 2_000 {
+        health_txt = format!("LAG {}ms", latency_ms); health_c = Color::Yellow;
+    } else {
+        health_txt = format!("OK {}ms", latency_ms); health_c = Color::Green;
+    }
     f.render_widget(
-        Paragraph::new(if s.connected {"WS OK"}else{"WS OFF"})
-            .style(Style::default().fg(wsc).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(health_txt)
+            .style(Style::default().fg(health_c).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL).title("HEALTH")),
         h[3]);
 
     // Reinv

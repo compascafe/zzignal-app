@@ -67,6 +67,7 @@ struct State {
     last_poll_hft: Instant,
     last_poll_sessions: Instant,
     last_ws: Instant,
+    last_api_ok: Instant,
 }
 
 impl State {
@@ -100,6 +101,7 @@ impl State {
             last_poll_hft: Instant::now(),
             last_poll_sessions: Instant::now(),
             last_ws: Instant::now(),
+            last_api_ok: Instant::now(),
         }
     }
 
@@ -253,6 +255,7 @@ async fn main() -> io::Result<()> {
         if s.last_poll_odiseo.elapsed() > Duration::from_secs(2) {
             s.last_poll_odiseo = Instant::now();
             if let Some(data) = http_get::<OdiseoStatus>("/api/odiseo/status").await {
+                s.last_api_ok = Instant::now();
                 s.live = data.live_mode;
                 s.reinvest = data.reinvest.unwrap_or(false);
 
@@ -287,6 +290,7 @@ async fn main() -> io::Result<()> {
         if s.last_poll_hft.elapsed() > Duration::from_millis(500) {
             s.last_poll_hft = Instant::now();
             if let Some(data) = http_get::<HftState>("/api/hft/latest").await {
+                s.last_api_ok = Instant::now();
                 s.hft = data;
                 // Track filter bitmask from hft data
                 s.odi_filters = s.hft.od83_filters;
@@ -338,6 +342,22 @@ async fn main() -> io::Result<()> {
                     let nv = !s.h65_enabled; s.h65_enabled = nv;
                     s.add_log(format!("Houdini 65: {}", if nv{"ON"}else{"OFF"}), if nv{Color::Green}else{Color::DarkGray});
                     http_post("/api/odiseo/variant", &format!("{{\"index\":1,\"enable\":{nv}}}")).await;
+                }
+                (0|1, KeyCode::Char('-')) | (0|1, KeyCode::Char('_')) => {
+                    let idx = s.selected_variant;
+                    let amt = if idx == 0 { s.odi_budget - 5.0 } else { s.h65_budget - 5.0 };
+                    let amt = amt.max(1.0);
+                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
+                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
+                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
+                }
+                (0|1, KeyCode::Char('=')) | (0|1, KeyCode::Char('+')) => {
+                    let idx = s.selected_variant;
+                    let amt = if idx == 0 { s.odi_budget + 5.0 } else { s.h65_budget + 5.0 };
+                    let amt = amt.min(200.0);
+                    if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
+                    s.add_log(format!("Budget: ${:.0}", amt), Color::Yellow);
+                    http_post("/api/odiseo/budget", &format!("{{\"index\":{idx},\"amount\":{amt}}}")).await;
                 }
 
                 // ── TRADING TAB ────────────────────────────────
