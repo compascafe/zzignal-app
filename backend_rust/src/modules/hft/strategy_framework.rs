@@ -220,7 +220,14 @@ impl StrategyEngine {
         let ss = self.sessions.lock().unwrap();
         if let Some(s) = ss.get(&session_id) {
             (s.scheduled_end - Utc::now()).num_seconds()
-        } else { -1 }
+        } else {
+            // No DB session — use Polymarket 15-min round clock (UTC)
+            use chrono::Timelike;
+            let now = Utc::now();
+            let t = now.time();
+            let secs_in_chunk = (t.minute() as i64 % 15) * 60 + t.second() as i64;
+            900 - secs_in_chunk
+        }
     }
 
     // ─── Tick processing ───────────────────────────────────────────────────

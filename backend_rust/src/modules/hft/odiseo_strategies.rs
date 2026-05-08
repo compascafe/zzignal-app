@@ -126,10 +126,9 @@ impl OdiseoTradingManager {
     pub fn on_tick(&self, session_id:i32, seconds_left:i32,
                    bid_vol:f64, ask_vol:f64, imb:f64, vel:f64,
                    lt_up:Option<f64>, lt_dn:Option<f64>,
-                   ctx: &FilterContext,  // pre-entry filter context
+                   ctx: &FilterContext,
     ) -> (Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, u8)
     {
-        let has_session = session_id > 0;
         let mut sessions = self.sessions.lock().unwrap();
         let state = sessions.entry(session_id).or_insert_with(|| OdiseoSessionState {
             trades: ODISEO_DEFS.iter().map(|_| OdiseoSessionTrade::default()).collect(),
@@ -137,7 +136,7 @@ impl OdiseoTradingManager {
         let budgets = self.budgets.lock().unwrap().clone();
         let mut sig = 0u8;
         let mut results = Vec::with_capacity(24);
-        let in_last_10 = has_session && seconds_left >= 0 && seconds_left <= 600;
+        let in_last_10 = seconds_left >= 0 && seconds_left <= 600;
         for (i, def) in ODISEO_DEFS.iter().enumerate() {
             if !self.is_enabled(i) {
                 results.push((format!("{}_up",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
@@ -149,26 +148,25 @@ impl OdiseoTradingManager {
                 results.push((format!("{}_down",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
                 continue;
             }
-            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i], has_session, seconds_left, ctx);
-            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i], has_session, seconds_left, ctx);
+            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i], seconds_left, ctx);
+            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i], seconds_left, ctx);
         }
         (results, sig)
     }
 
     fn process(&self, is_up:bool, t:&mut OdiseoSessionTrade, def:&OdiseoDef, sid:i32,
                bv:f64, av:f64, imb:f64, vel:f64, lt:Option<f64>, sig:&mut u8,
-               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64, has_session:bool, seconds_left:i32,
+               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64, seconds_left:i32,
                ctx: &FilterContext)
     {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
 
-        // ── Boundary safety: only when session is active ──
-        let (boundary_block, boundary_label) = if has_session {
-            let in_first = seconds_left > 880;
-            let in_last = seconds_left <= 20;
-            (in_first || in_last, if in_first {"first20s"} else {"last20s"})
-        } else { (false, "") };
+        // ── Boundary safety: no trade in first 20s or last 20s ──
+        let in_first = seconds_left > 880;
+        let in_last = seconds_left <= 20;
+        let boundary_block = in_first || in_last;
+        let boundary_label = if in_first {"first20s"} else {"last20s"};
 
         // If position open and we're in boundary → force liquidate at market
         if pos.entered && !pos.settled && boundary_block {
@@ -201,16 +199,14 @@ impl OdiseoTradingManager {
             return;
         }
 
-        // ── Límites de sesión (solo cuando hay sesión activa) ──
-        if has_session {
-            let profit_limit = budget * 0.15;
-            let sl_limit = 4u32;
-            if t.session_profit >= profit_limit {
-                r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
-            }
-            if t.sl_count >= sl_limit {
-                r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
-            }
+        // ── Límites de sesión ──
+        let profit_limit = budget * 0.15; // 15% profit stop
+        let sl_limit = 4u32;            // max 4 stop-losses per session
+        if t.session_profit >= profit_limit {
+            r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
+        }
+        if t.sl_count >= sl_limit {
+            r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
         }
 
         let px = match lt { Some(p) if p>0.0 => p, _ => {
