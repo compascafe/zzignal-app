@@ -74,6 +74,7 @@ zz-emergency() {
 alias zz-log='sudo journalctl -u zzignal-app --no-pager -n 30 | grep -E "ENTER|EXIT|Order result|Odiseo|error"'
 alias zz-log-f='sudo journalctl -u zzignal-app -f | grep --line-buffered -E "ENTER|EXIT|Order result|Odiseo|error"'
 alias zz-monitor='cd /home/ubuntu/zzignal-app && ./zzignal-monitor'
+alias zz-monitor-paper='cd /home/ubuntu/zzignal-app && ./zzignal-monitor --paper'
 alias zz-orders='curl -s $ZZ_API/api/orders | python3 -m json.tool'
 alias zz-fills='curl -s $ZZ_API/api/fills | python3 -m json.tool'
 
@@ -94,7 +95,7 @@ zz-resume() {
 }
 
 echo "✅ ZZIGNAL aliases loaded. Comandos:"
-echo "  zz-resume     zz-monitor    zz-emergency   zz-panic"
+echo "  zz-resume     zz-monitor    zz-monitor-paper   zz-emergency   zz-panic"
 echo "  zz-live-on    zz-live-off   zz-odi83-on    zz-odi83-off"
 echo "  zz-reinv-on   zz-reinv-off  zz-odi-only83  zz-odi83-8"
 echo "  zz-balance    zz-btc        zz-log         zz-log-f"

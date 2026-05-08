@@ -25,14 +25,14 @@ const FILTER_KEYS: &[(char, &str)] = &[
 ];
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum InputMode { Normal, Budget }
+pub enum InputMode { Normal, Budget, Command }
 
 struct State {
     connected: bool,
     tab: usize,
     btc: f64, btc_open: f64, btc_entry: f64,
     bal: f64,
-    live: bool, reinvest: bool,
+    live: bool, reinvest: bool, _paper_mode: bool,
 
     // Odiseo
     odi_label: String, odi_code: String,
@@ -86,11 +86,11 @@ struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(paper_mode: bool) -> Self {
         Self {
             connected: false, tab: 0,
             btc: 0.0, btc_open: 0.0, btc_entry: 0.0, bal: 0.0,
-            live: false, reinvest: false,
+            live: !paper_mode, reinvest: false, _paper_mode: paper_mode,
             odi_label: "Odiseo 83".into(), odi_code: String::new(),
             odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 20.0,
             odi_t_up: 0, odi_t_dn: 0, odi_w_up: 0, odi_w_dn: 0,
@@ -137,6 +137,74 @@ impl State {
         let ts = chrono::Local::now().format("%H:%M:%S").to_string();
         self.warnings.push_front(format!("{} {}", ts, text.into()));
         if self.warnings.len() > 20 { self.warnings.pop_back(); }
+    }
+}
+
+/// Slash command parser: /h10 /o20 /p /r /b30
+async fn exec_slash_command(cmd: &str, s: &mut State) {
+    let cmd = cmd.trim();
+    if cmd.is_empty() { return; }
+
+    let first = cmd.chars().next().unwrap();
+    let rest = &cmd[1..];
+
+    match first {
+        'p' => {
+            s.add_log("PANIC SELL!", Color::Red);
+            s.pos_h65_up = false; s.pos_h65_dn = false;
+            s.pos_odi_up = false; s.pos_odi_dn = false;
+            http_post("/api/panic", "{}").await;
+        }
+        'r' => {
+            s.reinvest = !s.reinvest;
+            s.add_log(format!("Reinvest: {}", if s.reinvest {"ON"}else{"OFF"}), Color::Yellow);
+            http_post("/api/odiseo/reinvest", &format!("{{\"enable\":{}}}", s.reinvest)).await;
+        }
+        'h' => {
+            let idx = 1;
+            if rest.is_empty() {
+                s.h65_enabled = !s.h65_enabled;
+                s.add_log(format!("H65: {}", if s.h65_enabled {"ON"}else{"OFF"}), if s.h65_enabled{Color::Green}else{Color::DarkGray});
+                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.h65_enabled)).await;
+            } else if let Ok(amt) = rest.parse::<f64>() {
+                let amt = amt.clamp(1.0, 200.0);
+                s.h65_budget = amt;
+                s.h65_enabled = true;
+                s.selected_variant = 1;
+                s.add_log(format!("H65 ON ${:.0}", amt), Color::Green);
+                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await;
+                http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await;
+            }
+        }
+        'o' => {
+            let idx = 0;
+            if rest.is_empty() {
+                s.odi_enabled = !s.odi_enabled;
+                s.add_log(format!("O83: {}", if s.odi_enabled {"ON"}else{"OFF"}), if s.odi_enabled{Color::Green}else{Color::DarkGray});
+                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.odi_enabled)).await;
+            } else if let Ok(amt) = rest.parse::<f64>() {
+                let amt = amt.clamp(1.0, 200.0);
+                s.odi_budget = amt;
+                s.odi_enabled = true;
+                s.selected_variant = 0;
+                s.add_log(format!("O83 ON ${:.0}", amt), Color::Green);
+                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await;
+                http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await;
+            }
+        }
+        'b' => {
+            if let Ok(amt) = rest.parse::<f64>() {
+                let amt = amt.clamp(1.0, 200.0);
+                let idx = s.selected_variant;
+                if idx == 0 { s.odi_budget = amt; } else { s.h65_budget = amt; }
+                let name = if idx == 0 { "O83" } else { "H65" };
+                s.add_log(format!("{} budget ${:.0}", name, amt), Color::Cyan);
+                http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await;
+            }
+        }
+        _ => {
+            s.add_log(format!("?: /{}", cmd), Color::Red);
+        }
     }
 }
 
@@ -214,6 +282,8 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    let paper_mode = std::env::args().any(|a| a == "--paper");
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -250,7 +320,7 @@ async fn main() -> io::Result<()> {
     let (itx, mut irx) = mpsc::channel::<KeyCode>(16);
     tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = itx.send(k.code).await; } } });
 
-    let mut s = State::new();
+    let mut s = State::new(paper_mode);
     s.add_log("ZZIGNAL MONITOR v1.0 — Control Total", Color::Magenta);
 
     loop {
@@ -374,7 +444,25 @@ async fn main() -> io::Result<()> {
 
         // ─── Keyboard ────────────────────────────────────────────────
         while let Ok(k) = irx.try_recv() {
-            // ── Budget input mode (takes priority over everything) ──
+            // ── Command mode: /h10 /p /l /o /r /b20 ──
+            if s.input_mode == InputMode::Command {
+                match k {
+                    KeyCode::Esc => { s.input_mode = InputMode::Normal; s.input_buf.clear(); }
+                    KeyCode::Enter => {
+                        let cmd = s.input_buf.trim().to_string();
+                        exec_slash_command(&cmd, &mut s).await;
+                        s.input_mode = InputMode::Normal; s.input_buf.clear();
+                    }
+                    KeyCode::Backspace => { s.input_buf.pop(); }
+                    KeyCode::Char(c) => {
+                        if s.input_buf.len() < 20 { s.input_buf.push(c); }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+
+            // ── Budget input mode ──────────────────────────────────
             if s.input_mode == InputMode::Budget {
                 match k {
                     KeyCode::Esc => { s.input_mode = InputMode::Normal; s.input_buf.clear(); }
@@ -397,7 +485,7 @@ async fn main() -> io::Result<()> {
                     }
                     _ => {}
                 }
-                continue; // skip normal key handling while in input mode
+                continue;
             }
 
             // ── Normal key handling ─────────────────────────────
@@ -412,12 +500,10 @@ async fn main() -> io::Result<()> {
                 (_, KeyCode::Right) | (_, KeyCode::Tab) => { s.tab = (s.tab + 1) % 4; }
                 (_, KeyCode::Left)  => { s.tab = if s.tab == 0 { 3 } else { s.tab - 1 }; }
 
-                // ── TRADING HOTKEYS (global, all tabs) ───────────────
-                (_, KeyCode::Char('l')) => {
-                    let nv = !s.live;
-                    s.add_log(format!("LIVE: {}", if nv{"ON"}else{"OFF"}), if nv{Color::Red}else{Color::Cyan});
-                    http_post("/api/odiseo/live", &format!("{{\"enable\":{nv}}}")).await;
+                (_, KeyCode::Char('/')) => {
+                    s.input_mode = InputMode::Command; s.input_buf.clear();
                 }
+                // ── TRADING HOTKEYS (global, all tabs) ───────────────
                 (_, KeyCode::Char('r')) => {
                     let nv = !s.reinvest; s.reinvest = nv;
                     s.add_log(format!("Reinvest: {}", if nv{"ON"}else{"OFF"}), Color::Yellow);

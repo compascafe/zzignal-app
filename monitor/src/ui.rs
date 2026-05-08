@@ -12,14 +12,16 @@ const TAB_NAMES: &[&str] = &["Dashboard", "Trading", "Sessions", "Signals"];
 pub fn draw(f: &mut Frame, s: &State) {
     let area = f.area();
 
-    let pos_h = if s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn { 2 } else { 1 };
+    let pos_h = if s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn { 1 } else { 1 };
     let budget_h = if s.input_mode == InputMode::Budget { 3 } else { 0 };
+    let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
 
     let mut constraints = vec![
         Constraint::Length(1),     // tab bar
         Constraint::Length(pos_h), // position bar
         Constraint::Min(1),        // main content
     ];
+    if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
     if budget_h > 0 { constraints.push(Constraint::Length(budget_h)); }
     constraints.push(Constraint::Length(2)); // footer
 
@@ -130,14 +132,14 @@ fn draw_header(f: &mut Frame, area: Rect, s: &State) {
             .block(Block::default().borders(Borders::ALL)),
         h[1]);
 
-    // MODE
+    // MODE — fixed, no toggle
     let mode_style = if s.live {
         Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
     };
     f.render_widget(
-        Paragraph::new(if s.live {" LIVE "}else{"PAPER"}).style(mode_style).block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(if s.live {"DINERO REAL"}else{"PAPER MONEY"}).style(mode_style).block(Block::default().borders(Borders::ALL)),
         h[2]);
 
     // HEALTH — combined WS + API latency
@@ -755,23 +757,28 @@ fn draw_market_state(f: &mut Frame, area: Rect, s: &State) {
 
 fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
     let mode_str = if s.live { "LIVE" } else { "PAPER" };
+    let tab_name = TAB_NAMES[s.tab];
 
     let h65_pos = if s.pos_h65_up {
         let entry = s.pos_h65_entry_up;
         let current = s.hft.clob_trade_up;
-        let delta = current - entry;
-        let delta_pct = if entry > 0.0 { delta / entry * 100.0 } else { 0.0 };
-        format!("H65 ▲ UP  entrada:{:.4}  actual:{:.4}  {:+.1}%", entry, current, delta_pct)
+        let invested = s.h65_budget;
+        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
+        let pnl = current_val - invested;
+        format!("▲ UP  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  [{:.1}%]  CONFIRMADO",
+            invested, pnl, entry, current, if entry>0.0{(current/entry-1.0)*100.0}else{0.0})
     } else if s.pos_h65_dn {
         let entry = s.pos_h65_entry_dn;
         let current = s.hft.clob_trade_dn;
-        let delta = current - entry;
-        let delta_pct = if entry > 0.0 { delta / entry * 100.0 } else { 0.0 };
-        format!("H65 ▼ DN  entrada:{:.4}  actual:{:.4}  {:+.1}%", entry, current, delta_pct)
+        let invested = s.h65_budget;
+        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
+        let pnl = current_val - invested;
+        format!("▼ DN  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  [{:.1}%]  CONFIRMADO",
+            invested, pnl, entry, current, if entry>0.0{(current/entry-1.0)*100.0}else{0.0})
     } else if s.h65_enabled {
-        format!("H65 ◆ esperando ({:.0} {})", s.h65_budget, mode_str)
+        format!("◆ esperando ${:.0} {}", s.h65_budget, mode_str)
     } else {
-        "H65 ○ OFF".to_string()
+        "○ OFF".to_string()
     };
 
     let h65_c = if s.pos_h65_up || s.pos_h65_dn {
@@ -783,15 +790,21 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
     let odi_pos = if s.pos_odi_up {
         let entry = s.pos_odi_entry_up;
         let current = s.hft.clob_trade_up;
-        format!("O83 ▲ UP  @{:.4}→{:.4}", entry, current)
+        let invested = s.odi_budget;
+        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
+        let pnl = current_val - invested;
+        format!("▲ UP  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  CONFIRMADO", invested, pnl, entry, current)
     } else if s.pos_odi_dn {
         let entry = s.pos_odi_entry_dn;
         let current = s.hft.clob_trade_dn;
-        format!("O83 ▼ DN  @{:.4}→{:.4}", entry, current)
+        let invested = s.odi_budget;
+        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
+        let pnl = current_val - invested;
+        format!("▼ DN  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  CONFIRMADO", invested, pnl, entry, current)
     } else if s.odi_enabled {
-        format!("O83 ◆ esperando ({:.0} {})", s.odi_budget, mode_str)
+        format!("◆ esperando ${:.0} {}", s.odi_budget, mode_str)
     } else {
-        "O83 ○ OFF".to_string()
+        "○ OFF".to_string()
     };
 
     let odi_c = if s.pos_odi_up || s.pos_odi_dn { Color::Green } else if s.odi_enabled { Color::Yellow } else { Color::DarkGray };
@@ -801,12 +814,12 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
 
     f.render_widget(
         Paragraph::new(h65_pos).style(Style::default().fg(h65_c).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL).title("Houdini 65")),
+            .block(Block::default().borders(Borders::ALL).title(format!("Houdini 65 | {tab_name}"))),
         h[0]);
 
     f.render_widget(
         Paragraph::new(odi_pos).style(Style::default().fg(odi_c).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL).title("Odiseo 83")),
+            .block(Block::default().borders(Borders::ALL).title(format!("Odiseo 83 | {tab_name}"))),
         h[1]);
 }
 
@@ -815,6 +828,21 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_budget_input(f: &mut Frame, area: Rect, s: &State) {
+    // Command mode
+    if s.input_mode == InputMode::Command {
+        let text = format!(
+            "▶ /{}_   [/h10 Houdini $10] [/o20 Odiseo $20] [/p PANIC] [/b30 budget] [/r reinv] [Enter]ok [Esc]cancel",
+            s.input_buf
+        );
+        f.render_widget(
+            Paragraph::new(text)
+                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Green))),
+            area,
+        );
+        return;
+    }
+    // Budget mode
     let variant = if s.selected_variant == 0 { "Odiseo 83" } else { "Houdini 65" };
     let text = format!(
         "{} | Budget: ${}_   [Enter]confirm [Esc]cancel",
@@ -834,15 +862,13 @@ fn draw_budget_input(f: &mut Frame, area: Rect, s: &State) {
 
 fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     let variant = if s.selected_variant == 0 { "O83" } else { "H65" };
-    let mode = if s.live { "LIVE" } else { "PAPER" };
 
     let line1 = format!(
-        "[←→]tab  [h]H65:{}/{}  [o]O83:{}/{}  [l]{}  [p]PANIC  [b]budget  [-/+]±$5  [1-0]preset  [q]quit",
+        "[←→]tab  [h]H65:{}/{}  [o]O83:{}/{}  [p]PANIC  [/]cmd  [b]budget  [-/+]±$5  [1-0]preset  [q]quit",
         if s.h65_enabled {"ON"}else{"OFF"},
         s.h65_budget as i32,
         if s.odi_enabled {"ON"}else{"OFF"},
         s.odi_budget as i32,
-        mode,
     );
     let line2 = format!(
         "▲ {} seleccionado  [j/k]cambiar variante  [r]reinv:{}",
