@@ -109,7 +109,7 @@ impl OdiseoTradingManager {
     pub fn new(cmd_tx: Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>) -> Self {
         let n = ODISEO_DEFS.len();
         let mut enabled = Vec::with_capacity(n);
-        for _ in 0..n { enabled.push(AtomicBool::new(true)); }
+        for _ in 0..n { enabled.push(AtomicBool::new(false)); }
         let budgets = vec![20.0; n];
         Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain(), session_history: Mutex::new(Vec::new()), prev_snapshot: Mutex::new(HashMap::new()) }
     }
