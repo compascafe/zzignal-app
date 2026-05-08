@@ -60,7 +60,8 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
     let _ = writeln!(w, "#    8 | btc_vol             | float       | Real-time BTC volume from aggTrade (field q)");
     let _ = writeln!(w, "#    9 | btc_vel             | float       | BTC price velocity USD/s → SL-trend: exit if vel<0 & price dropping");
     let _ = writeln!(w, "#   10 | btc_acel            | float       | BTC price acceleration USD/s² → momentum: >0=speeding up, <0=slowing");
-    let _ = writeln!(w, "#   11 | btc_vol_ratio       | float       | btc_vol/(bid_vol+ask_vol) → real trading vs resting liquidity");
+    let _ = writeln!(w, "#   11 | btc_volatility      | float       | EMA of |velocity| (alpha=0.1) — micro-volatility: >5=choppy, <2=calm");
+    let _ = writeln!(w, "#   12 | btc_vol_ratio       | float       | btc_vol/(bid_vol+ask_vol) → real trading vs resting liquidity");
     let _ = writeln!(w, "#       |                     |             | >1 = more volume on Binance than in CLOB book → active market");
     let _ = writeln!(w, "#");
     let _ = writeln!(w, "# ═══════════════════════════════════════════════════════════════");

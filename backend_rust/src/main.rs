@@ -793,6 +793,15 @@ async fn capture_combined(
             *state.prev_btc_vel.write().await = rec.price_velocity;
         }
 
+        // BTC micro-volatility: EMA of absolute velocity (alpha=0.1)
+        {
+            let alpha = 0.1;
+            let abs_vel = rec.price_velocity.abs();
+            let mut vol_ema = state.btc_vol_ema.write().await;
+            *vol_ema = alpha * abs_vel + (1.0 - alpha) * *vol_ema;
+            rec.btc_volatility = *vol_ema;
+        }
+
         // BTC volume ratio: real trading vs resting liquidity
         {
             let ob_vol = rec.poly_bid_vol_all + rec.poly_ask_vol_all;
@@ -913,6 +922,7 @@ async fn capture_combined(
         hft.clob_trade_dn_vol = rec.clob_trade_dn_vol;
         hft.btc_vel = rec.price_velocity;
         hft.btc_acel = rec.btc_acel;
+        hft.btc_volatility = rec.btc_volatility;
         hft.spoof = rec.spoofing_flag;
         hft.dump_score = rec.dump_score;
         hft.ask_wall = rec.ask_wall;

@@ -68,6 +68,7 @@ pub struct CsvRecord {
     pub binance_imbalance:   f32,
     pub binance_vol_24h:     f64,
     pub btc_vol:             f64,   // real-time BTC volume from Binance aggTrade
+    pub btc_volatility:       f64,   // EMA of |velocity| — micro-volatility indicator
     pub poly_bid:            f64,
     pub poly_ask:            f64,
     pub poly_mid:            f64,
@@ -152,6 +153,7 @@ impl Default for CsvRecord {
             binance_imbalance:   0.0,
             binance_vol_24h:     0.0,
             btc_vol:             0.0,
+            btc_volatility:       0.0,
             poly_bid:            0.0,
             poly_ask:            0.0,
             poly_mid:            0.0,
@@ -208,7 +210,7 @@ impl CsvRecord {
             pub fn csv_header() -> &'static str {
         concat!(
         "time,ts_exchange,event,latencia_ms,",
-        "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,btc_vol_ratio,",
+        "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,btc_volatility,btc_vol_ratio,",
         "bid,ask,mid,spread,bid_vol,ask_vol,imbalance,",
         "spoof,tick_gap_ms,ask_wall,dump_score,secs_left,",
         "poly_liquidity_delta,price_impact,depth_concentration,",
@@ -237,6 +239,7 @@ impl CsvRecord {
         f.push(self.btc_vol.to_string());
         f.push(self.price_velocity.to_string());
         f.push(self.btc_acel.to_string());
+        f.push(self.btc_volatility.to_string());
         f.push(self.btc_vol_ratio.to_string());
         // ── FASE 2: ORDER BOOK (7) ──
         f.push(self.poly_bid.to_string());

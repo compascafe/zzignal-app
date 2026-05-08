@@ -69,6 +69,7 @@ pub struct HftState {
     pub clob_trade_dn_vol: f64,
     pub btc_vel: f64,
     pub btc_acel: f64,
+    pub btc_volatility: f64,
     pub spoof: u8,
     pub dump_score: u8,
     pub ask_wall: u8,

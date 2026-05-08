@@ -41,6 +41,7 @@ pub struct LatestHftState {
     pub clob_trade_dn_vol: f64,
     pub btc_vel: f64,
     pub btc_acel: f64,
+    pub btc_volatility: f64,  // EMA of |velocity| — micro-volatility indicator
     pub spoof: u8,
     pub dump_score: u8,
     pub ask_wall: u8,
@@ -148,6 +149,7 @@ pub struct AppState {
     pub latency_binance: RwLock<u64>,
     pub latency_poly:    RwLock<u64>,
     pub prev_btc_vel:    RwLock<f64>,  // previous tick's btc_vel for acceleration calc
+    pub btc_vol_ema:     RwLock<f64>,  // EMA of |velocity| for volatility display
 
     #[cfg(feature = "premium-patterns")]
     pub patterns_config: RwLock<crate::modules::premium::patterns::models::DetectorConfig>,
@@ -217,6 +219,7 @@ impl AppState {
             latency_binance:   RwLock::new(0),
             latency_poly:      RwLock::new(0),
             prev_btc_vel:      RwLock::new(0.0),
+            btc_vol_ema:       RwLock::new(0.0),
             #[cfg(feature = "premium-patterns")]
             patterns_config: RwLock::new(crate::modules::premium::patterns::models::DetectorConfig::default()),
         })

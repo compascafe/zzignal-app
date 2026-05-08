@@ -540,15 +540,82 @@ fn draw_sessions(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_signals(f: &mut Frame, area: Rect, s: &State) {
-    let chunks = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,3), Constraint::Ratio(1,3), Constraint::Ratio(1,3)]).split(area);
+    let chunks = Layout::default().direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5),  // BTC velocity metrics — BIG numbers
+            Constraint::Min(1),     // trigger columns below
+        ]).split(area);
 
-    // Column 1: CLOB triggers
-    draw_trigger_column(f, chunks[0], s, "UP", s.hft.clob_trade_up, 0.83, s.hft.od83_up, s.hft.hd65_up);
-    // Column 2: Market state
-    draw_market_state(f, chunks[1], s);
-    // Column 3: CLOB triggers DOWN
-    draw_trigger_column(f, chunks[2], s, "DOWN", s.hft.clob_trade_dn, 0.83, s.hft.od83_dn, s.hft.hd65_dn);
+    // ─── BTC VELOCITY METRICS — large, prominent ───────────────────────
+    draw_btc_metrics(f, chunks[0], s);
+
+    // ─── Trigger columns ──────────────────────────────────────────────
+    let cols = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,3); 3]).split(chunks[1]);
+
+    draw_trigger_column(f, cols[0], s, "UP", s.hft.clob_trade_up, 0.83, s.hft.od83_up, s.hft.hd65_up);
+    draw_market_state(f, cols[1], s);
+    draw_trigger_column(f, cols[2], s, "DOWN", s.hft.clob_trade_dn, 0.83, s.hft.od83_dn, s.hft.hd65_dn);
+}
+
+fn draw_btc_metrics(f: &mut Frame, area: Rect, s: &State) {
+    let cols = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,4); 4]).split(area);
+
+    let b = Modifier::BOLD;
+
+    // Velocidad (slope)
+    let vel_sign = s.hft.btc_vel;
+    let vel_c = if vel_sign > 5.0 { Color::Green } else if vel_sign > 0.0 { Color::LightGreen } else if vel_sign > -5.0 { Color::LightRed } else { Color::Red };
+    let vel_label = if vel_sign > 20.0 { "FUERTE ⬆" } else if vel_sign > 5.0 { "subiendo" } else if vel_sign > 0.0 { "leve ⬆" } else if vel_sign > -5.0 { "leve ⬇" } else if vel_sign > -20.0 { "bajando" } else { "FUERTE ⬇" };
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("VELOCIDAD", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(format!("{:+.1}", vel_sign), Style::default().fg(vel_c).add_modifier(b))),
+            Line::from(Span::styled(format!("USD/s  {vel_label}"), Style::default().fg(vel_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("Pendiente BTC")),
+        cols[0]);
+
+    // Aceleración (curvature)
+    let acel = s.hft.btc_acel;
+    let acel_c = if acel > 2.0 { Color::Green } else if acel > 0.0 { Color::LightGreen } else if acel > -2.0 { Color::LightRed } else { Color::Red };
+    let acel_label = if acel > 5.0 { "acelerando ⬆" } else if acel > 0.5 { "empujando" } else if acel > -0.5 { "plano" } else if acel > -5.0 { "frenando" } else { "frenazo ⬇" };
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("ACELERACIÓN", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(format!("{:+.2}", acel), Style::default().fg(acel_c).add_modifier(b))),
+            Line::from(Span::styled(format!("USD/s²  {acel_label}"), Style::default().fg(acel_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("Curvatura")),
+        cols[1]);
+
+    // Volatilidad (micro)
+    let vol = s.hft.btc_volatility;
+    let vol_c = if vol > 15.0 { Color::Red } else if vol > 8.0 { Color::Yellow } else if vol > 3.0 { Color::LightGreen } else { Color::Green };
+    let vol_label = if vol > 20.0 { "CAÓTICO" } else if vol > 10.0 { "turbulento" } else if vol > 5.0 { "nervioso" } else if vol > 2.0 { "normal" } else { "tranquilo" };
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("VOLATILIDAD", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(format!("{:.1}", vol), Style::default().fg(vol_c).add_modifier(b))),
+            Line::from(Span::styled(format!("EMA|vel|  {vol_label}"), Style::default().fg(vol_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("Micro-Vol")),
+        cols[2]);
+
+    // BTC price
+    let btc_delta = if s.btc_entry > 0.0 { s.btc - s.btc_entry }
+        else if s.btc_open > 0.0 { s.btc - s.btc_open }
+        else { 0.0 };
+    let btc_c = if btc_delta > 0.0 { Color::Green } else if btc_delta < 0.0 { Color::Red } else { Color::Yellow };
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("BTC PRICE", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(b))),
+            Line::from(Span::styled(format!("{:+.0}", btc_delta), Style::default().fg(btc_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("Precio")),
+        cols[3]);
 }
 
 fn draw_trigger_column(f: &mut Frame, area: Rect, s: &State, label: &str,
