@@ -220,7 +220,7 @@ impl StrategyEngine {
         let ss = self.sessions.lock().unwrap();
         if let Some(s) = ss.get(&session_id) {
             (s.scheduled_end - Utc::now()).num_seconds()
-        } else { -1 }
+        } else { 450 } // No session registered — allow trading (mid-session safe zone)
     }
 
     // ─── Tick processing ───────────────────────────────────────────────────

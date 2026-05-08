@@ -256,6 +256,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
                         state3.recording_sessions.write().await.push(child_id);
                         state3.session_manager.start_session(child_id, &child_name).ok();
+                        state3.t5_manager.on_session_start(child_id, child_end);
+                        state3.t3_manager.on_session_start(child_id, child_end);
                         // Reset trade prices to avoid stale triggers from previous session
                         state3.trade_window_up.write().await.clear();
                         state3.trade_window_dn.write().await.clear();
