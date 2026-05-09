@@ -172,7 +172,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
             }
             s.add_log("TODAS LAS ESTRATEGIAS APAGADAS", Color::Green);
         }
-        // ─── Houdini 65: /h = toggle, /h5..h100 = ON + budget ───
+        // ─── Houdini 65: /h = toggle, /h5..h100 = ON + budget + LIVE ───
         'h' => {
             let idx = 1;
             if rest.is_empty() {
@@ -181,6 +181,8 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                 if s.h65_enabled {
                     s.selected_variant = 1;
                     s.add_log(format!("H65 ON  ${:.0}", s.h65_budget), Color::Green);
+                    // also enable LIVE mode so orders are real
+                    let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
                 } else {
                     s.add_log("H65 OFF", Color::DarkGray);
                 }
@@ -195,12 +197,25 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                         s.h65_enabled = true;
                         s.selected_variant = 1;
                         s.h65_lock = true;
-                        s.add_log(format!("H65 ON ${:.0}", amt), Color::Green);
+                        s.add_log(format!("H65 LIVE ${:.0}", amt), Color::Green);
                         let mut ok = true;
+                        // 1. Enable LIVE mode (orders reales)
+                        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
+                            s.add_log(format!("LIVE ON FAIL: {}", e), Color::Red);
+                            ok = false;
+                        }
+                        // 2. Disable all other variants except Houdini 65
+                        for i in 0..14 {
+                            if i == idx { continue; }
+                            let body = format!("{{\"index\":{},\"enable\":false}}", i);
+                            let _ = http_post("/api/odiseo/variant", &body).await;
+                        }
+                        // 3. Enable Houdini 65
                         if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
                             s.add_log(format!("H65 API FAIL: {}", e), Color::Red);
                             ok = false;
                         }
+                        // 4. Set budget
                         if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
                             s.add_log(format!("H65 BUDGET API FAIL: {}", e), Color::Red);
                             ok = false;
@@ -213,7 +228,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                 }
             }
         }
-        // ─── Odiseo 83: /o = toggle, /o5..o100 = ON + budget ───
+        // ─── Odiseo 83: /o = toggle, /o5..o100 = ON + budget + LIVE ───
         'o' => {
             let idx = 0;
             if rest.is_empty() {
@@ -222,6 +237,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                 if s.odi_enabled {
                     s.selected_variant = 0;
                     s.add_log(format!("O83 ON  ${:.0}", s.odi_budget), Color::Green);
+                    let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
                 } else {
                     s.add_log("O83 OFF", Color::DarkGray);
                 }
@@ -236,12 +252,25 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                         s.odi_enabled = true;
                         s.selected_variant = 0;
                         s.odi_lock = true;
-                        s.add_log(format!("O83 ON ${:.0}", amt), Color::Green);
+                        s.add_log(format!("O83 LIVE ${:.0}", amt), Color::Green);
                         let mut ok = true;
+                        // 1. Enable LIVE mode
+                        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
+                            s.add_log(format!("LIVE ON FAIL: {}", e), Color::Red);
+                            ok = false;
+                        }
+                        // 2. Disable all other variants except Odiseo 83
+                        for i in 0..14 {
+                            if i == idx { continue; }
+                            let body = format!("{{\"index\":{},\"enable\":false}}", i);
+                            let _ = http_post("/api/odiseo/variant", &body).await;
+                        }
+                        // 3. Enable Odiseo 83
                         if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
                             s.add_log(format!("O83 API FAIL: {}", e), Color::Red);
                             ok = false;
                         }
+                        // 4. Set budget
                         if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
                             s.add_log(format!("O83 BUDGET API FAIL: {}", e), Color::Red);
                             ok = false;
