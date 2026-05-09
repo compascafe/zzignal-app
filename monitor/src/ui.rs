@@ -919,7 +919,7 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
 
     f.render_widget(
         Paragraph::new(commit)
-            .style(Style::default().fg(Color::Red).bg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL)),
         chunks[1],
     );
