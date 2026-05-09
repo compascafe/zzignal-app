@@ -213,19 +213,18 @@ impl OdiseoTradingManager {
             r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
         }
 
-        let px = match lt { Some(p) if p>0.0 => p, _ => {
-            // Priority: raw trade > valid mid > book best bid > last_px
+        let (px, px_fresh) = match lt { Some(p) if p>0.0 => (p, true), _ => {
             let raw = if is_up { ctx.raw_trade_up } else { ctx.raw_trade_dn };
             if raw > 0.0 {
-                raw
+                (raw, true)
             } else {
                 let mid_alive = ctx.mid > 0.0 && (ctx.mid - 0.5).abs() > 0.01;
                 if mid_alive {
-                    ctx.mid
+                    (ctx.mid, true)
                 } else if ctx.best_bid > 0.0 && ctx.best_bid < 1.0 {
-                    ctx.best_bid
+                    (ctx.best_bid, true)
                 } else if pos.entered && !pos.settled && pos.last_px > 0.0 {
-                    pos.last_px
+                    (pos.last_px, false) // stale fallback — skip momentum check
                 } else if pos.entered && !pos.settled {
                     r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
                     return;
@@ -269,9 +268,8 @@ impl OdiseoTradingManager {
         }
 
         if !pos.entered && px >= def.entry_threshold && px <= def.tp_price {
-            // ── MOMENTUM FILTER: price must be RISING (acceleration toward entry) ──
-            if pos.last_px > 0.0 && px <= pos.last_px {
-                // Price flat or falling → no momentum, reset confirmation
+            // ── MOMENTUM FILTER: only on fresh price (skip stale fallback) ──
+            if px_fresh && pos.last_px > 0.0 && px <= pos.last_px {
                 pos.confirm_count = 0;
                 r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
                 return;
