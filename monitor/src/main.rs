@@ -486,6 +486,19 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
             if v.total_pnl < -v.budget * 0.1 { s.add_warning("H65 PERDIDA >10%"); }
             if !v.enabled.unwrap_or(true) { s.add_warning("HOUDINI 65 DESACTIVADO"); }
         }
+        Some("scalper") => {
+            s.sen_pnl = v.total_pnl; s.sen_budget = v.budget; s.sen_bal = v.balance;
+            s.sen_t_up = v.trades_up; s.sen_t_dn = v.trades_dn;
+            s.sen_w_up = v.wins_up; s.sen_w_dn = v.wins_dn;
+            s.sen_sessions = v.sessions;
+            if !s.sen_lock {
+                s.sen_enabled = v.enabled.unwrap_or(true);
+            } else if v.enabled.unwrap_or(true) == s.sen_enabled {
+                s.sen_lock = false;
+            }
+            let (nu, nd) = detect_trades(v, s.last_sen_t_up, s.last_sen_t_dn, s, "SENNA");
+            s.last_sen_t_up = nu; s.last_sen_t_dn = nd;
+        }
         _ => {}
     }
 }
@@ -606,6 +619,7 @@ async fn main() -> io::Result<()> {
                 });
                 if let Some(v) = odi_v { apply_variant(v, &mut s); }
                 if let Some(v) = find_variant(&data.variants, "houdini65") { apply_variant(v, &mut s); }
+                if let Some(v) = find_variant(&data.variants, "scalper") { apply_variant(v, &mut s); }
             }
 
             if let Some(orders) = http_get::<Vec<serde_json::Value>>("/api/orders").await {

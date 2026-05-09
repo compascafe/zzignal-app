@@ -225,20 +225,10 @@ fn draw_header(f: &mut Frame, area: Rect, s: &State) {
 }
 
 fn draw_banner(f: &mut Frame, area: Rect, s: &State) {
-    let h65 = if s.h65_enabled {
-        format!("H65 ACTIVO ${:.0}", s.h65_budget)
-    } else {
-        "H65 DESACTIVADO".into()
-    };
-    let o83 = if s.odi_enabled {
-        format!("O83 ACTIVO ${:.0}", s.odi_budget)
-    } else {
-        "O83 DESACTIVADO".into()
-    };
-    let h65_c = if s.h65_enabled { Color::Green } else { Color::Red };
-    let o83_c = if s.odi_enabled { Color::Green } else { Color::Red };
-
-    let text = format!(" {}  |  {}", h65, o83);
+    let h65 = if s.h65_enabled { format!("H65 ${:.0}", s.h65_budget) } else { "H65 OFF".into() };
+    let o83 = if s.odi_enabled { format!("O83 ${:.0}", s.odi_budget) } else { "O83 OFF".into() };
+    let sen = if s.sen_enabled { format!("SENNA ${:.0}", s.sen_budget) } else { "SENNA OFF".into() };
+    let text = format!(" {}  |  {}  |  {}", h65, o83, sen);
     let bg = if s.live { Color::Red } else { Color::Blue };
     f.render_widget(
         Paragraph::new(text)
