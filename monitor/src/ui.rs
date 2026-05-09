@@ -66,14 +66,14 @@ pub fn draw(f: &mut Frame, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
-    let warn_h = if s.warnings.is_empty() { 0 } else { (s.warnings.len().min(3) as u16).max(1) };
+    let warn_h = if s.warnings.is_empty() { 0 } else { s.warnings.len().min(3) as u16 };
     let mut constraints = vec![
         Constraint::Length(3),     // header
         Constraint::Length(1),     // banner
         Constraint::Length(7),     // Odiseo
         Constraint::Length(7),     // Houdini
+        Constraint::Length(3 + warn_h), // Alertas (status lines + warnings)
     ];
-    if warn_h > 0 { constraints.push(Constraint::Length(warn_h)); }
     constraints.push(Constraint::Min(2)); // log
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -91,12 +91,32 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     // Houdini panel
     draw_houdini_panel(f, m[idx], s); idx += 1;
 
-    // Warnings
-    if warn_h > 0 {
-        let warn_lines: Vec<Line> = s.warnings.iter().take(3).map(|w|
-            Line::from(Span::styled(w, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
-        ).collect();
-        f.render_widget(Paragraph::new(warn_lines).block(Block::default().borders(Borders::ALL).title("Alertas").border_style(Style::default().fg(Color::Red))), m[idx]);
+    // Alertas (always visible: status + warnings)
+    {
+        let mut alert_lines: Vec<Line> = Vec::new();
+        // Odiseo 83 status
+        let o83_status = if s.odi_enabled {
+            Span::styled("Odiseo 83: ACTIVADO", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled("Odiseo 83: DESACTIVADO", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        };
+        alert_lines.push(Line::from(o83_status));
+        // Houdini 65 status
+        let h65_status = if s.h65_enabled {
+            Span::styled("Houdini 65: ACTIVADO", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled("Houdini 65: DESACTIVADO", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        };
+        alert_lines.push(Line::from(h65_status));
+        // Warnings below
+        for w in s.warnings.iter().take(3) {
+            alert_lines.push(Line::from(Span::styled(format!("⚠ {}", w), Style::default().fg(Color::Yellow))));
+        }
+        f.render_widget(
+            Paragraph::new(alert_lines)
+                .block(Block::default().borders(Borders::ALL).title("Alertas")
+                    .border_style(Style::default().fg(Color::Red))),
+            m[idx]);
         idx += 1;
     }
 
