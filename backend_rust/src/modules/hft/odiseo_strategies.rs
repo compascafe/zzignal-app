@@ -107,7 +107,8 @@ pub struct OdiseoTradingManager {
     cmd_tx:     Option<tokio::sync::mpsc::UnboundedSender<CmdMsg>>,
     pub filter_chain: FilterChain,     // pre-entry filter layer
     session_history: Mutex<Vec<OdiseoSessionSummary>>, // per-session snapshots
-    prev_snapshot: Mutex<HashMap<String, OdiseoStats>>, // previous stats for delta calc
+    prev_snapshot: Mutex<HashMap<String, OdiseoStats>>,
+    pub last_trigger: Mutex<u8>,  // 0=none, 1=CLOB momentum, 2=BTC big move // previous stats for delta calc
 }
 
 impl OdiseoTradingManager {
@@ -116,7 +117,7 @@ impl OdiseoTradingManager {
         let mut enabled = Vec::with_capacity(n);
         for _ in 0..n { enabled.push(AtomicBool::new(false)); }
         let budgets = vec![20.0; n];
-        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain(), session_history: Mutex::new(Vec::new()), prev_snapshot: Mutex::new(HashMap::new()) }
+        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain(), session_history: Mutex::new(Vec::new()), prev_snapshot: Mutex::new(HashMap::new()), last_trigger: Mutex::new(0) }
     }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
@@ -312,7 +313,8 @@ impl OdiseoTradingManager {
                 let btc_ok = if is_up { vel > 10.0 } else { vel < -10.0 };
                 // Enter on CLOB momentum OR BTC big move + CLOB confirming
                 if clob_ok || (btc_ok && px > pos.prices.get(0).copied().unwrap_or(0.0)) {
-                    // Either way, clear window and proceed
+                    // Track which trigger fired
+                    *self.last_trigger.lock().unwrap() = if clob_ok { 1 } else { 2 };
                     true
                 } else {
                     r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
@@ -404,11 +406,19 @@ impl OdiseoTradingManager {
 
     fn check_exit(&self, pos:&OdiseoPosition, def:&OdiseoDef, px:f64, vol:f64, imb:f64, vel:f64) -> u8 {
         let is_scalp = def.momentum_delta > 0.0;
-        // ── TP ──
-        let tp = if is_scalp { pos.entry_price + 0.03 } else { def.tp_price };
+        // ── TP (dynamic for scalp: f(x)=15-0.1x) ──
+        let tp = if is_scalp {
+            let cents = pos.entry_price * 100.0;
+            let pct = ((15.0 - 0.1 * cents).max(3.0).min(12.0)) / 100.0;
+            pos.entry_price * (1.0 + pct)
+        } else { def.tp_price };
         if px >= tp { return 1; }
-        // ── SL hard ──
-        let sl = if is_scalp { pos.entry_price - 0.02 } else { def.sl_hard };
+        // ── SL hard (60% of TP for scalp) ──
+        let sl = if is_scalp {
+            let cents = pos.entry_price * 100.0;
+            let pct = ((15.0 - 0.1 * cents).max(3.0).min(12.0)) / 100.0;
+            pos.entry_price * (1.0 - pct * 0.6)
+        } else { def.sl_hard };
         if px <= sl { return 4; }
         // ── Trailing stop ──
         let trail = if is_scalp { 0.01 } else { def.trail_distance };

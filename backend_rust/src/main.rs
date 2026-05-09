@@ -775,6 +775,7 @@ async fn capture_combined(
             &filter_ctx,
         );
         rec.od83_filters = state.odiseo_trading.filter_chain.enabled_mask();
+        let entry_trigger = *state.odiseo_trading.last_trigger.lock().unwrap();
         for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
             match code.as_str() {
                 "odiseo83_up"   => { 
@@ -798,12 +799,20 @@ async fn capture_combined(
                     rec.houdini65_down_active = active; rec.houdini65_down_entry_price = entry; rec.houdini65_down_size = size; rec.houdini65_down_pnl = pnl; rec.houdini65_down_exit_price = exit_price; rec.houdini65_down_exit_reason = exit_reason; rec.houdini65_down_balance = balance;
                 }
                 "scalper_up" => {
-                    if rec.scalper_up_active == 0 && active == 2 { rec.scalper_event = "IN_UP".into(); }
+                    if rec.scalper_up_active == 0 && active == 2 {
+                        rec.scalper_event = "IN_UP".into(); rec.entry_trigger = entry_trigger;
+                        let cents = entry * 100.0;
+                        rec.tp_pct = (15.0 - 0.1 * cents).max(3.0).min(12.0);
+                    }
                     else if rec.scalper_up_active == 2 && active == 0 && exit_reason > 0 { rec.scalper_event = "OUT_UP".into(); }
                     rec.scalper_up_active = active; rec.scalper_up_entry_price = entry; rec.scalper_up_size = size; rec.scalper_up_pnl = pnl; rec.scalper_up_exit_price = exit_price; rec.scalper_up_exit_reason = exit_reason; rec.scalper_up_balance = balance;
                 }
                 "scalper_down" => {
-                    if rec.scalper_down_active == 0 && active == 2 { rec.scalper_event = "IN_DN".into(); }
+                    if rec.scalper_down_active == 0 && active == 2 {
+                        rec.scalper_event = "IN_DN".into(); rec.entry_trigger = entry_trigger;
+                        let cents = entry * 100.0;
+                        rec.tp_pct = (15.0 - 0.1 * cents).max(3.0).min(12.0);
+                    }
                     else if rec.scalper_down_active == 2 && active == 0 && exit_reason > 0 { rec.scalper_event = "OUT_DN".into(); }
                     rec.scalper_down_active = active; rec.scalper_down_entry_price = entry; rec.scalper_down_size = size; rec.scalper_down_pnl = pnl; rec.scalper_down_exit_price = exit_price; rec.scalper_down_exit_reason = exit_reason; rec.scalper_down_balance = balance;
                 }

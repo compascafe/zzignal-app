@@ -158,6 +158,8 @@ pub struct CsvRecord {
     pub mid_from_entry:         f64,    // poly_mid - entry_price (distance from entry)
     pub token_momentum:         f64,    // Δ token price from prev tick (>0 = rising, entry allowed)
     pub entry_slippage:         f64,    // entry_price - signal_price (slippage on market buy)
+    pub entry_trigger:          u8,     // 0=none, 1=CLOB momentum, 2=BTC big move
+    pub tp_pct:                 f64,    // dynamic TP% for scalp: (15-0.1x)% of entry
 }
 
 impl Default for CsvRecord {
@@ -226,6 +228,8 @@ impl Default for CsvRecord {
             mid_from_entry:         0.0,
             token_momentum:         0.0,
             entry_slippage:         0.0,
+            entry_trigger:          0,
+            tp_pct:                 0.0,
         }
     }
 }
@@ -250,7 +254,7 @@ impl CsvRecord {
         "scalper_dn,scalper_dn_entry,scalper_dn_sz,scalper_dn_pnl,scalper_dn_exit,scalper_dn_r,scalper_dn_bal,",
         "od83_event,hd65_event,scalper_event,od83_up_mode,od83_dn_mode,",
         "od83_up_at,od83_dn_at,",
-        "mid_from_entry,token_momentum,entry_slippage",
+        "mid_from_entry,token_momentum,entry_slippage,entry_trigger,tp_pct",
         )
     }    /// Returns 304 CSV fields as strings in the exact order of `csv_header()`.
     /// Used by all three CSV export paths (per-session file, live REST, DB fallback).
@@ -357,6 +361,8 @@ impl CsvRecord {
         f.push(self.mid_from_entry.to_string());
         f.push(self.token_momentum.to_string());
         f.push(self.entry_slippage.to_string());
+        f.push(self.entry_trigger.to_string());
+        f.push(self.tp_pct.to_string());
         f
     }
 
