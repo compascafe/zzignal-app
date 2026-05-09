@@ -1,13 +1,12 @@
-//! Odiseo Strategies v9 — Blind‑exit + timeout protection
+//! Odiseo Strategies v9 — Blind‑exit + last‑minute liquidation
 //!
 //!   O83: entry>=0.83 tp=0.97 sl=0.81 trail=0.05 confirm=2
 //!   H65: entry>=0.65 tp=0.75 sl=0.60 trail=0.03 confirm=2
 //!
-//! Exit reasons: 1=TP 2=SL_micro 3=SL_trend 4=SL_hard 5=trail 6=flash 7=timeout
+//! Exit reasons: 1=TP 2=SL_micro 3=SL_trend 4=SL_hard 5=trail 6=flash
 //! Blind exit: uses last_px when no fresh price — never leaves position unmanaged
-//! Timeout: 5 min without exit → market sell (not counted as SL)
+//! Last 60s: force liquidate open positions at market (no new entries)
 
-use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,7 +43,6 @@ struct OdiseoPosition {
     max_price: f64, min_price: f64, prev_vol: f64,
     confirm_count: u32,
     last_px: f64,           // last known price — blind exit fallback
-    entry_time_ms: i64,     // unix ms when position opened — timeout guard
 }
 impl Default for OdiseoPosition {
     fn default() -> Self {
@@ -54,7 +52,6 @@ impl Default for OdiseoPosition {
             max_price: 0.0, min_price: 1.0, prev_vol: 0.0,
             confirm_count: 0,
             last_px: 0.0,
-            entry_time_ms: 0,
         }
     }
 }
@@ -170,11 +167,11 @@ impl OdiseoTradingManager {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
 
-        // ── Boundary safety: no trade in first 20s or last 20s ──
+        // ── Boundary safety: no trade in first 20s or last 60s ──
         let in_first = seconds_left > 880;
-        let in_last = seconds_left <= 20;
+        let in_last = seconds_left <= 60;
         let boundary_block = in_first || in_last;
-        let boundary_label = if in_first {"first20s"} else {"last20s"};
+        let boundary_label = if in_first {"first20s"} else {"last60s"};
 
         // If position open and we're in boundary → force liquidate at market
         if pos.entered && !pos.settled && boundary_block {
@@ -234,28 +231,6 @@ impl OdiseoTradingManager {
         // Persist last known price for blind exit fallback
         if px > 0.0 { pos.last_px = px; }
 
-        // ── TIMEOUT GUARD: 5 min without exit → market sell ──
-        const TIMEOUT_MS: i64 = 300_000;
-        if pos.entered && !pos.settled && pos.entry_time_ms > 0 {
-            let now_ms = Utc::now().timestamp_millis();
-            if now_ms - pos.entry_time_ms > TIMEOUT_MS {
-                pos.settled = true; pos.exit_reason = 7;
-                pos.exit_price = px; pos.virtual_pnl = (px - pos.entry_price) * pos.size;
-                t.session_profit += pos.virtual_pnl;
-                info!("[Odiseo] #{} {} TIMEOUT EXIT @{:.4} pnl={:.4}", sid, code, px, pos.virtual_pnl);
-                if self.live_mode.load(Ordering::Relaxed) {
-                    if let Some(ref tx) = self.cmd_tx {
-                        let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
-                        let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: pos.size.max(1.0) });
-                    }
-                }
-                let bal = budget + pos.virtual_pnl;
-                r.push((code.clone(), 0u8, pos.entry_price, pos.size, pos.virtual_pnl, px, 7u8, bal));
-                *pos = OdiseoPosition::default();
-                return;
-            }
-        }
-
         if pos.entered && !pos.settled {
             let reason = self.check_exit(pos, def, px, if is_up{av}else{bv}, imb, vel);
             if reason > 0 {
@@ -263,7 +238,7 @@ impl OdiseoTradingManager {
                 let fill = if reason==1 { def.tp_price } else { px };
                 pos.exit_price = fill; pos.virtual_pnl = (fill - pos.entry_price) * pos.size;
                 t.session_profit += pos.virtual_pnl;
-                if reason >= 2 && reason <= 4 { t.sl_count += 1; } // only hard SL (2-4), trail(5)/flash(6)/timeout(7) excluded
+                if reason >= 2 && reason <= 4 { t.sl_count += 1; } // only hard SL (2-4), trail(5)/flash(6) excluded
                 info!("[Odiseo] #{} {} EXIT r={} @{:.4} pnl={:.4} sl_count={}", sid, code, reason, fill, pos.virtual_pnl, t.sl_count);
                 // ── Live: place real exit order ──
                 if self.live_mode.load(Ordering::Relaxed) {
@@ -322,7 +297,7 @@ impl OdiseoTradingManager {
             pos.entered = true; pos.entry_price = px;
             pos.size = (budget/px).floor().max(1.0);
             pos.max_price = px; pos.min_price = px; pos.prev_vol = if is_up{av}else{bv};
-            pos.confirm_count = 0; pos.entry_time_ms = Utc::now().timestamp_millis();
+            pos.confirm_count = 0;
             *sig |= if is_up{1}else{2};
             info!("[Odiseo] #{} {} ENTER @{:.4} sz={:.0} trail={:.2}", sid, code, px, pos.size, def.trail_distance);
             // ── Live: place real entry order ──
