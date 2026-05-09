@@ -118,7 +118,9 @@ impl OdiseoTradingManager {
     pub fn disable_all(&self) {
         self.live_mode.store(false, Ordering::Relaxed);
         for en in &self.enabled { en.store(false, Ordering::Relaxed); }
-        info!("[Odiseo] ALL strategies DISABLED — live_mode OFF, all variants OFF");
+        // Clear all session state — prevents stale positions from re-triggering
+        self.sessions.lock().unwrap().clear();
+        info!("[Odiseo] ALL strategies DISABLED — live_mode OFF, all variants OFF, sessions cleared");
     }
     pub fn is_enabled(&self, idx:usize) -> bool { idx < self.enabled.len() && self.enabled[idx].load(Ordering::Relaxed) }
     pub fn set_budget(&self, idx:usize, amount:f64) { if let Some(b) = self.budgets.lock().unwrap().get_mut(idx) { *b = amount.max(5.0).min(100.0); } }
