@@ -918,9 +918,9 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     );
 
     f.render_widget(
-        Paragraph::new(commit)
-            .style(Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(format!(" {} ", commit))
+            .style(Style::default().fg(Color::Yellow).bg(Color::Black).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow))),
         chunks[1],
     );
 }
