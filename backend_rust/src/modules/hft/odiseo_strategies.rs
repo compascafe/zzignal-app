@@ -307,15 +307,17 @@ impl OdiseoTradingManager {
             let scalp_trigger = if def.momentum_delta > 0.0 {
                 pos.prices.push_back(px);
                 if pos.prices.len() > 4 { pos.prices.pop_front(); }
-                let gap = if pos.prices.len() >= 2 {
-                    px - pos.prices[0]
-                } else { 0.0 };
-                if gap < def.momentum_delta {
-                    // Not enough momentum yet — keep watching
+                let gap = if pos.prices.len() >= 2 { px - pos.prices[0] } else { 0.0 };
+                let clob_ok = gap >= def.momentum_delta;
+                let btc_ok = if is_up { vel > 10.0 } else { vel < -10.0 };
+                // Enter on CLOB momentum OR BTC big move + CLOB confirming
+                if clob_ok || (btc_ok && px > pos.prices.get(0).copied().unwrap_or(0.0)) {
+                    // Either way, clear window and proceed
+                    true
+                } else {
                     r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
                     return;
                 }
-                true
             } else { false };
             // Clean up price window for non-scalp variants
             if !scalp_trigger { pos.prices.clear(); }
