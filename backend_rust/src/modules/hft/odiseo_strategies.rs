@@ -276,9 +276,9 @@ impl OdiseoTradingManager {
                 r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
                 return;
             }
-            // ── BTC MOMENTUM FILTER: BTC must move in trade direction ──
+            // ── BTC MOMENTUM: block only if BTC moves hard against trade ──
             if def.btc_trend_filter {
-                let btc_ok = if is_up { vel > 2.0 } else { vel < -2.0 };
+                let btc_ok = if is_up { vel > -5.0 } else { vel < 5.0 };
                 if !btc_ok {
                     pos.confirm_count = 0;
                     r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
