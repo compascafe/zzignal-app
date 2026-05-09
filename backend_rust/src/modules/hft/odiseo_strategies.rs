@@ -1,11 +1,10 @@
-//! Odiseo Strategies v9 — Blind‑exit + last‑minute liquidation
+//! Odiseo Strategies v10 — Momentum entry + wide trail + blind exit
 //!
 //!   O83: entry>=0.83 tp=0.97 sl=0.81 trail=0.05 confirm=2
-//!   H65: entry>=0.65 tp=0.75 sl=0.60 trail=0.03 confirm=2
+//!   H65: entry>=0.65 tp=0.75 sl=0.60 trail=0.04 confirm=2
 //!
+//! Momentum filter: price must be RISING (px > last_px) to enter
 //! Exit reasons: 1=TP 2=SL_micro 3=SL_trend 4=SL_hard 5=trail 6=flash
-//! Blind exit: uses last_px when no fresh price — never leaves position unmanaged
-//! Last 60s: force liquidate open positions at market (no new entries)
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -270,11 +269,18 @@ impl OdiseoTradingManager {
         }
 
         if !pos.entered && px >= def.entry_threshold && px <= def.tp_price {
-            // ── BTC TREND FILTER ────────────────────────────────────
-            if def.btc_trend_filter && def.confirm_ticks > 0 {
-                let btc_ok = if is_up { vel > -5.0 } else { vel < 5.0 };
+            // ── MOMENTUM FILTER: price must be RISING (acceleration toward entry) ──
+            if pos.last_px > 0.0 && px <= pos.last_px {
+                // Price flat or falling → no momentum, reset confirmation
+                pos.confirm_count = 0;
+                r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
+                return;
+            }
+            // ── BTC MOMENTUM FILTER: BTC must move in trade direction ──
+            if def.btc_trend_filter {
+                let btc_ok = if is_up { vel > 2.0 } else { vel < -2.0 };
                 if !btc_ok {
-                    pos.confirm_count = 0; // reset on trend violation
+                    pos.confirm_count = 0;
                     r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
                     return;
                 }
