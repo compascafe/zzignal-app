@@ -787,6 +787,16 @@ async fn capture_combined(
                     else if rec.houdini65_down_active == 2 && active == 0 && exit_reason > 0 { rec.houdini65_event = "OUT_DN".into(); }
                     rec.houdini65_down_active = active; rec.houdini65_down_entry_price = entry; rec.houdini65_down_size = size; rec.houdini65_down_pnl = pnl; rec.houdini65_down_exit_price = exit_price; rec.houdini65_down_exit_reason = exit_reason; rec.houdini65_down_balance = balance;
                 }
+                "scalper_up" => {
+                    if rec.scalper_up_active == 0 && active == 2 { rec.scalper_event = "IN_UP".into(); }
+                    else if rec.scalper_up_active == 2 && active == 0 && exit_reason > 0 { rec.scalper_event = "OUT_UP".into(); }
+                    rec.scalper_up_active = active; rec.scalper_up_entry_price = entry; rec.scalper_up_size = size; rec.scalper_up_pnl = pnl; rec.scalper_up_exit_price = exit_price; rec.scalper_up_exit_reason = exit_reason; rec.scalper_up_balance = balance;
+                }
+                "scalper_down" => {
+                    if rec.scalper_down_active == 0 && active == 2 { rec.scalper_event = "IN_DN".into(); }
+                    else if rec.scalper_down_active == 2 && active == 0 && exit_reason > 0 { rec.scalper_event = "OUT_DN".into(); }
+                    rec.scalper_down_active = active; rec.scalper_down_entry_price = entry; rec.scalper_down_size = size; rec.scalper_down_pnl = pnl; rec.scalper_down_exit_price = exit_price; rec.scalper_down_exit_reason = exit_reason; rec.scalper_down_balance = balance;
+                }
                 _ => {}
             }
         }
