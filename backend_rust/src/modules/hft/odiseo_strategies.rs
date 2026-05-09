@@ -1,15 +1,10 @@
-//! Odiseo Strategies v7 — 2 variants: Odiseo 83 + Houdini 65
+//! Odiseo Strategies v8 — Trailing stop + entry confirmation + BTC trend
 //!
-//!   83: entry>=0.83 tp=0.97 sl=0.81 (PRINCIPAL, full 15min)
-//!   65: entry>=0.65 tp=0.75 sl=0.60 (Houdini reversals, full 15min)
+//!   O83: entry>=0.83 tp=0.97 sl=0.81 trail=0.05 confirm=2
+//!   H65: entry>=0.65 tp=0.75 sl=0.60 trail=0.03 confirm=2
 //!
-//! Anti-whale: entry only if price between entry_threshold and tp_price.
-//! 3-layer SL. Per-session reset. Cumulative PnL tracking.
-//!
-//! Session boundary protection (v6):
-//!   - First 20s (seconds_left > 880): NO entries, liquidate open positions.
-//!   - Last 20s  (seconds_left <= 20): NO entries, liquidate open positions.
-//!   - Flash-protection exit = exit_reason 6 (market sell, NOT counted as SL).
+//! Exit reasons: 1=TP 2=SL_micro 3=SL_trend 4=SL_hard 5=trail_stop 6=flash
+//! BTC trend: UP requires btc_vel > -5, DOWN requires btc_vel < +5
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -30,15 +25,33 @@ struct OdiseoDef {
     sl_trend_delta:   f64,
     sl_micro_drop:    f64,
     only_last_10min:  bool,
+    trail_distance:   f64,   // trailing stop offset from best price
+    confirm_ticks:    u32,   // consecutive ticks above threshold to confirm entry
+    btc_trend_filter: bool,  // check BTC velocity direction before entry
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
-    OdiseoDef { name:"Odiseo 83",   code:"odiseo83",  entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 83",   code:"odiseo83",  entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false, trail_distance:0.05, confirm_ticks:2, btc_trend_filter:true },
+    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false, trail_distance:0.03, confirm_ticks:2, btc_trend_filter:true },
 ];
 
-#[derive(Debug, Clone, Default)]
-struct OdiseoPosition { entered:bool, entry_price:f64, size:f64, settled:bool, exit_price:f64, exit_reason:u8, virtual_pnl:f64, max_price:f64, prev_vol:f64 }
+#[derive(Debug, Clone)]
+struct OdiseoPosition {
+    entered: bool, entry_price: f64, size: f64, settled: bool,
+    exit_price: f64, exit_reason: u8, virtual_pnl: f64,
+    max_price: f64, min_price: f64, prev_vol: f64,
+    confirm_count: u32,  // ticks above entry_threshold for confirmation
+}
+impl Default for OdiseoPosition {
+    fn default() -> Self {
+        Self {
+            entered: false, entry_price: 0.0, size: 0.0, settled: false,
+            exit_price: 0.0, exit_reason: 0, virtual_pnl: 0.0,
+            max_price: 0.0, min_price: 1.0, prev_vol: 0.0,
+            confirm_count: 0,
+        }
+    }
+}
 #[derive(Debug, Clone, Default)]
 struct OdiseoSessionTrade { up:OdiseoPosition, down:OdiseoPosition, sl_count:u32, session_profit:f64 }
 struct OdiseoSessionState { trades:Vec<OdiseoSessionTrade> }
@@ -218,7 +231,7 @@ impl OdiseoTradingManager {
                 let fill = if reason==1 { def.tp_price } else { px };
                 pos.exit_price = fill; pos.virtual_pnl = (fill - pos.entry_price) * pos.size;
                 t.session_profit += pos.virtual_pnl;
-                if reason >= 2 { t.sl_count += 1; }
+                if reason >= 2 && reason <= 4 { t.sl_count += 1; } // only hard SL counted
                 info!("[Odiseo] #{} {} EXIT r={} @{:.4} pnl={:.4} sl_count={}", sid, code, reason, fill, pos.virtual_pnl, t.sl_count);
                 // ── Live: place real exit order ──
                 if self.live_mode.load(Ordering::Relaxed) {
@@ -242,6 +255,23 @@ impl OdiseoTradingManager {
         }
 
         if !pos.entered && px >= def.entry_threshold && px <= def.tp_price {
+            // ── BTC TREND FILTER ────────────────────────────────────
+            if def.btc_trend_filter && def.confirm_ticks > 0 {
+                let btc_ok = if is_up { vel > -5.0 } else { vel < 5.0 };
+                if !btc_ok {
+                    pos.confirm_count = 0; // reset on trend violation
+                    r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
+                    return;
+                }
+            }
+            // ── ENTRY CONFIRMATION ──────────────────────────────────
+            if def.confirm_ticks > 1 {
+                pos.confirm_count = pos.confirm_count.saturating_add(1);
+                if pos.confirm_count < def.confirm_ticks {
+                    r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
+                    return;
+                }
+            }
             // ── PRE-ENTRY FILTER LAYER ──────────────────────────────
             {
                 let mut fctx = ctx.clone();
@@ -250,6 +280,7 @@ impl OdiseoTradingManager {
                 fctx.budget = budget;
                 if let FilterResult::Block { reason } = self.filter_chain.check(&fctx, &code, sid) {
                     info!("[Odiseo] #{} {} FILTERED OUT: {}", sid, code, reason);
+                    pos.confirm_count = 0;
                     let status = 1u8;
                     r.push((code, status, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
                     return;
@@ -258,9 +289,10 @@ impl OdiseoTradingManager {
             // ─────────────────────────────────────────────────────────
             pos.entered = true; pos.entry_price = px;
             pos.size = (budget/px).floor().max(1.0);
-            pos.max_price = px; pos.prev_vol = if is_up{av}else{bv};
+            pos.max_price = px; pos.min_price = px; pos.prev_vol = if is_up{av}else{bv};
+            pos.confirm_count = 0;
             *sig |= if is_up{1}else{2};
-            info!("[Odiseo] #{} {} ENTER @{:.4} sz={:.0}", sid, code, px, pos.size);
+            info!("[Odiseo] #{} {} ENTER @{:.4} sz={:.0} trail={:.2}", sid, code, px, pos.size, def.trail_distance);
             // ── Live: place real entry order ──
             if self.live_mode.load(Ordering::Relaxed) {
                 if let Some(ref tx) = self.cmd_tx {
@@ -268,10 +300,14 @@ impl OdiseoTradingManager {
                     let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Buy, outcome, price: px, size: pos.size });
                 }
             }
+        } else if !pos.entered && def.confirm_ticks > 1 {
+            // Price dropped below threshold → reset confirmation
+            pos.confirm_count = 0;
         }
 
         if pos.entered && !pos.settled {
             if px > pos.max_price { pos.max_price = px; }
+            if px < pos.min_price { pos.min_price = px; }
             pos.prev_vol = if is_up{av}else{bv};
         }
 
@@ -281,9 +317,17 @@ impl OdiseoTradingManager {
     }
 
     fn check_exit(&self, pos:&OdiseoPosition, def:&OdiseoDef, px:f64, vol:f64, imb:f64, vel:f64) -> u8 {
+        // 1: TP hit
         if px >= def.tp_price { return 1; }
+        // 5: Trailing stop — price fell below trail from max (captura ganancias)
+        if pos.max_price > 0.0 && def.trail_distance > 0.0 && px <= pos.max_price - def.trail_distance {
+            return 5;
+        }
+        // 2: SL micro (volume collapse + negative imbalance)
         if pos.prev_vol>0.0 && (pos.prev_vol-vol)/pos.prev_vol > def.sl_micro_drop && imb < -0.5 { return 2; }
+        // 3: SL trend (price dropped from max + bearish velocity)
         if pos.max_price - px > def.sl_trend_delta && vel < 0.0 { return 3; }
+        // 4: SL hard
         if px <= def.sl_hard { return 4; }
         0
     }
