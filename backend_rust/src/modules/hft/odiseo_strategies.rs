@@ -44,7 +44,8 @@ pub struct OdiseoPosition {
     pub max_price: f64, pub min_price: f64, pub prev_vol: f64,
     pub confirm_count: u32,
     pub last_px: f64,
-    pub prices: VecDeque<f64>,  // last 4 prices for momentum calc
+    pub prices: VecDeque<f64>,
+    pub entry_seconds: i32,  // for Senna timeout (seconds_left at entry)
 }
 impl Default for OdiseoPosition {
     fn default() -> Self {
@@ -55,6 +56,7 @@ impl Default for OdiseoPosition {
             confirm_count: 0,
             last_px: 0.0,
             prices: VecDeque::with_capacity(4),
+            entry_seconds: 0,
         }
     }
 }
@@ -241,6 +243,26 @@ impl OdiseoTradingManager {
         if px > 0.0 { pos.last_px = px; }
 
         if pos.entered && !pos.settled {
+            // ── SENNA TIMEOUT: force market sell after 60s without exit ──
+            if def.momentum_delta > 0.0 && pos.entry_seconds > 0 {
+                let age = pos.entry_seconds - seconds_left;
+                if age > 60 {
+                    pos.settled = true; pos.exit_reason = 6;
+                    pos.exit_price = px; pos.virtual_pnl = (px - pos.entry_price) * pos.size;
+                    t.session_profit += pos.virtual_pnl;
+                    info!("[Odiseo] #{} {} SENNA TIMEOUT @{:.4} pnl={:.4}", sid, code, px, pos.virtual_pnl);
+                    if self.live_mode.load(Ordering::Relaxed) {
+                        if let Some(ref tx) = self.cmd_tx {
+                            let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
+                            let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: pos.size.max(1.0) });
+                        }
+                    }
+                    let bal = budget + pos.virtual_pnl;
+                    r.push((code.clone(), 0u8, pos.entry_price, pos.size, pos.virtual_pnl, px, 6u8, bal));
+                    *pos = OdiseoPosition::default();
+                    return;
+                }
+            }
             let reason = self.check_exit(pos, def, px, if is_up{av}else{bv}, imb, vel);
             if reason > 0 {
                 pos.settled = true; pos.exit_reason = reason;
@@ -331,6 +353,7 @@ impl OdiseoTradingManager {
             pos.size = (budget/px).floor().max(1.0);
             pos.max_price = px; pos.min_price = px; pos.prev_vol = if is_up{av}else{bv};
             pos.confirm_count = 0;
+            pos.entry_seconds = seconds_left;  // for Senna timeout
             *sig |= if is_up{1}else{2};
             info!("[Odiseo] #{} {} ENTER @{:.4} sz={:.0} trail={:.2}", sid, code, px, pos.size, def.trail_distance);
             // ── Live: place entry order ──
