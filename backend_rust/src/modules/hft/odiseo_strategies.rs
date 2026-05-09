@@ -33,7 +33,7 @@ struct OdiseoDef {
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
     OdiseoDef { name:"Odiseo 83",   code:"odiseo83",  entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false, trail_distance:0.05, confirm_ticks:2, btc_trend_filter:true },
-    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false, trail_distance:0.03, confirm_ticks:2, btc_trend_filter:true },
+    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false, trail_distance:0.02, confirm_ticks:2, btc_trend_filter:true },
 ];
 
 #[derive(Debug, Clone)]
@@ -215,11 +215,11 @@ impl OdiseoTradingManager {
         }
 
         let px = match lt { Some(p) if p>0.0 => p, _ => {
-            // Fallback: use poly mid price when no trade data available
-            if ctx.mid > 0.0 {
+            // Fallback: use poly mid price only if far from default 0.50 (stale data)
+            let mid_alive = ctx.mid > 0.0 && (ctx.mid - 0.5).abs() > 0.01;
+            if mid_alive {
                 ctx.mid
             } else if pos.entered && !pos.settled && pos.last_px > 0.0 {
-                // Blind exit: no fresh price, use last known price
                 pos.last_px
             } else if pos.entered && !pos.settled {
                 r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
@@ -228,7 +228,7 @@ impl OdiseoTradingManager {
                 r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
             }
         }};
-        // Persist last known price for blind exit fallback
+        // Persist last known price (only from real data, not stale fallback)
         if px > 0.0 { pos.last_px = px; }
 
         if pos.entered && !pos.settled {
