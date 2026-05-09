@@ -337,9 +337,14 @@ impl OdiseoTradingManager {
             if self.live_mode.load(Ordering::Relaxed) {
                 if let Some(ref tx) = self.cmd_tx {
                     let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
-                    // Limit buy at signal price + 0.02 buffer to ensure fill without huge slippage
-                    let limit_price = (px + 0.02).min(def.tp_price - 0.01);
-                    let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Buy, outcome, price: limit_price, size: pos.size });
+                    if def.momentum_delta > 0.0 {
+                        // Scalp mode: market buy (instant fill, Dublin 155ms latency)
+                        let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Buy, outcome, amount_usdc: budget });
+                    } else {
+                        // Threshold mode: limit buy at signal+0.02 to prevent slippage
+                        let limit_price = (px + 0.02).min(def.tp_price - 0.01);
+                        let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Buy, outcome, price: limit_price, size: pos.size });
+                    }
                 }
             }
         } else if !pos.entered && def.confirm_ticks > 1 {
