@@ -46,6 +46,7 @@ pub struct OdiseoPosition {
     pub last_px: f64,
     pub prices: VecDeque<f64>,
     pub entry_seconds: i32,  // for Senna timeout
+    pub signal_px: f64,      // price that triggered entry (before slippage)
 }
 impl Default for OdiseoPosition {
     fn default() -> Self {
@@ -57,6 +58,7 @@ impl Default for OdiseoPosition {
             last_px: 0.0,
             prices: VecDeque::with_capacity(4),
             entry_seconds: 0,
+            signal_px: 0.0,
         }
     }
 }
@@ -272,7 +274,8 @@ impl OdiseoTradingManager {
             let reason = self.check_exit(pos, def, px, if is_up{av}else{bv}, imb, vel);
             if reason > 0 {
                 pos.settled = true; pos.exit_reason = reason;
-                let fill = if reason==1 { def.tp_price } else { px };
+                let tp_price = if def.momentum_delta > 0.0 { pos.entry_price + 0.03 } else { def.tp_price };
+                let fill = if reason==1 { tp_price } else { px };
                 pos.exit_price = fill; pos.virtual_pnl = (fill - pos.entry_price) * pos.size;
                 t.session_profit += pos.virtual_pnl;
                 if reason >= 2 && reason <= 4 { t.sl_count += 1; } // only hard SL (2-4), trail(5)/flash(6) excluded
@@ -282,8 +285,8 @@ impl OdiseoTradingManager {
                     if let Some(ref tx) = self.cmd_tx {
                         let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
                         if reason == 1 {
-                            // TP: limit sell at exact TP price
-                            let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Sell, outcome, price: def.tp_price, size: pos.size });
+                            let tp_price = if def.momentum_delta > 0.0 { pos.entry_price + 0.03 } else { def.tp_price };
+                            let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Sell, outcome, price: tp_price, size: pos.size });
                         } else {
                             // Trail / SL / flash: market sell (immediate fill)
                             let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: pos.size.max(1.0) });
@@ -355,9 +358,14 @@ impl OdiseoTradingManager {
                 }
             }
             // ─────────────────────────────────────────────────────────
-            pos.entered = true; pos.entry_price = px;
-            pos.size = (budget/px).floor().max(1.0);
-            pos.max_price = px; pos.min_price = px; pos.prev_vol = if is_up{av}else{bv};
+            // Scalp mode: use best_ask as entry (real fill price from market buy)
+            let entry_px = if def.momentum_delta > 0.0 && ctx.best_ask > 0.0 && ctx.best_ask < 1.0 {
+                ctx.best_ask
+            } else { px };
+            pos.entered = true; pos.entry_price = entry_px;
+            pos.signal_px = px;  // signal price (before slippage)
+            pos.size = (budget/entry_px).floor().max(1.0);
+            pos.max_price = entry_px; pos.min_price = entry_px; pos.prev_vol = if is_up{av}else{bv};
             pos.confirm_count = 0;
             pos.entry_seconds = seconds_left;  // for Senna timeout
             *sig |= if is_up{1}else{2};

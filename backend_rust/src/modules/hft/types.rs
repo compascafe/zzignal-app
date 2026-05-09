@@ -157,6 +157,7 @@ pub struct CsvRecord {
     // ─── Anti-Reversion ───────────────────────────────────────────────────
     pub mid_from_entry:         f64,    // poly_mid - entry_price (distance from entry)
     pub token_momentum:         f64,    // Δ token price from prev tick (>0 = rising, entry allowed)
+    pub entry_slippage:         f64,    // entry_price - signal_price (slippage on market buy)
 }
 
 impl Default for CsvRecord {
@@ -224,6 +225,7 @@ impl Default for CsvRecord {
             dump_score:             0,
             mid_from_entry:         0.0,
             token_momentum:         0.0,
+            entry_slippage:         0.0,
         }
     }
 }
@@ -248,7 +250,7 @@ impl CsvRecord {
         "scalper_dn,scalper_dn_entry,scalper_dn_sz,scalper_dn_pnl,scalper_dn_exit,scalper_dn_r,scalper_dn_bal,",
         "od83_event,hd65_event,scalper_event,od83_up_mode,od83_dn_mode,",
         "od83_up_at,od83_dn_at,",
-        "mid_from_entry,token_momentum",
+        "mid_from_entry,token_momentum,entry_slippage",
         )
     }    /// Returns 304 CSV fields as strings in the exact order of `csv_header()`.
     /// Used by all three CSV export paths (per-session file, live REST, DB fallback).
@@ -354,6 +356,7 @@ impl CsvRecord {
         // ── FASE 10: POSICIÓN (1) ──
         f.push(self.mid_from_entry.to_string());
         f.push(self.token_momentum.to_string());
+        f.push(self.entry_slippage.to_string());
         f
     }
 
