@@ -304,7 +304,7 @@ impl OdiseoTradingManager {
             if self.live_mode.load(Ordering::Relaxed) {
                 if let Some(ref tx) = self.cmd_tx {
                     let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
-                    let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Buy, outcome, price: px, size: pos.size });
+                    let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Buy, outcome, amount_usdc: budget });
                 }
             }
         } else if !pos.entered && def.confirm_ticks > 1 {
