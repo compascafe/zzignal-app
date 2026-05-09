@@ -314,11 +314,13 @@ impl OdiseoTradingManager {
             pos.confirm_count = 0;
             *sig |= if is_up{1}else{2};
             info!("[Odiseo] #{} {} ENTER @{:.4} sz={:.0} trail={:.2}", sid, code, px, pos.size, def.trail_distance);
-            // ── Live: place real entry order ──
+            // ── Live: place entry order ──
             if self.live_mode.load(Ordering::Relaxed) {
                 if let Some(ref tx) = self.cmd_tx {
                     let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
-                    let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Buy, outcome, amount_usdc: budget });
+                    // Limit buy at signal price + 0.02 buffer to ensure fill without huge slippage
+                    let limit_price = (px + 0.02).min(def.tp_price - 0.01);
+                    let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Buy, outcome, price: limit_price, size: pos.size });
                 }
             }
         } else if !pos.entered && def.confirm_ticks > 1 {
