@@ -110,7 +110,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
 
 fn draw_header(f: &mut Frame, area: Rect, s: &State) {
     let h = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,8); 8]).split(area);
+        .constraints([Constraint::Ratio(1,7); 7]).split(area);
 
     // BTC
     let btc_ref = if s.btc_entry > 0.0 { s.btc_entry } else { s.btc_open };
@@ -130,7 +130,7 @@ fn draw_header(f: &mut Frame, area: Rect, s: &State) {
             .block(Block::default().borders(Borders::ALL)),
         h[1]);
 
-    // MODE — fixed, no toggle
+    // MODE
     let mode_style = if s.live {
         Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)
     } else {
@@ -140,69 +140,76 @@ fn draw_header(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(if s.live {"DINERO REAL"}else{"PAPER MONEY"}).style(mode_style).block(Block::default().borders(Borders::ALL)),
         h[2]);
 
-    // HEALTH — combined WS + API latency
+    // HEALTH
     let latency_ms = s.last_api_ok.elapsed().as_millis() as u64;
-    let health_txt: String;
-    let health_c: Color;
-    if !s.connected {
-        health_txt = "NO CONEXION".into(); health_c = Color::Red;
+    let (health_txt, health_c) = if !s.connected {
+        ("NO CONEXION".into(), Color::Red)
     } else if latency_ms > 10_000 {
-        health_txt = "SIN DATOS".into(); health_c = Color::Red;
+        ("SIN DATOS".into(), Color::Red)
     } else if latency_ms > 2_000 {
-        health_txt = format!("LAG {}ms", latency_ms); health_c = Color::Yellow;
+        (format!("LAG {}ms", latency_ms), Color::Yellow)
     } else {
-        health_txt = format!("OK {}ms", latency_ms); health_c = Color::Green;
-    }
+        (format!("OK {}ms", latency_ms), Color::Green)
+    };
     f.render_widget(
         Paragraph::new(health_txt)
             .style(Style::default().fg(health_c).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL).title("HEALTH")),
         h[3]);
 
-    // Reinv
-    let rc = if s.reinvest { Color::Green } else { Color::DarkGray };
+    // Odiseo 83 status
+    let o_st = if s.odi_enabled { Color::Green } else { Color::DarkGray };
     f.render_widget(
-        Paragraph::new(if s.reinvest {"Reinv ON"}else{"Reinv OFF"})
-            .style(Style::default().fg(rc).add_modifier(Modifier::BOLD))
+        Paragraph::new(if s.odi_enabled {
+            format!("O83 ON ${:.0}", s.odi_budget)
+        } else {
+            "O83 OFF".into()
+        })
+            .style(Style::default().fg(o_st).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL)),
         h[4]);
 
-    // Odiseo status
-    let o_st = if s.odi_enabled { if s.live { Color::Red } else { Color::Green } } else { Color::DarkGray };
+    // Houdini 65 status
+    let h_st = if s.h65_enabled { Color::Green } else { Color::DarkGray };
     f.render_widget(
-        Paragraph::new(if s.odi_enabled { format!("{} ON", s.odi_label) } else { format!("{} OFF", s.odi_label) })
-            .style(Style::default().fg(o_st).add_modifier(Modifier::BOLD))
+        Paragraph::new(if s.h65_enabled {
+            format!("H65 ON ${:.0}", s.h65_budget)
+        } else {
+            "H65 OFF".into()
+        })
+            .style(Style::default().fg(h_st).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL)),
         h[5]);
 
-    // Houdini status
-    let h_st = if s.h65_enabled { if s.live { Color::Red } else { Color::Green } } else { Color::DarkGray };
+    // Orders
+    let o_c = if s.orders > 0 { Color::Yellow } else { Color::DarkGray };
     f.render_widget(
-        Paragraph::new(if s.h65_enabled {"H65 ON"}else{"H65 OFF"})
-            .style(Style::default().fg(h_st).add_modifier(Modifier::BOLD))
+        Paragraph::new(format!("Ordenes: {}", s.orders))
+            .style(Style::default().fg(o_c).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL)),
         h[6]);
-
-    // Odiseo filters
-    let f_on = s.odi_filters.count_ones();
-    let f_style = if f_on > 0 { Color::Yellow } else { Color::DarkGray };
-    f.render_widget(
-        Paragraph::new(format!("F:{}", f_on))
-            .style(Style::default().fg(f_style).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL)),
-        h[7]);
 }
 
 fn draw_banner(f: &mut Frame, area: Rect, s: &State) {
-    if s.live {
-        let b = Paragraph::new(format!(" DINERO REAL ACTIVO — {} + HOUDINI 65 EN VIVO ", s.odi_label))
-            .style(Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD));
-        f.render_widget(b, area);
+    let h65 = if s.h65_enabled {
+        format!("H65 ACTIVO ${:.0}", s.h65_budget)
     } else {
-        let b = Paragraph::new(" PAPER MONEY — GRABANDO — Sin dinero real ")
-            .style(Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD));
-        f.render_widget(b, area);
-    }
+        "H65 DESACTIVADO".into()
+    };
+    let o83 = if s.odi_enabled {
+        format!("O83 ACTIVO ${:.0}", s.odi_budget)
+    } else {
+        "O83 DESACTIVADO".into()
+    };
+    let h65_c = if s.h65_enabled { Color::Green } else { Color::Red };
+    let o83_c = if s.odi_enabled { Color::Green } else { Color::Red };
+
+    let text = format!(" {}  |  {}", h65, o83);
+    let bg = if s.live { Color::Red } else { Color::Blue };
+    f.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().fg(Color::White).bg(bg).add_modifier(Modifier::BOLD)),
+        area);
 }
 
 fn draw_odiseo_panel(f: &mut Frame, area: Rect, s: &State) {

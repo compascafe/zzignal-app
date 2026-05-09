@@ -199,13 +199,16 @@ impl OdiseoTradingManager {
         }
 
         let px = match lt { Some(p) if p>0.0 => p, _ => {
-            // Si ya hay posición abierta, mantenemos último estado (no resetear)
-            if pos.entered && !pos.settled {
+            // Fallback: use poly mid price when no trade data available
+            if ctx.mid > 0.0 {
+                ctx.mid
+            } else if pos.entered && !pos.settled {
                 let pnl = (pos.entry_price - pos.entry_price) * pos.size; // 0
                 r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
                 return;
+            } else {
+                r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
             }
-            r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
         }};
 
         if pos.entered && !pos.settled {
