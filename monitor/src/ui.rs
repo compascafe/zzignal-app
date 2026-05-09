@@ -756,66 +756,96 @@ fn draw_market_state(f: &mut Frame, area: Rect, s: &State) {
 fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
     let tab_name = TAB_NAMES[s.tab];
 
-    let h65_pos = if s.pos_h65_up {
+    // ─── Houdini 65 position ────────────────────────────────────
+    let (h65_pos, h65_style) = if s.pos_h65_up {
         let entry = s.pos_h65_entry_up;
         let current = s.hft.clob_trade_up;
-        let invested = s.h65_budget;
-        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
-        let pnl = current_val - invested;
-        format!("▲ UP  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  [{:.1}%]  CONFIRMADO",
-            invested, pnl, entry, current, if entry>0.0{(current/entry-1.0)*100.0}else{0.0})
+        let pnl = if entry > 0.0 && current > 0.0 {
+            s.h65_budget * (current / entry - 1.0)
+        } else { 0.0 };
+        let gain = pnl >= 0.0;
+        let bg = if gain { Color::Green } else { Color::Red };
+        let txt = format!(
+            "▲ H65 UP   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            s.h65_budget, current, pnl,
+            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
+        );
+        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
     } else if s.pos_h65_dn {
         let entry = s.pos_h65_entry_dn;
         let current = s.hft.clob_trade_dn;
-        let invested = s.h65_budget;
-        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
-        let pnl = current_val - invested;
-        format!("▼ DN  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  [{:.1}%]  CONFIRMADO",
-            invested, pnl, entry, current, if entry>0.0{(current/entry-1.0)*100.0}else{0.0})
+        let pnl = if entry > 0.0 && current > 0.0 {
+            s.h65_budget * (current / entry - 1.0)
+        } else { 0.0 };
+        let gain = pnl >= 0.0;
+        let bg = if gain { Color::Green } else { Color::Red };
+        let txt = format!(
+            "▼ H65 DN   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            s.h65_budget, current, pnl,
+            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
+        );
+        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
+    } else if s.h65_enabled && s.h65_budget > 0.0 {
+        (format!("◆ H65 activo   esperando entrada   ${:.0}", s.h65_budget),
+         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
     } else if s.h65_enabled {
-        format!("◆ esperando ${:.0}", s.h65_budget)
+        (format!("◆ H65 activo   esperando presupuesto"),
+         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
     } else {
-        "○ OFF".to_string()
+        (format!("○ H65 OFF   usa /h5..h100 para activar"),
+         Style::default().fg(Color::DarkGray))
     };
 
-    let h65_c = if s.pos_h65_up || s.pos_h65_dn {
-        let delta = if s.pos_h65_up { s.hft.clob_trade_up - s.pos_h65_entry_up }
-                   else { s.hft.clob_trade_dn - s.pos_h65_entry_dn };
-        if delta > 0.0 { Color::Green } else { Color::Red }
-    } else if s.h65_enabled { Color::Yellow } else { Color::DarkGray };
-
-    let odi_pos = if s.pos_odi_up {
+    // ─── Odiseo 83 position ─────────────────────────────────────
+    let (odi_pos, odi_style) = if s.pos_odi_up {
         let entry = s.pos_odi_entry_up;
         let current = s.hft.clob_trade_up;
-        let invested = s.odi_budget;
-        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
-        let pnl = current_val - invested;
-        format!("▲ UP  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  CONFIRMADO", invested, pnl, entry, current)
+        let pnl = if entry > 0.0 && current > 0.0 {
+            s.odi_budget * (current / entry - 1.0)
+        } else { 0.0 };
+        let gain = pnl >= 0.0;
+        let bg = if gain { Color::Green } else { Color::Red };
+        let txt = format!(
+            "▲ O83 UP   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            s.odi_budget, current, pnl,
+            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
+        );
+        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
     } else if s.pos_odi_dn {
         let entry = s.pos_odi_entry_dn;
         let current = s.hft.clob_trade_dn;
-        let invested = s.odi_budget;
-        let current_val = if entry > 0.0 { invested * (current / entry) } else { 0.0 };
-        let pnl = current_val - invested;
-        format!("▼ DN  inv:${:.0}  PnL:{:+.2}  @{:.4}→{:.4}  CONFIRMADO", invested, pnl, entry, current)
+        let pnl = if entry > 0.0 && current > 0.0 {
+            s.odi_budget * (current / entry - 1.0)
+        } else { 0.0 };
+        let gain = pnl >= 0.0;
+        let bg = if gain { Color::Green } else { Color::Red };
+        let txt = format!(
+            "▼ O83 DN   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            s.odi_budget, current, pnl,
+            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
+        );
+        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
+    } else if s.odi_enabled && s.odi_budget > 0.0 {
+        (format!("◆ O83 activo   esperando entrada   ${:.0}", s.odi_budget),
+         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
     } else if s.odi_enabled {
-        format!("◆ esperando ${:.0}", s.odi_budget)
+        (format!("◆ O83 activo   esperando presupuesto"),
+         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
     } else {
-        "○ OFF".to_string()
+        (format!("○ O83 OFF   usa /o5..o100 para activar"),
+         Style::default().fg(Color::DarkGray))
     };
-
-    let odi_c = if s.pos_odi_up || s.pos_odi_dn { Color::Green } else if s.odi_enabled { Color::Yellow } else { Color::DarkGray };
 
     let h = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1, 2); 2]).split(area);
 
     f.render_widget(
-        Paragraph::new(h65_pos).style(Style::default().fg(h65_c).add_modifier(Modifier::BOLD))
+        Paragraph::new(h65_pos).style(h65_style)
             .block(Block::default().borders(Borders::ALL).title(format!("Houdini 65 | {tab_name}"))),
         h[0]);
 
     f.render_widget(
-        Paragraph::new(odi_pos).style(Style::default().fg(odi_c).add_modifier(Modifier::BOLD))
+        Paragraph::new(odi_pos).style(odi_style)
             .block(Block::default().borders(Borders::ALL).title(format!("Odiseo 83 | {tab_name}"))),
         h[1]);
 }
@@ -826,7 +856,7 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
 
 fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
     let text = format!(
-        "▶ /{}_\n/h10 /o20 /p /h /o",
+        "▶ /{}_\n/h5..h100 /o5..o100 /p /h /o",
         s.input_buf
     );
     f.render_widget(
@@ -842,11 +872,11 @@ fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
-    let line1 = "[/]comandos  /h15 /o20 /p  [←→]tab  [q]salir";
+    let line1 = "[/]comandos  /h5..h100 /o5..o100 /p  [←→]tab  [q]salir";
     let line2 = if s.pos_h65_up || s.pos_h65_dn {
         "POSICION ABIERTA — /p para liquidar"
     } else {
-        "Sin posicion abierta — /h15 para activar Houdini $15"
+        "Sin posicion abierta — /h10 para activar Houdini $10"
     };
 
     f.render_widget(

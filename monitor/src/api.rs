@@ -131,10 +131,15 @@ pub async fn http_get<T: for<'de> Deserialize<'de>>(path: &str) -> Option<T> {
     reqwest::get(&url).await.ok()?.json::<T>().await.ok()
 }
 
-pub async fn http_post(path: &str, body: &str) {
-    let _ = reqwest::Client::new()
+pub async fn http_post(path: &str, body: &str) -> Result<(), String> {
+    let resp = reqwest::Client::new()
         .post(format!("{API_URL}{path}"))
         .header("Content-Type", "application/json")
         .body(body.to_string())
-        .send().await;
+        .send().await
+        .map_err(|e| format!("POST {path}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("POST {path} → HTTP {}", resp.status().as_u16()));
+    }
+    Ok(())
 }

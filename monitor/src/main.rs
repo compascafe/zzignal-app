@@ -61,6 +61,10 @@ struct State {
     prev_hd65_up: u8, prev_hd65_dn: u8,
     prev_od83_up: u8, prev_od83_dn: u8,
 
+    // ─── Command locks (prevent poll overwrite after slash command) ───
+    h65_lock: bool,
+    odi_lock: bool,
+
     // ─── Budget input mode ───
     input_mode: InputMode,
     input_buf: String,
@@ -83,17 +87,17 @@ impl State {
             btc: 0.0, btc_open: 0.0, btc_entry: 0.0, bal: 0.0,
             live: !paper_mode, reinvest: false, _paper_mode: paper_mode,
             odi_label: "Odiseo 83".into(), odi_code: String::new(),
-            odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 20.0,
+            odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 0.0,
             odi_t_up: 0, odi_t_dn: 0, odi_w_up: 0, odi_w_dn: 0,
             odi_tp_up: 0, odi_tp_dn: 0, odi_sl_up: 0, odi_sl_dn: 0,
-            odi_sessions: 0, odi_enabled: true,
+            odi_sessions: 0, odi_enabled: false,
             odi_accuracy: 0.0, odi_avg_pnl: 0.0, odi_best: 0.0, odi_worst: 0.0,
             odi_filters: 0,
             last_odi_t_up: 0, last_odi_t_dn: 0,
-            h65_pnl: 0.0, h65_bal: 0.0, h65_budget: 20.0,
+            h65_pnl: 0.0, h65_bal: 0.0, h65_budget: 0.0,
             h65_t_up: 0, h65_t_dn: 0, h65_w_up: 0, h65_w_dn: 0,
             h65_tp_up: 0, h65_tp_dn: 0, h65_sl_up: 0, h65_sl_dn: 0,
-            h65_sessions: 0, h65_enabled: true,
+            h65_sessions: 0, h65_enabled: false,
             h65_accuracy: 0.0, h65_avg_pnl: 0.0, h65_best: 0.0, h65_worst: 0.0,
             last_h65_t_up: 0, last_h65_t_dn: 0,
             sessions: Vec::new(), selected_session: 0,
@@ -105,6 +109,7 @@ impl State {
             pos_odi_entry_up: 0.0, pos_odi_entry_dn: 0.0,
             prev_hd65_up: 0, prev_hd65_dn: 0,
             prev_od83_up: 0, prev_od83_dn: 0,
+            h65_lock: false, odi_lock: false,
             input_mode: InputMode::Normal,
             input_buf: String::new(),
             orders: 0,
@@ -131,7 +136,7 @@ impl State {
     }
 }
 
-/// Slash command parser: /h10 /o20 /p
+/// Slash command parser: /h10 /o20 /p  (budgets: 5..100, multiples of 5)
 async fn exec_slash_command(cmd: &str, s: &mut State) {
     let cmd = cmd.trim();
     if cmd.is_empty() { return; }
@@ -140,46 +145,102 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
     let rest = &cmd[1..];
 
     match first {
+        // ─── PANIC: liquidate + market sell + disable ALL strategies ───
         'p' => {
-            s.add_log("PANIC — liquidando todo + market sell", Color::Red);
+            s.add_log("PANIC — liquidando todo + market sell + apagando estrategias", Color::Red);
             s.pos_h65_up = false; s.pos_h65_dn = false;
             s.pos_odi_up = false; s.pos_odi_dn = false;
-            http_post("/api/panic", "{}").await;
+            s.h65_enabled = false; s.odi_enabled = false; // local OFF
+            s.h65_lock = true; s.odi_lock = true;
+            if let Err(e) = http_post("/api/panic", "{}").await {
+                s.add_log(format!("PANIC FAIL: {}", e), Color::Red);
+                s.h65_lock = false; s.odi_lock = false;
+            }
         }
+        // ─── Houdini 65: /h = toggle, /h5..h100 = ON + budget ───
         'h' => {
             let idx = 1;
             if rest.is_empty() {
                 s.h65_enabled = !s.h65_enabled;
-                s.add_log(format!("H65: {}", if s.h65_enabled {"ON"}else{"OFF"}), if s.h65_enabled{Color::Green}else{Color::DarkGray});
-                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.h65_enabled)).await;
-            } else if let Ok(amt) = rest.parse::<f64>() {
-                let amt = amt.clamp(1.0, 200.0);
-                s.h65_budget = amt;
-                s.h65_enabled = true;
-                s.selected_variant = 1;
-                s.add_log(format!("H65 ON ${:.0}", amt), Color::Green);
-                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await;
-                http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await;
+                s.h65_lock = true;
+                if s.h65_enabled {
+                    s.selected_variant = 1;
+                    s.add_log(format!("H65 ON  ${:.0}", s.h65_budget), Color::Green);
+                } else {
+                    s.add_log("H65 OFF", Color::DarkGray);
+                }
+                if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.h65_enabled)).await {
+                    s.add_log(format!("H65 API FAIL: {}", e), Color::Red);
+                    s.h65_lock = false;
+                }
+            } else {
+                match rest.parse::<f64>() {
+                    Ok(amt) if amt >= 5.0 && amt <= 100.0 && amt.trunc() % 5.0 == 0.0 => {
+                        s.h65_budget = amt;
+                        s.h65_enabled = true;
+                        s.selected_variant = 1;
+                        s.h65_lock = true;
+                        s.add_log(format!("H65 ON ${:.0}", amt), Color::Green);
+                        let mut ok = true;
+                        if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
+                            s.add_log(format!("H65 API FAIL: {}", e), Color::Red);
+                            ok = false;
+                        }
+                        if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
+                            s.add_log(format!("H65 BUDGET API FAIL: {}", e), Color::Red);
+                            ok = false;
+                        }
+                        if !ok { s.h65_lock = false; }
+                    }
+                    _ => {
+                        s.add_log("USO: /h5..h100 (múltiplos de 5)", Color::Red);
+                    }
+                }
             }
         }
+        // ─── Odiseo 83: /o = toggle, /o5..o100 = ON + budget ───
         'o' => {
             let idx = 0;
             if rest.is_empty() {
                 s.odi_enabled = !s.odi_enabled;
-                s.add_log(format!("O83: {}", if s.odi_enabled {"ON"}else{"OFF"}), if s.odi_enabled{Color::Green}else{Color::DarkGray});
-                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.odi_enabled)).await;
-            } else if let Ok(amt) = rest.parse::<f64>() {
-                let amt = amt.clamp(1.0, 200.0);
-                s.odi_budget = amt;
-                s.odi_enabled = true;
-                s.selected_variant = 0;
-                s.add_log(format!("O83 ON ${:.0}", amt), Color::Green);
-                http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await;
-                http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await;
+                s.odi_lock = true;
+                if s.odi_enabled {
+                    s.selected_variant = 0;
+                    s.add_log(format!("O83 ON  ${:.0}", s.odi_budget), Color::Green);
+                } else {
+                    s.add_log("O83 OFF", Color::DarkGray);
+                }
+                if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.odi_enabled)).await {
+                    s.add_log(format!("O83 API FAIL: {}", e), Color::Red);
+                    s.odi_lock = false;
+                }
+            } else {
+                match rest.parse::<f64>() {
+                    Ok(amt) if amt >= 5.0 && amt <= 100.0 && amt.trunc() % 5.0 == 0.0 => {
+                        s.odi_budget = amt;
+                        s.odi_enabled = true;
+                        s.selected_variant = 0;
+                        s.odi_lock = true;
+                        s.add_log(format!("O83 ON ${:.0}", amt), Color::Green);
+                        let mut ok = true;
+                        if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
+                            s.add_log(format!("O83 API FAIL: {}", e), Color::Red);
+                            ok = false;
+                        }
+                        if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
+                            s.add_log(format!("O83 BUDGET API FAIL: {}", e), Color::Red);
+                            ok = false;
+                        }
+                        if !ok { s.odi_lock = false; }
+                    }
+                    _ => {
+                        s.add_log("USO: /o5..o100 (múltiplos de 5)", Color::Red);
+                    }
+                }
             }
         }
         _ => {
-            s.add_log(format!("?: /{}", cmd), Color::Red);
+            s.add_log(format!("?: /{}   |  /h5..h100 /o5..o100 /p", cmd), Color::Red);
         }
     }
 }
@@ -219,7 +280,12 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
             s.odi_sessions = v.sessions;
             s.odi_accuracy = v.accuracy; s.odi_avg_pnl = v.avg_pnl;
             s.odi_best = v.best; s.odi_worst = v.worst;
-            s.odi_enabled = v.enabled.unwrap_or(true);
+            // Don't overwrite enabled state if user just sent a slash command
+            if !s.odi_lock {
+                s.odi_enabled = v.enabled.unwrap_or(true);
+            } else if v.enabled.unwrap_or(true) == s.odi_enabled {
+                s.odi_lock = false; // backend confirmed our state, unlock
+            }
             let (nu, nd) = detect_trades(v, s.last_odi_t_up, s.last_odi_t_dn, s, &s.odi_label.clone());
             s.last_odi_t_up = nu; s.last_odi_t_dn = nd;
             let total_sl = v.sl_up + v.sl_dn;
@@ -242,12 +308,17 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
             s.h65_sessions = v.sessions;
             s.h65_accuracy = v.accuracy; s.h65_avg_pnl = v.avg_pnl;
             s.h65_best = v.best; s.h65_worst = v.worst;
-            s.h65_enabled = v.enabled.unwrap_or(true);
+            // Don't overwrite enabled state if user just sent a slash command
+            if !s.h65_lock {
+                s.h65_enabled = v.enabled.unwrap_or(true);
+            } else if v.enabled.unwrap_or(true) == s.h65_enabled {
+                s.h65_lock = false; // backend confirmed our state, unlock
+            }
             let (nu, nd) = detect_trades(v, s.last_h65_t_up, s.last_h65_t_dn, s, "H65");
             s.last_h65_t_up = nu; s.last_h65_t_dn = nd;
             let total_sl = v.sl_up + v.sl_dn;
             if v.trades_up + v.trades_dn > 0 && total_sl >= 3 { s.add_warning(format!("H65 ALERTA: {} SLs", total_sl)); }
-            if v.total_pnl < -v.budget * 0.1 { s.add_warning(format!("H65 PERDIDA >10%")); }
+            if v.total_pnl < -v.budget * 0.1 { s.add_warning("H65 PERDIDA >10%"); }
             if !v.enabled.unwrap_or(true) { s.add_warning("HOUDINI 65 DESACTIVADO"); }
         }
         _ => {}
@@ -302,15 +373,25 @@ async fn main() -> io::Result<()> {
 
     // Force backend live_mode to match our binary mode
     if s.live {
-        http_post("/api/odiseo/live", "{\"enable\":true}").await;
+        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
+            s.add_log(format!("API LIVE FAIL: {}", e), Color::Red);
+        }
         s.add_log("DINERO REAL — esperando comandos", Color::Red);
     } else {
-        http_post("/api/odiseo/live", "{\"enable\":false}").await;
+        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":false}").await {
+            s.add_log(format!("API LIVE FAIL: {}", e), Color::Red);
+        }
         // Paper mode: auto-enable both strategies for data collection
-        http_post("/api/odiseo/variant", "{\"index\":0,\"enable\":true}").await;
-        http_post("/api/odiseo/variant", "{\"index\":1,\"enable\":true}").await;
-        s.odi_enabled = true;
-        s.h65_enabled = true;
+        if let Err(e) = http_post("/api/odiseo/variant", "{\"index\":0,\"enable\":true}").await {
+            s.add_log(format!("API O83 FAIL: {}", e), Color::Red);
+        } else {
+            s.odi_enabled = true;
+        }
+        if let Err(e) = http_post("/api/odiseo/variant", "{\"index\":1,\"enable\":true}").await {
+            s.add_log(format!("API H65 FAIL: {}", e), Color::Red);
+        } else {
+            s.h65_enabled = true;
+        }
         s.add_log("PAPER MONEY — ambas estrategias ON", Color::Cyan);
     }
 
@@ -474,7 +555,9 @@ async fn main() -> io::Result<()> {
                     s.add_log("Starting 15-min session...", Color::Green);
                     let now = chrono::Utc::now();
                     let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
-                    http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await;
+                    if let Err(e) = http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await {
+                        s.add_log(format!("Session start FAIL: {}", e), Color::Red);
+                    }
                 }
                 KeyCode::Char('S') if s.tab == 2 => {
                     let stop_id = s.sessions.get(s.selected_session)
@@ -482,7 +565,9 @@ async fn main() -> io::Result<()> {
                         .map(|s| s.id);
                     if let Some(id) = stop_id {
                         s.add_log(format!("Stopping session #{}", id), Color::Yellow);
-                        http_post(&format!("/api/sessions/{}/stop", id), "{}").await;
+                        if let Err(e) = http_post(&format!("/api/sessions/{}/stop", id), "{}").await {
+                            s.add_log(format!("Session stop FAIL: {}", e), Color::Red);
+                        }
                     }
                 }
                 KeyCode::Char('e') if s.tab == 2 => {

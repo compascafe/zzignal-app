@@ -250,7 +250,8 @@ impl OdiseoTradingManager {
         if pos.settled {
             let bal = budget + pos.virtual_pnl;
             r.push((code.clone(),0,pos.entry_price,pos.size,pos.virtual_pnl,pos.exit_price,pos.exit_reason,bal));
-            *pos = OdiseoPosition::default(); // reset para re-entry en misma sesión
+            *pos = OdiseoPosition::default();
+            return; // PREVENT same-tick re-entry (Bug #1 fix — rapid sell/buy cycle)
         }
 
         if !pos.entered && px >= def.entry_threshold && px <= def.tp_price {
