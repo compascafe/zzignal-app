@@ -58,6 +58,11 @@ pub struct LatestHftState {
     pub od83_filters: u16,
     pub od83_event: String,
     pub hd65_event: String,
+    pub sen_up: u8,
+    pub sen_dn: u8,
+    pub sen_up_bal: f64,
+    pub sen_dn_bal: f64,
+    pub sen_event: String,
 }
 
 pub struct AppState {

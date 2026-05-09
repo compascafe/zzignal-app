@@ -898,7 +898,7 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
     };
 
     let h = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 2); 2]).split(area);
+        .constraints([Constraint::Ratio(1, 3); 3]).split(area);
 
     f.render_widget(
         Paragraph::new(h65_pos).style(h65_style)
@@ -909,6 +909,41 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(odi_pos).style(odi_style)
             .block(Block::default().borders(Borders::ALL).title(format!("Odiseo 83 | {tab_name}"))),
         h[1]);
+
+    // ─── Senna position ─────────────────────────────────────
+    let (sen_pos, sen_style) = if s.pos_sen_up {
+        let entry = s.pos_sen_entry_up;
+        let current = s.hft.clob_trade_up;
+        let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
+        let gain = pnl >= 0.0;
+        let bg = if gain { Color::Green } else { Color::Red };
+        let txt = format!("⚡ SENNA UP ${:.0}→{:.4} PnL:{:+.2} {:.1}%",
+            s.sen_budget, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
+        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
+    } else if s.pos_sen_dn {
+        let entry = s.pos_sen_entry_dn;
+        let current = s.hft.clob_trade_dn;
+        let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
+        let gain = pnl >= 0.0;
+        let bg = if gain { Color::Green } else { Color::Red };
+        let txt = format!("⚡ SENNA DN ${:.0}→{:.4} PnL:{:+.2} {:.1}%",
+            s.sen_budget, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
+        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
+    } else if s.sen_enabled && s.sen_budget > 0.0 {
+        (format!("⚡ SENNA activo   esperando momentum   ${:.0}", s.sen_budget),
+         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+    } else if s.sen_enabled {
+        (format!("⚡ SENNA activo   esperando presupuesto"),
+         Style::default().fg(Color::Cyan))
+    } else {
+        (format!("○ SENNA OFF   usa /s5..s100 para activar"),
+         Style::default().fg(Color::DarkGray))
+    };
+
+    f.render_widget(
+        Paragraph::new(sen_pos).style(sen_style)
+            .block(Block::default().borders(Borders::ALL).title(format!("Senna | {tab_name}"))),
+        h[2]);
 }
 
 // ═══════════════════════════════════════════════════════════════════

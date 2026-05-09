@@ -973,6 +973,11 @@ async fn capture_combined(
         hft.od83_filters = rec.od83_filters;
         hft.od83_event = rec.od83_event.clone();
         hft.hd65_event = rec.houdini65_event.clone();
+        hft.sen_up = rec.scalper_up_active;
+        hft.sen_dn = rec.scalper_down_active;
+        hft.sen_up_bal = rec.scalper_up_balance;
+        hft.sen_dn_bal = rec.scalper_down_balance;
+        hft.sen_event = rec.scalper_event.clone();
     }
     // ─── Broadcast HFT state in real-time via WebSocket ────────────────
     if let Ok(json) = serde_json::to_string(&*state.latest_hft.read().await) {

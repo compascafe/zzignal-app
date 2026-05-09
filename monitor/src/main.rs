@@ -407,11 +407,39 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.pos_odi_dn = false;
         s.add_log(format!("▼ O83 EXIT DN @ {:.4}", new_hft.clob_trade_dn), Color::Yellow);
     }
+    // Senna UP
+    if new_hft.sen_up == 2 && s.prev_sen_up != 2 {
+        s.pos_sen_up = true;
+        s.pos_sen_entry_up = new_hft.clob_trade_up;
+        s.add_log(format!("⚡ SENNA ENTER UP @ {:.4}", s.pos_sen_entry_up), Color::Cyan);
+    } else if new_hft.sen_up != 2 && s.prev_sen_up == 2 {
+        s.pos_sen_up = false;
+        let pnl = if s.pos_sen_entry_up > 0.0 && new_hft.clob_trade_up > 0.0 {
+            s.sen_budget * (new_hft.clob_trade_up / s.pos_sen_entry_up - 1.0)
+        } else { 0.0 };
+        s.add_log(format!("⚡ SENNA EXIT UP @ {:.4} PnL:{:+.2}", new_hft.clob_trade_up, pnl),
+            if pnl >= 0.0 { Color::Green } else { Color::Red });
+    }
+    // Senna DOWN
+    if new_hft.sen_dn == 2 && s.prev_sen_dn != 2 {
+        s.pos_sen_dn = true;
+        s.pos_sen_entry_dn = new_hft.clob_trade_dn;
+        s.add_log(format!("⚡ SENNA ENTER DN @ {:.4}", s.pos_sen_entry_dn), Color::Cyan);
+    } else if new_hft.sen_dn != 2 && s.prev_sen_dn == 2 {
+        s.pos_sen_dn = false;
+        let pnl = if s.pos_sen_entry_dn > 0.0 && new_hft.clob_trade_dn > 0.0 {
+            s.sen_budget * (new_hft.clob_trade_dn / s.pos_sen_entry_dn - 1.0)
+        } else { 0.0 };
+        s.add_log(format!("⚡ SENNA EXIT DN @ {:.4} PnL:{:+.2}", new_hft.clob_trade_dn, pnl),
+            if pnl >= 0.0 { Color::Green } else { Color::Red });
+    }
 
     s.prev_hd65_up = new_hft.hd65_up;
     s.prev_hd65_dn = new_hft.hd65_dn;
     s.prev_od83_up = new_hft.od83_up;
     s.prev_od83_dn = new_hft.od83_dn;
+    s.prev_sen_up = new_hft.sen_up;
+    s.prev_sen_dn = new_hft.sen_dn;
     s.hft = new_hft.clone();
     s.odi_filters = s.hft.od83_filters;
 }
