@@ -482,6 +482,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         }
 
         AppMsg::LastTradeUp { price, size }   => {
+            *state.raw_trade_up.write().await = *price;
             let min_vol = *state.trade_min_vol.read().await;
             if *size >= min_vol {
                 let mut window = state.trade_window_up.write().await;
@@ -491,6 +492,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             }
         }
         AppMsg::LastTradeDown { price, size } => {
+            *state.raw_trade_dn.write().await = *price;
             let min_vol = *state.trade_min_vol.read().await;
             if *size >= min_vol {
                 let mut window = state.trade_window_dn.write().await;
@@ -730,6 +732,8 @@ async fn capture_combined(
             btc_acel: rec.btc_acel,
             spread: rec.poly_spread,
             mid: rec.poly_mid,
+            best_bid: poly_bids.first().map(|l| l.price).unwrap_or(0.0),
+            best_ask: poly_asks.first().map(|l| l.price).unwrap_or(0.0),
             bid_vol: rec.poly_bid_vol_all,
             ask_vol: rec.poly_ask_vol_all,
             imbalance: rec.poly_imbalance,
@@ -739,6 +743,8 @@ async fn capture_combined(
             ask_wall: rec.ask_wall,
             trade_up: lt_up,
             trade_dn: lt_down,
+            raw_trade_up: *state.raw_trade_up.read().await,
+            raw_trade_dn: *state.raw_trade_dn.read().await,
             price_impact: rec.price_impact,
             depth_concentration: rec.depth_concentration,
         };

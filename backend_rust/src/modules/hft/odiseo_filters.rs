@@ -47,6 +47,8 @@ pub struct FilterContext {
     // ── Polymarket Order Book ──
     pub spread:            f64,  // ask - bid
     pub mid:               f64,  // (bid+ask)/2
+    pub best_bid:          f64,  // best bid price from current book
+    pub best_ask:          f64,  // best ask price from current book
     pub bid_vol:           f64,  // volumen total bid side
     pub ask_vol:           f64,  // volumen total ask side
     pub imbalance:         f64,  // bid_vol / (bid_vol + ask_vol)
@@ -62,8 +64,10 @@ pub struct FilterContext {
     pub ask_wall:          u8,   // 1 = ask_vol > 3x bid_vol
 
     // ── CLOB Last Trade ──
-    pub trade_up:          Option<f64>, // último precio trade UP
-    pub trade_dn:          Option<f64>, // último precio trade DOWN
+    pub trade_up:          Option<f64>, // last N avg trade UP (vol filtered)
+    pub trade_dn:          Option<f64>, // last N avg trade DOWN (vol filtered)
+    pub raw_trade_up:      f64,         // most recent UP trade (no filter)
+    pub raw_trade_dn:      f64,         // most recent DOWN trade (no filter)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

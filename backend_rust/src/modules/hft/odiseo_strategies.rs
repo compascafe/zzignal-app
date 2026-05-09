@@ -215,17 +215,24 @@ impl OdiseoTradingManager {
         }
 
         let px = match lt { Some(p) if p>0.0 => p, _ => {
-            // Fallback: use poly mid price only if far from default 0.50 (stale data)
-            let mid_alive = ctx.mid > 0.0 && (ctx.mid - 0.5).abs() > 0.01;
-            if mid_alive {
-                ctx.mid
-            } else if pos.entered && !pos.settled && pos.last_px > 0.0 {
-                pos.last_px
-            } else if pos.entered && !pos.settled {
-                r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
-                return;
+            // Priority: raw trade > valid mid > book best bid > last_px
+            let raw = if is_up { ctx.raw_trade_up } else { ctx.raw_trade_dn };
+            if raw > 0.0 {
+                raw
             } else {
-                r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
+                let mid_alive = ctx.mid > 0.0 && (ctx.mid - 0.5).abs() > 0.01;
+                if mid_alive {
+                    ctx.mid
+                } else if ctx.best_bid > 0.0 && ctx.best_bid < 1.0 {
+                    ctx.best_bid
+                } else if pos.entered && !pos.settled && pos.last_px > 0.0 {
+                    pos.last_px
+                } else if pos.entered && !pos.settled {
+                    r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
+                    return;
+                } else {
+                    r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
+                }
             }
         }};
         // Persist last known price (only from real data, not stale fallback)
