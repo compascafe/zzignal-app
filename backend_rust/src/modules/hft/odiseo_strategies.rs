@@ -33,7 +33,7 @@ struct OdiseoDef {
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
     OdiseoDef { name:"Odiseo 83",   code:"odiseo83",  entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false, trail_distance:0.05, confirm_ticks:2, btc_trend_filter:true },
-    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false, trail_distance:0.02, confirm_ticks:2, btc_trend_filter:true },
+    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false, trail_distance:0.015, confirm_ticks:2, btc_trend_filter:true },
 ];
 
 #[derive(Debug, Clone)]
@@ -245,9 +245,14 @@ impl OdiseoTradingManager {
                     if let Some(ref tx) = self.cmd_tx {
                         let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
                         if reason == 1 {
+                            // TP: limit sell at exact TP price
                             let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Sell, outcome, price: def.tp_price, size: pos.size });
+                        } else if reason == 5 && pos.max_price > 0.0 {
+                            // Trail: limit sell at trail_stop_price (captures better fill)
+                            let trail_price = pos.max_price - def.trail_distance;
+                            let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Sell, outcome, price: trail_price, size: pos.size });
                         } else {
-                            // CLOB V2: SELL market orders use shares (contracts), not USD
+                            // SL / flash: market sell (immediate)
                             let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Sell, outcome, amount_usdc: pos.size.max(1.0) });
                         }
                     }
