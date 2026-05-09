@@ -164,7 +164,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
             }
 
             // 3. Explicitly disable ALL variants (same as zz-emergency)
-            for idx in 0..14 {
+            for idx in 0..2 {
                 let body = format!("{{\"index\":{},\"enable\":false}}", idx);
                 if let Err(e) = http_post("/api/odiseo/variant", &body).await {
                     s.add_log(format!("VAR {} OFF FAIL: {}", idx, e), Color::Red);
@@ -205,7 +205,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                             ok = false;
                         }
                         // 2. Disable all other variants except Houdini 65
-                        for i in 0..14 {
+                        for i in 0..2 {
                             if i == idx { continue; }
                             let body = format!("{{\"index\":{},\"enable\":false}}", i);
                             let _ = http_post("/api/odiseo/variant", &body).await;
@@ -260,7 +260,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                             ok = false;
                         }
                         // 2. Disable all other variants except Odiseo 83
-                        for i in 0..14 {
+                        for i in 0..2 {
                             if i == idx { continue; }
                             let body = format!("{{\"index\":{},\"enable\":false}}", i);
                             let _ = http_post("/api/odiseo/variant", &body).await;

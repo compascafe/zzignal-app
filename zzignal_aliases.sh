@@ -25,28 +25,24 @@ alias zz-hdn65-8='curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: appl
 
 # Apagar todas las variantes menos la 0 (Odiseo 83)
 zz-odi-only83() {
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    curl -sX POST $ZZ_API/api/odiseo/variant \
+  curl -sX POST $ZZ_API/api/odiseo/variant \
       -H "Content-Type: application/json" \
-      -d "{\"index\": $i, \"enable\": false}" > /dev/null
-  done
+      -d '{"index": 1, "enable": false}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/variant \
     -H "Content-Type: application/json" \
     -d '{"index": 0, "enable": true}' > /dev/null
-  echo "✅ Solo Odiseo 83 activa (variantes 1+ apagadas)"
+  echo "✅ Solo Odiseo 83 activa"
 }
 
 # Apagar todas las variantes menos la 1 (Houdini 65)
 zz-hdn-only() {
-  for i in 0 2 3 4 5 6 7 8 9 10 11 12; do
-    curl -sX POST $ZZ_API/api/odiseo/variant \
+  curl -sX POST $ZZ_API/api/odiseo/variant \
       -H "Content-Type: application/json" \
-      -d "{\"index\": $i, \"enable\": false}" > /dev/null
-  done
+      -d '{"index": 0, "enable": false}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/variant \
     -H "Content-Type: application/json" \
     -d '{"index": 1, "enable": true}' > /dev/null
-  echo "✅ Solo Houdini 65 activa (variante 0 + 2+ apagadas)"
+  echo "✅ Solo Houdini 65 activa"
 }
 
 # Reinvertir ON/OFF
@@ -62,12 +58,12 @@ zz-emergency() {
   echo "🚨 EMERGENCIA TOTAL"
   curl -sX POST $ZZ_API/api/panic -H "Content-Type: application/json" -d "{}" > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": false}' > /dev/null
-  for i in 0 1 2 3 4 5 6 7 8 9 10 11 12; do
+  for i in 0 1; do
     curl -sX POST $ZZ_API/api/odiseo/variant \
       -H "Content-Type: application/json" \
       -d "{\"index\": $i, \"enable\": false}" > /dev/null
   done
-  echo "✅ TODO APAGADO. Balance: $(curl -s $ZZ_API/api/balance | python3 -c 'import sys,json;print(json.load(sys.stdin)["balance"])')"
+  echo "✅ TODO APAGADO."
 }
 
 # ── Monitoreo ──────────────────────────────────
@@ -112,9 +108,7 @@ zz-go-o() {
   local amt=${1:-20}
   echo "⚡ Activando Odiseo 83 LIVE con \$${amt}..."
   curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d "{\"index\": $i, \"enable\": false}" > /dev/null
-  done
+  curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 1, "enable": false}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 0, "enable": true}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: application/json" -d "{\"index\": 0, \"amount\": $amt}" > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/reinvest -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null
@@ -127,9 +121,7 @@ zz-go-h() {
   local amt=${1:-20}
   echo "⚡ Activando Houdini 65 LIVE con \$${amt}..."
   curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null
-  for i in 0 2 3 4 5 6 7 8 9 10 11 12; do
-    curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d "{\"index\": $i, \"enable\": false}" > /dev/null
-  done
+  curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 0, "enable": false}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 1, "enable": true}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: application/json" -d "{\"index\": 1, \"amount\": $amt}" > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/reinvest -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null
@@ -141,9 +133,7 @@ zz-go-h() {
 zz-go-o-paper() {
   echo "📝 Activando Odiseo 83 PAPER \$20..."
   curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": false}' > /dev/null
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d "{\"index\": $i, \"enable\": false}" > /dev/null
-  done
+  curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 1, "enable": false}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 0, "enable": true}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: application/json" -d '{"index": 0, "amount": 20}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/reinvest -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null
@@ -154,9 +144,7 @@ zz-go-o-paper() {
 zz-go-h-paper() {
   echo "📝 Activando Houdini 65 PAPER \$20..."
   curl -sX POST $ZZ_API/api/odiseo/live -H "Content-Type: application/json" -d '{"enable": false}' > /dev/null
-  for i in 0 2 3 4 5 6 7 8 9 10 11 12; do
-    curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d "{\"index\": $i, \"enable\": false}" > /dev/null
-  done
+  curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 0, "enable": false}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/variant -H "Content-Type: application/json" -d '{"index": 1, "enable": true}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/budget -H "Content-Type: application/json" -d '{"index": 1, "amount": 20}' > /dev/null
   curl -sX POST $ZZ_API/api/odiseo/reinvest -H "Content-Type: application/json" -d '{"enable": true}' > /dev/null

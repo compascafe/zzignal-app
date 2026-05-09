@@ -1,20 +1,14 @@
-//! Odiseo Strategies v6 — 13 variants, TP=0.97, session boundary protection
+//! Odiseo Strategies v7 — 2 variants: Odiseo 83 + Houdini 65
 //!
-//! Variants:
 //!   83: entry>=0.83 tp=0.97 sl=0.81 (PRINCIPAL, full 15min)
-//!   65: entry>=0.65 tp=0.95 sl=0.63 (Wide 65 reversals, full 15min)
-//!   86-93: entry>=0.86-0.93 tp=0.97 (full 15min)
-//!   94:  entry>=0.94 tp=0.97 sl=0.92 (only last 10min)
-//!   95:  entry>=0.95 tp=0.97 sl=0.93 (full 15min)
-//!   96:  entry>=0.96 tp=0.985 sl=0.95 (only last 10min)
+//!   65: entry>=0.65 tp=0.75 sl=0.60 (Houdini reversals, full 15min)
 //!
 //! Anti-whale: entry only if price between entry_threshold and tp_price.
-//! 3-layer SL. $20 per variant per direction. Cumulative + per-session reset.
+//! 3-layer SL. Per-session reset. Cumulative PnL tracking.
 //!
 //! Session boundary protection (v6):
 //!   - First 20s (seconds_left > 880): NO entries, liquidate open positions.
 //!   - Last 20s  (seconds_left <= 20): NO entries, liquidate open positions.
-//!     (45s necesario: en sesion #895 el mercado murio a 59:28, 0 ticks 59:40-59:50).
 //!   - Flash-protection exit = exit_reason 6 (market sell, NOT counted as SL).
 
 use std::collections::HashMap;
@@ -39,20 +33,8 @@ struct OdiseoDef {
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
-    OdiseoDef { name:"Odiseo 83", code:"odiseo83", entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
+    OdiseoDef { name:"Odiseo 83",   code:"odiseo83",  entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
     OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false },
-    OdiseoDef { name:"Wide 65", code:"odiseo65", entry_threshold:0.65, tp_price:0.95, sl_hard:0.63, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 86", code:"odiseo86", entry_threshold:0.86, tp_price:0.97, sl_hard:0.84, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 87", code:"odiseo87", entry_threshold:0.87, tp_price:0.97, sl_hard:0.85, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 88", code:"odiseo88", entry_threshold:0.88, tp_price:0.97, sl_hard:0.86, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 89", code:"odiseo89", entry_threshold:0.89, tp_price:0.97, sl_hard:0.87, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 90", code:"odiseo90", entry_threshold:0.90, tp_price:0.97, sl_hard:0.88, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 91", code:"odiseo91", entry_threshold:0.91, tp_price:0.97, sl_hard:0.89, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 92", code:"odiseo92", entry_threshold:0.92, tp_price:0.97, sl_hard:0.90, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 93", code:"odiseo93", entry_threshold:0.93, tp_price:0.97, sl_hard:0.91, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 94", code:"odiseo94", entry_threshold:0.94, tp_price:0.97, sl_hard:0.92, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 95", code:"odiseo95", entry_threshold:0.95, tp_price:0.97, sl_hard:0.93, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false },
-    OdiseoDef { name:"Odiseo 96", code:"odiseo96", entry_threshold:0.96, tp_price:0.985, sl_hard:0.95, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:true },
 ];
 
 #[derive(Debug, Clone, Default)]
