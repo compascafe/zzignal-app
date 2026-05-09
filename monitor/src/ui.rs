@@ -16,6 +16,7 @@ pub fn draw(f: &mut Frame, s: &State) {
     let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
 
     let mut constraints = vec![
+        Constraint::Length(1),     // commit bar
         Constraint::Length(1),     // tab bar
         Constraint::Length(pos_h), // position bar
         Constraint::Min(1),        // main content
@@ -25,6 +26,15 @@ pub fn draw(f: &mut Frame, s: &State) {
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut ci = 0;
+
+    // ─── COMMIT BAR ────────────────────────────────────────────────────
+    let commit = option_env!("GIT_HASH").unwrap_or("dev");
+    f.render_widget(
+        Paragraph::new(format!("COMMIT: {commit}"))
+            .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        chunks[ci],
+    );
+    ci += 1;
 
     // ─── TAB BAR ──────────────────────────────────────────────────────
     let tab_titles: Vec<Line> = TAB_NAMES.iter().enumerate().map(|(i, name)| {
@@ -905,22 +915,10 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     } else {
         "Sin posicion abierta — /h10 para activar Houdini $10"
     };
-    let commit = option_env!("GIT_HASH").unwrap_or("dev");
-
-    let chunks = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(14)])
-        .split(area);
 
     f.render_widget(
         Paragraph::new(format!("{}\n{}", line1, line2))
             .style(Style::default().fg(Color::DarkGray)),
-        chunks[0],
-    );
-
-    f.render_widget(
-        Paragraph::new(format!("\n {} ", commit))
-            .style(Style::default().fg(Color::White).bg(Color::Black).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::White))),
-        chunks[1],
+        area,
     );
 }
