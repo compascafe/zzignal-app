@@ -908,7 +908,7 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     let commit = option_env!("GIT_HASH").unwrap_or("dev");
 
     let chunks = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(10)])
+        .constraints([Constraint::Min(1), Constraint::Length(14)])
         .split(area);
 
     f.render_widget(
@@ -918,9 +918,9 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     );
 
     f.render_widget(
-        Paragraph::new(format!(" {} ", commit))
-            .style(Style::default().fg(Color::Yellow).bg(Color::Black).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow))),
+        Paragraph::new(format!("\n {} ", commit))
+            .style(Style::default().fg(Color::White).bg(Color::Black).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::White))),
         chunks[1],
     );
 }
