@@ -43,12 +43,18 @@ struct State {
     h65_accuracy: f64, h65_avg_pnl: f64, h65_best: f64, h65_worst: f64,
     last_h65_t_up: i64, last_h65_t_dn: i64,
 
+    // Senna (Scalper Momentum)
+    sen_pnl: f64, sen_bal: f64, sen_budget: f64,
+    sen_t_up: i64, sen_t_dn: i64, sen_w_up: i64, sen_w_dn: i64,
+    sen_sessions: i64, sen_enabled: bool,
+    last_sen_t_up: i64, last_sen_t_dn: i64,
+
     // Sessions
     sessions: Vec<SessionInfo>,
     selected_session: usize,
 
     // Trading UI
-    selected_variant: usize, // 0=Odiseo, 1=Houdini
+    selected_variant: usize, // 0=Odiseo, 1=Houdini, 2=Senna
 
     // HFT live data
     hft: HftState,
@@ -60,10 +66,14 @@ struct State {
     pos_odi_entry_up: f64, pos_odi_entry_dn: f64,
     prev_hd65_up: u8, prev_hd65_dn: u8,
     prev_od83_up: u8, prev_od83_dn: u8,
+    pos_sen_up: bool, pos_sen_dn: bool,
+    pos_sen_entry_up: f64, pos_sen_entry_dn: f64,
+    prev_sen_up: u8, prev_sen_dn: u8,
 
     // ─── Command locks (prevent poll overwrite after slash command) ───
     h65_lock: bool,
     odi_lock: bool,
+    sen_lock: bool,
 
     // ─── Budget input mode ───
     input_mode: InputMode,
@@ -102,6 +112,10 @@ impl State {
             h65_sessions: 0, h65_enabled: false,
             h65_accuracy: 0.0, h65_avg_pnl: 0.0, h65_best: 0.0, h65_worst: 0.0,
             last_h65_t_up: 0, last_h65_t_dn: 0,
+            sen_pnl: 0.0, sen_bal: 0.0, sen_budget: 0.0,
+            sen_t_up: 0, sen_t_dn: 0, sen_w_up: 0, sen_w_dn: 0,
+            sen_sessions: 0, sen_enabled: false,
+            last_sen_t_up: 0, last_sen_t_dn: 0,
             sessions: Vec::new(), selected_session: 0,
             selected_variant: 0,
             hft: HftState::default(),
@@ -111,7 +125,10 @@ impl State {
             pos_odi_entry_up: 0.0, pos_odi_entry_dn: 0.0,
             prev_hd65_up: 0, prev_hd65_dn: 0,
             prev_od83_up: 0, prev_od83_dn: 0,
-            h65_lock: false, odi_lock: false,
+            pos_sen_up: false, pos_sen_dn: false,
+            pos_sen_entry_up: 0.0, pos_sen_entry_dn: 0.0,
+            prev_sen_up: 0, prev_sen_dn: 0,
+            h65_lock: false, odi_lock: false, sen_lock: false,
             input_mode: InputMode::Normal,
             input_buf: String::new(),
             orders: 0,
@@ -168,7 +185,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
             }
 
             // 3. Explicitly disable ALL variants (same as zz-emergency)
-            for idx in 0..2 {
+            for idx in 0..3 {
                 let body = format!("{{\"index\":{},\"enable\":false}}", idx);
                 if let Err(e) = http_post("/api/odiseo/variant", &body).await {
                     s.add_log(format!("VAR {} OFF FAIL: {}", idx, e), Color::Red);
@@ -209,7 +226,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                             ok = false;
                         }
                         // 2. Disable all other variants except Houdini 65
-                        for i in 0..2 {
+                        for i in 0..3 {
                             if i == idx { continue; }
                             let body = format!("{{\"index\":{},\"enable\":false}}", i);
                             let _ = http_post("/api/odiseo/variant", &body).await;
@@ -264,7 +281,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                             ok = false;
                         }
                         // 2. Disable all other variants except Odiseo 83
-                        for i in 0..2 {
+                        for i in 0..3 {
                             if i == idx { continue; }
                             let body = format!("{{\"index\":{},\"enable\":false}}", i);
                             let _ = http_post("/api/odiseo/variant", &body).await;
@@ -287,8 +304,53 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                 }
             }
         }
+        // ─── Senna (Scalper Momentum): /s = toggle, /s5..s100 = ON + budget ───
+        's' => {
+            let idx = 2;
+            if rest.is_empty() {
+                s.sen_enabled = !s.sen_enabled;
+                s.sen_lock = true;
+                if s.sen_enabled {
+                    s.selected_variant = 2;
+                    s.add_log(format!("SENNA ON ${:.0}", s.sen_budget), Color::Green);
+                    let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
+                } else {
+                    s.add_log("SENNA OFF", Color::DarkGray);
+                }
+                if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.sen_enabled)).await {
+                    s.add_log(format!("SENNA API FAIL: {}", e), Color::Red);
+                    s.sen_lock = false;
+                }
+            } else {
+                match rest.parse::<f64>() {
+                    Ok(amt) if amt >= 5.0 && amt <= 100.0 && amt.trunc() % 5.0 == 0.0 => {
+                        s.sen_budget = amt;
+                        s.sen_enabled = true;
+                        s.selected_variant = 2;
+                        s.sen_lock = true;
+                        s.add_log(format!("SENNA LIVE ${:.0}", amt), Color::Green);
+                        let mut ok = true;
+                        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
+                            s.add_log(format!("LIVE ON FAIL: {}", e), Color::Red);
+                            ok = false;
+                        }
+                        for i in 0..3 { if i == idx { continue; }
+                            let _ = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":false}}", i)).await;
+                        }
+                        if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
+                            s.add_log(format!("SENNA API FAIL: {}", e), Color::Red); ok = false;
+                        }
+                        if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
+                            s.add_log(format!("SENNA BUDGET FAIL: {}", e), Color::Red); ok = false;
+                        }
+                        if !ok { s.sen_lock = false; }
+                    }
+                    _ => { s.add_log("USO: /s5..s100 (múltiplos de 5)", Color::Red); }
+                }
+            }
+        }
         _ => {
-            s.add_log(format!("?: /{}   |  /h5..h100 /o5..o100 /p", cmd), Color::Red);
+            s.add_log(format!("?: /{}   |  /h5..h100 /o5..o100 /s5..s100 /p", cmd), Color::Red);
         }
     }
 }

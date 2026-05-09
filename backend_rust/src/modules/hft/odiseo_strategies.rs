@@ -1,12 +1,12 @@
-//! Odiseo Strategies v10 — Momentum entry + wide trail + blind exit
+//! Odiseo Strategies v11 — Scalper Momentum (variante 2)
 //!
-//!   O83: entry>=0.83 tp=0.97 sl=0.81 trail=0.05 confirm=2
-//!   H65: entry>=0.65 tp=0.75 sl=0.60 trail=0.04 confirm=2
+//!   O83: entry>=0.83 tp=0.97 sl=0.81 trail=0.05
+//!   H65: entry>=0.65 tp=0.75 sl=0.60 trail=0.04
+//!   SCM: momentum_delta>=0.015 (2-tick) tp=+0.03 sl=-0.02 trail=0.01
 //!
-//! Momentum filter: price must be RISING (px > last_px) to enter
 //! Exit reasons: 1=TP 2=SL_micro 3=SL_trend 4=SL_hard 5=trail 6=flash
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use serde::Serialize;
@@ -25,14 +25,16 @@ struct OdiseoDef {
     sl_trend_delta:   f64,
     sl_micro_drop:    f64,
     only_last_10min:  bool,
-    trail_distance:   f64,   // trailing stop offset from best price
-    confirm_ticks:    u32,   // consecutive ticks above threshold to confirm entry
-    btc_trend_filter: bool,  // check BTC velocity direction before entry
+    trail_distance:   f64,
+    confirm_ticks:    u32,
+    btc_trend_filter: bool,
+    momentum_delta:   f64,   // 0=threshold entry, >0=scalp: min Δ in 2 ticks
 }
 
 static ODISEO_DEFS: &[OdiseoDef] = &[
-    OdiseoDef { name:"Odiseo 83",   code:"odiseo83",  entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false, trail_distance:0.05, confirm_ticks:1, btc_trend_filter:true },
-    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false, trail_distance:0.04, confirm_ticks:1, btc_trend_filter:true },
+    OdiseoDef { name:"Odiseo 83",   code:"odiseo83",  entry_threshold:0.83, tp_price:0.97, sl_hard:0.81, sl_trend_delta:0.03, sl_micro_drop:0.30, only_last_10min:false, trail_distance:0.05, confirm_ticks:1, btc_trend_filter:true, momentum_delta:0.0 },
+    OdiseoDef { name:"Houdini 65", code:"houdini65", entry_threshold:0.65, tp_price:0.75, sl_hard:0.60, sl_trend_delta:0.02, sl_micro_drop:0.20, only_last_10min:false, trail_distance:0.04, confirm_ticks:1, btc_trend_filter:true, momentum_delta:0.0 },
+    OdiseoDef { name:"Scalper M",  code:"scalper",   entry_threshold:0.30, tp_price:0.99, sl_hard:0.20, sl_trend_delta:0.02, sl_micro_drop:0.30, only_last_10min:false, trail_distance:0.01, confirm_ticks:1, btc_trend_filter:true, momentum_delta:0.015 },
 ];
 
 #[derive(Debug, Clone)]
@@ -42,6 +44,7 @@ pub struct OdiseoPosition {
     pub max_price: f64, pub min_price: f64, pub prev_vol: f64,
     pub confirm_count: u32,
     pub last_px: f64,
+    pub prices: VecDeque<f64>,  // last 4 prices for momentum calc
 }
 impl Default for OdiseoPosition {
     fn default() -> Self {
@@ -51,6 +54,7 @@ impl Default for OdiseoPosition {
             max_price: 0.0, min_price: 1.0, prev_vol: 0.0,
             confirm_count: 0,
             last_px: 0.0,
+            prices: VecDeque::with_capacity(4),
         }
     }
 }
@@ -268,8 +272,25 @@ impl OdiseoTradingManager {
         }
 
         if !pos.entered && px >= def.entry_threshold && px <= def.tp_price {
-            // ── MOMENTUM FILTER: only on fresh price (skip stale fallback) ──
-            if px_fresh && pos.last_px > 0.0 && px <= pos.last_px {
+            // ── SCALP MODE: momentum entry (def.momentum_delta > 0) ──
+            let scalp_trigger = if def.momentum_delta > 0.0 {
+                pos.prices.push_back(px);
+                if pos.prices.len() > 4 { pos.prices.pop_front(); }
+                let gap = if pos.prices.len() >= 2 {
+                    px - pos.prices[0]
+                } else { 0.0 };
+                if gap < def.momentum_delta {
+                    // Not enough momentum yet — keep watching
+                    r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
+                    return;
+                }
+                true
+            } else { false };
+            // Clean up price window for non-scalp variants
+            if !scalp_trigger { pos.prices.clear(); }
+
+            // ── MOMENTUM FILTER: only on fresh price (skip stale, skip scalp) ──
+            if !scalp_trigger && px_fresh && pos.last_px > 0.0 && px <= pos.last_px {
                 pos.confirm_count = 0;
                 r.push((code, 1u8, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
                 return;
@@ -283,7 +304,7 @@ impl OdiseoTradingManager {
                     return;
                 }
             }
-            // ── ENTRY CONFIRMATION ──────────────────────────────────
+            // ── ENTRY CONFIRMATION (skip for scalp with 1 tick) ──
             if def.confirm_ticks > 1 {
                 pos.confirm_count = pos.confirm_count.saturating_add(1);
                 if pos.confirm_count < def.confirm_ticks {
@@ -338,18 +359,22 @@ impl OdiseoTradingManager {
     }
 
     fn check_exit(&self, pos:&OdiseoPosition, def:&OdiseoDef, px:f64, vol:f64, imb:f64, vel:f64) -> u8 {
-        // 1: TP hit
-        if px >= def.tp_price { return 1; }
-        // 5: Trailing stop — price fell below trail from max (captura ganancias)
-        if pos.max_price > 0.0 && def.trail_distance > 0.0 && px <= pos.max_price - def.trail_distance {
+        let is_scalp = def.momentum_delta > 0.0;
+        // ── TP ──
+        let tp = if is_scalp { pos.entry_price + 0.03 } else { def.tp_price };
+        if px >= tp { return 1; }
+        // ── SL hard ──
+        let sl = if is_scalp { pos.entry_price - 0.02 } else { def.sl_hard };
+        if px <= sl { return 4; }
+        // ── Trailing stop ──
+        let trail = if is_scalp { 0.01 } else { def.trail_distance };
+        if pos.max_price > 0.0 && trail > 0.0 && px <= pos.max_price - trail {
             return 5;
         }
-        // 2: SL micro (volume collapse + negative imbalance)
-        if pos.prev_vol>0.0 && (pos.prev_vol-vol)/pos.prev_vol > def.sl_micro_drop && imb < -0.5 { return 2; }
-        // 3: SL trend (price dropped from max + bearish velocity)
+        // ── SL micro (skip for scalp — too sensitive) ──
+        if !is_scalp && pos.prev_vol>0.0 && (pos.prev_vol-vol)/pos.prev_vol > def.sl_micro_drop && imb < -0.5 { return 2; }
+        // ── SL trend ──
         if pos.max_price - px > def.sl_trend_delta && vel < 0.0 { return 3; }
-        // 4: SL hard
-        if px <= def.sl_hard { return 4; }
         0
     }
 
