@@ -181,7 +181,7 @@ impl AppState {
             btc_open:          RwLock::new(None),
             trade_window_up:   RwLock::new(VecDeque::with_capacity(10)),
             trade_window_dn:   RwLock::new(VecDeque::with_capacity(10)),
-            trade_min_vol:     RwLock::new(0.0),
+            trade_min_vol:     RwLock::new(10.0),
             trade_window_n:    RwLock::new(10),
             open_orders:       RwLock::new(vec![]),
             recent_fills:      RwLock::new(vec![]),
