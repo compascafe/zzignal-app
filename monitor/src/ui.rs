@@ -905,10 +905,22 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     } else {
         "Sin posicion abierta — /h10 para activar Houdini $10"
     };
+    let commit = option_env!("GIT_HASH").unwrap_or("dev");
+
+    let chunks = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(10)])
+        .split(area);
 
     f.render_widget(
         Paragraph::new(format!("{}\n{}", line1, line2))
             .style(Style::default().fg(Color::DarkGray)),
-        area,
+        chunks[0],
+    );
+
+    f.render_widget(
+        Paragraph::new(commit)
+            .style(Style::default().fg(Color::Red).bg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .block(Block::default().borders(Borders::ALL)),
+        chunks[1],
     );
 }

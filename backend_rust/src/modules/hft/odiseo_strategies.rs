@@ -37,12 +37,12 @@ static ODISEO_DEFS: &[OdiseoDef] = &[
 ];
 
 #[derive(Debug, Clone)]
-struct OdiseoPosition {
-    entered: bool, entry_price: f64, size: f64, settled: bool,
-    exit_price: f64, exit_reason: u8, virtual_pnl: f64,
-    max_price: f64, min_price: f64, prev_vol: f64,
-    confirm_count: u32,
-    last_px: f64,           // last known price — blind exit fallback
+pub struct OdiseoPosition {
+    pub entered: bool, pub entry_price: f64, pub size: f64, pub settled: bool,
+    pub exit_price: f64, pub exit_reason: u8, pub virtual_pnl: f64,
+    pub max_price: f64, pub min_price: f64, pub prev_vol: f64,
+    pub confirm_count: u32,
+    pub last_px: f64,
 }
 impl Default for OdiseoPosition {
     fn default() -> Self {
@@ -56,8 +56,8 @@ impl Default for OdiseoPosition {
     }
 }
 #[derive(Debug, Clone, Default)]
-struct OdiseoSessionTrade { up:OdiseoPosition, down:OdiseoPosition, sl_count:u32, session_profit:f64 }
-struct OdiseoSessionState { trades:Vec<OdiseoSessionTrade> }
+pub struct OdiseoSessionTrade { pub up:OdiseoPosition, pub down:OdiseoPosition, pub sl_count:u32, pub session_profit:f64 }
+pub struct OdiseoSessionState { pub trades:Vec<OdiseoSessionTrade> }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OdiseoStats {
@@ -89,7 +89,7 @@ pub struct OdiseoSessionSummary {
 }
 
 pub struct OdiseoTradingManager {
-    sessions:   Mutex<HashMap<i32, OdiseoSessionState>>,
+    pub sessions:   Mutex<HashMap<i32, OdiseoSessionState>>,
     stats:      Mutex<Vec<OdiseoStats>>,
     pub live_mode: AtomicBool,
     pub enabled: Vec<AtomicBool>,

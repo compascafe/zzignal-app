@@ -888,24 +888,32 @@ struct PanicBody {
 async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>) -> Json<Value> {
     info!("🚨 PANIC — cancel all + market sell + disable all strategies");
 
-    // 0. Apagar TODAS las estrategias automáticas (Odiseo LIVE + variantes)
-    s.odiseo_trading.disable_all();
-
-    // 1. Cancelar todas las órdenes
+    // 1. Primero cancelar todas las órdenes abiertas
     let _ = s.cmd_tx.send(CmdMsg::CancelMarket);
 
-    // 2. Market sell para el outcome especificado (o ambos)
+    // 2. Leer posiciones ANTES de limpiar sesiones
+    let odi_positions = {
+        let sessions = s.odiseo_trading.sessions.lock().unwrap();
+        sessions.iter().flat_map(|(_, state)| {
+            state.trades.iter().enumerate().flat_map(|(i, t)| {
+                let mut result = Vec::new();
+                if t.up.entered && !t.up.settled {
+                    result.push((true, t.up.size));
+                }
+                if t.down.entered && !t.down.settled {
+                    result.push((false, t.down.size));
+                }
+                result
+            }).collect::<Vec<_>>()
+        }).collect::<Vec<_>>()
+    };
+
+    // 3. Market sell para posiciones reales (o ambos outcomes si no hay track)
     let outcomes: Vec<&str> = match body.outcome.as_deref() {
         Some("up")   => vec!["up"],
         Some("down") => vec!["down"],
         _            => vec!["up", "down"],
     };
-
-    let bal = s.balance.read().await;
-    let usdc = bal.unwrap_or(0.0);
-    // For SELL: amount = number of shares/contracts (not USDC).
-    // Estimate: assume average entry ~0.50, so contracts = USDC / 0.5, with buffer.
-    let shares = if usdc > 0.0 { (usdc * 2.5).max(10.0) } else { 10.0 };
 
     for outcome in &outcomes {
         let outcome_enum = match *outcome {
@@ -913,13 +921,24 @@ async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>)
             "down" => Outcome::Down,
             _      => continue,
         };
-        info!("  Market SELL {outcome} × {shares:.0} shares");
+        let is_up = *outcome == "up";
+        // Sumar tamaños de posiciones abiertas para este outcome
+        let pos_shares: f64 = odi_positions.iter()
+            .filter(|(up, _)| *up == is_up)
+            .map(|(_, sz)| sz)
+            .sum();
+        // Si hay posiciones trackeadas, vender ese tamaño exacto. Si no, vender 50 shares (buffer seguro)
+        let shares = if pos_shares > 0.0 { pos_shares.max(10.0).ceil() } else { 50.0 };
+        info!("  Market SELL {outcome} × {shares:.0} shares (tracked={pos_shares:.1})");
         let _ = s.cmd_tx.send(CmdMsg::PlaceMarketOrder {
             side: OrderSide::Sell,
             outcome: outcome_enum,
             amount_usdc: shares,
         });
     }
+
+    // 4. Apagar todo AL FINAL (despues de leer posiciones y enviar ordenes)
+    s.odiseo_trading.disable_all();
 
     Json(json!({"ok": true, "message": format!("PANIC executed: cancelled all + market sell {:?} + all strategies disabled", outcomes)}))
 }
