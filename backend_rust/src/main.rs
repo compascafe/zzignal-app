@@ -453,6 +453,10 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
 
         AppMsg::BookUp(b) => {
             *state.book_up.write().await = Some(b.clone());
+            // Store best bid UP for exit price tracking
+            if let Some(bid) = b.bids.first() {
+                *state.best_bid_up.write().await = bid.price;
+            }
             // ─── Capturar snapshot completo del orderbook en memoria ─────
             push_depth_frame(state, 0, &b.bids, &b.asks).await;
             capture_combined(state, "up", &b.bids, &b.asks, EventType::BookUpdate, "", 0.0, 0.0).await;
@@ -475,6 +479,10 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         }
         AppMsg::BookDown(b) => {
             *state.book_down.write().await = Some(b.clone());
+            // Store best bid DOWN for exit price tracking
+            if let Some(bid) = b.bids.first() {
+                *state.best_bid_dn.write().await = bid.price;
+            }
             // ─── Capturar snapshot completo del orderbook en memoria ─────
             push_depth_frame(state, 1, &b.bids, &b.asks).await;
             capture_combined(state, "down", &b.bids, &b.asks, EventType::BookUpdate, "", 0.0, 0.0).await;
@@ -752,6 +760,8 @@ async fn capture_combined(
             trade_dn: lt_down,
             raw_trade_up: *state.raw_trade_up.read().await,
             raw_trade_dn: *state.raw_trade_dn.read().await,
+            best_bid_up: *state.best_bid_up.read().await,
+            best_bid_dn: *state.best_bid_dn.read().await,
             price_impact: rec.price_impact,
             depth_concentration: rec.depth_concentration,
         };

@@ -79,6 +79,8 @@ pub struct AppState {
     pub trade_window_dn:   RwLock<VecDeque<(f64,f64)>>, // last N DOWN trades
     pub raw_trade_up:      RwLock<f64>,   // most recent UP trade price (no vol filter)
     pub raw_trade_dn:      RwLock<f64>,   // most recent DOWN trade price (no vol filter)
+    pub best_bid_up:       RwLock<f64>,   // best bid UP from orderbook (always fresh)
+    pub best_bid_dn:       RwLock<f64>,   // best bid DOWN from orderbook (always fresh)
     pub prev_raw_up:       RwLock<f64>,   // previous raw UP trade for momentum calc
     pub prev_raw_dn:       RwLock<f64>,   // previous raw DOWN trade for momentum calc
     pub trade_min_vol:   RwLock<f64>,   // minimum trade size to qualify (default 50)
@@ -192,6 +194,8 @@ impl AppState {
             trade_window_dn:   RwLock::new(VecDeque::with_capacity(10)),
             raw_trade_up:      RwLock::new(0.0),
             raw_trade_dn:      RwLock::new(0.0),
+            best_bid_up:       RwLock::new(0.0),
+            best_bid_dn:       RwLock::new(0.0),
             prev_raw_up:       RwLock::new(0.0),
             prev_raw_dn:       RwLock::new(0.0),
             trade_min_vol:     RwLock::new(5.0),

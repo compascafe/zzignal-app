@@ -68,6 +68,8 @@ pub struct FilterContext {
     pub trade_dn:          Option<f64>, // last N avg trade DOWN (vol filtered)
     pub raw_trade_up:      f64,         // most recent UP trade (no filter)
     pub raw_trade_dn:      f64,         // most recent DOWN trade (no filter)
+    pub best_bid_up:       f64,         // best bid UP from orderbook (always fresh)
+    pub best_bid_dn:       f64,         // best bid DOWN from orderbook (always fresh)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

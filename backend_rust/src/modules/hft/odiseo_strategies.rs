@@ -45,7 +45,7 @@ pub struct OdiseoPosition {
     pub confirm_count: u32,
     pub last_px: f64,
     pub prices: VecDeque<f64>,
-    pub entry_seconds: i32,  // for Senna timeout (seconds_left at entry)
+    pub entry_seconds: i32,  // for Senna timeout
 }
 impl Default for OdiseoPosition {
     fn default() -> Self {
@@ -229,13 +229,19 @@ impl OdiseoTradingManager {
                     (ctx.mid, true)
                 } else if ctx.best_bid > 0.0 && ctx.best_bid < 1.0 {
                     (ctx.best_bid, true)
-                } else if pos.entered && !pos.settled && pos.last_px > 0.0 {
-                    (pos.last_px, false) // stale fallback — skip momentum check
-                } else if pos.entered && !pos.settled {
-                    r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
-                    return;
                 } else {
-                    r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
+                    // Per-side stored best bid (always fresh from AppState)
+                    let side_bid = if is_up { ctx.best_bid_up } else { ctx.best_bid_dn };
+                    if side_bid > 0.0 && side_bid < 1.0 {
+                        (side_bid, true)
+                    } else if pos.entered && !pos.settled && pos.last_px > 0.0 {
+                        (pos.last_px, false)
+                    } else if pos.entered && !pos.settled {
+                        r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
+                        return;
+                    } else {
+                        r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
+                    }
                 }
             }
         }};
