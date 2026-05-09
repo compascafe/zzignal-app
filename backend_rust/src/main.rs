@@ -482,7 +482,10 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         }
 
         AppMsg::LastTradeUp { price, size }   => {
-            *state.raw_trade_up.write().await = *price;
+            let mut prev = state.prev_raw_up.write().await;
+            let current = *price;
+            *state.raw_trade_up.write().await = current;
+            // Update prev for next tick's momentum (done below after window update)
             let min_vol = *state.trade_min_vol.read().await;
             if *size >= min_vol {
                 let mut window = state.trade_window_up.write().await;
@@ -490,9 +493,12 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                 let max_n = *state.trade_window_n.read().await;
                 while window.len() > max_n { window.pop_front(); }
             }
+            *prev = current;
         }
         AppMsg::LastTradeDown { price, size } => {
-            *state.raw_trade_dn.write().await = *price;
+            let mut prev = state.prev_raw_dn.write().await;
+            let current = *price;
+            *state.raw_trade_dn.write().await = current;
             let min_vol = *state.trade_min_vol.read().await;
             if *size >= min_vol {
                 let mut window = state.trade_window_dn.write().await;
@@ -500,6 +506,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                 let max_n = *state.trade_window_n.read().await;
                 while window.len() > max_n { window.pop_front(); }
             }
+            *prev = current;
         }
         AppMsg::Balance(b)       => { *state.balance.write().await          = Some(*b); }
         AppMsg::BtcOpen(p)       => { *state.btc_open.write().await         = Some(*p); }
@@ -910,8 +917,17 @@ async fn capture_combined(
         rec.btc_vol = *state.btc_volume.read().await;
     }
 
-    // ─── Perf: processing time (micros) ──────────────────────────────────
-    let _proc_us = t_start.elapsed().as_micros() as u64;
+    // ─── Token momentum (Δ price from prev tick for entry filter analysis) ──
+    {
+        let raw_up = *state.raw_trade_up.read().await;
+        let raw_dn = *state.raw_trade_dn.read().await;
+        let prev_up = *state.prev_raw_up.read().await;
+        let prev_dn = *state.prev_raw_dn.read().await;
+        // Use the side that had a trade (whichever moved)
+        rec.token_momentum = if raw_up > 0.0 && prev_up > 0.0 { raw_up - prev_up }
+                        else if raw_dn > 0.0 && prev_dn > 0.0 { raw_dn - prev_dn }
+                        else { 0.0 };
+    }
 
     // ─── Update latest HFT state for TUI real-time signal view ───────────
     {
