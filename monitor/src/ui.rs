@@ -79,10 +79,11 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let warn_h = if s.warnings.is_empty() { 0 } else { s.warnings.len().min(3) as u16 };
     let mut constraints = vec![
         Constraint::Length(3),     // header
+        Constraint::Length(1),     // ping bar
         Constraint::Length(1),     // banner
         Constraint::Length(7),     // Odiseo
         Constraint::Length(7),     // Houdini
-        Constraint::Length(3 + warn_h), // Alertas (status lines + warnings)
+        Constraint::Length(3 + warn_h), // Alertas
     ];
     constraints.push(Constraint::Min(2)); // log
 
@@ -91,6 +92,9 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
 
     // Header
     draw_header(f, m[idx], s); idx += 1;
+
+    // Ping bar
+    draw_ping_bar(f, m[idx], s); idx += 1;
 
     // Banner
     draw_banner(f, m[idx], s); idx += 1;
@@ -240,6 +244,36 @@ fn draw_banner(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(text)
             .style(Style::default().fg(Color::White).bg(bg).add_modifier(Modifier::BOLD)),
         area);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PING BAR — real-time latency display
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_ping_bar(f: &mut Frame, area: Rect, s: &State) {
+    let ws_ms = s.last_ws.elapsed().as_millis() as u64;
+    let api_ms = s.last_api_ok.elapsed().as_millis() as u64;
+
+    // Mini sparkline from last 10 pings (WS)
+    let spark: String = s.ws_pings.iter().take(10).rev().map(|&p| {
+        if p < 200 { '▁' } else if p < 500 { '▂' } else if p < 1000 { '▄' } else if p < 2000 { '▆' } else { '█' }
+    }).collect();
+
+    let ws_c = if ws_ms < 300 { Color::Green } else if ws_ms < 1000 { Color::Yellow } else { Color::Red };
+    let api_c = if api_ms < 500 { Color::Green } else if api_ms < 2000 { Color::Yellow } else { Color::Red };
+
+    let text = vec![
+        Span::styled("WS:", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{}ms ", ws_ms), Style::default().fg(ws_c).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{} ", spark), Style::default().fg(Color::Cyan)),
+        Span::styled("API:", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{}ms", api_ms), Style::default().fg(api_c).add_modifier(Modifier::BOLD)),
+    ];
+
+    f.render_widget(
+        Paragraph::new(Line::from(text)),
+        area,
+    );
 }
 
 fn draw_odiseo_panel(f: &mut Frame, area: Rect, s: &State) {

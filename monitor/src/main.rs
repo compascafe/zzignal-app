@@ -78,6 +78,8 @@ struct State {
     last_poll_sessions: Instant,
     last_ws: Instant,
     last_api_ok: Instant,
+    ws_pings: VecDeque<u64>,   // last 20 WS latencies (ms)
+    api_pings: VecDeque<u64>,  // last 20 API latencies (ms)
 }
 
 impl State {
@@ -121,6 +123,8 @@ impl State {
             last_poll_sessions: Instant::now(),
             last_ws: Instant::now(),
             last_api_ok: Instant::now(),
+            ws_pings: VecDeque::with_capacity(20),
+            api_pings: VecDeque::with_capacity(20),
         }
     }
 
@@ -497,6 +501,9 @@ async fn main() -> io::Result<()> {
     loop {
         // ─── Drain WS ─────────────────────────────────────────────────
         while let Ok(msg) = rx.try_recv() {
+            let ws_lat = s.last_ws.elapsed().as_millis() as u64;
+            s.ws_pings.push_front(ws_lat);
+            if s.ws_pings.len() > 20 { s.ws_pings.pop_back(); }
             s.last_ws = Instant::now();
             match msg.msg_type.as_deref() {
                 Some("connected") => { s.connected = true; s.add_log("WS OK", Color::Green); }
@@ -524,6 +531,9 @@ async fn main() -> io::Result<()> {
         if s.last_poll_odiseo.elapsed() > Duration::from_secs(2) {
             s.last_poll_odiseo = Instant::now();
             if let Some(data) = http_get::<OdiseoStatus>("/api/odiseo/status").await {
+                let api_lat = s.last_api_ok.elapsed().as_millis() as u64;
+                s.api_pings.push_front(api_lat);
+                if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
                 s.last_api_ok = Instant::now();
                 // Don't overwrite live from API — mode is fixed per binary
                 s.reinvest = data.reinvest.unwrap_or(false);
@@ -559,6 +569,9 @@ async fn main() -> io::Result<()> {
         if s.last_poll_hft.elapsed() > Duration::from_millis(500) {
             s.last_poll_hft = Instant::now();
             if let Some(data) = http_get::<HftState>("/api/hft/latest").await {
+                let api_lat = s.last_api_ok.elapsed().as_millis() as u64;
+                s.api_pings.push_front(api_lat);
+                if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
                 s.last_api_ok = Instant::now();
                 apply_hft_state(&data, &mut s);
             }
