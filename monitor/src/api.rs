@@ -17,6 +17,9 @@ pub struct WsMsg {
     pub price: Option<f64>,
     pub success: Option<bool>,
     pub message: Option<String>,
+    /// Real-time HFT state (broadcast in-band, ~every tick)
+    #[serde(default)]
+    pub data: Option<HftState>,
 }
 
 // ─── REST Response Types ────────────────────────────────────────────

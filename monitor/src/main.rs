@@ -147,15 +147,30 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
     match first {
         // ─── PANIC: liquidate + market sell + disable ALL strategies ───
         'p' => {
-            s.add_log("PANIC — liquidando todo + market sell + apagando estrategias", Color::Red);
+            s.add_log("PANIC — liquidando + apagando TODO", Color::Red);
             s.pos_h65_up = false; s.pos_h65_dn = false;
             s.pos_odi_up = false; s.pos_odi_dn = false;
-            s.h65_enabled = false; s.odi_enabled = false; // local OFF
-            s.h65_lock = true; s.odi_lock = true;
+            s.h65_enabled = false; s.odi_enabled = false;
+            // NO lock — let poll confirm backend state
+
+            // 1. PANIC endpoint (cancel + market sell + internal disable_all)
             if let Err(e) = http_post("/api/panic", "{}").await {
                 s.add_log(format!("PANIC FAIL: {}", e), Color::Red);
-                s.h65_lock = false; s.odi_lock = false;
             }
+
+            // 2. Explicitly disable LIVE mode
+            if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":false}").await {
+                s.add_log(format!("LIVE OFF FAIL: {}", e), Color::Red);
+            }
+
+            // 3. Explicitly disable ALL variants (same as zz-emergency)
+            for idx in 0..14 {
+                let body = format!("{{\"index\":{},\"enable\":false}}", idx);
+                if let Err(e) = http_post("/api/odiseo/variant", &body).await {
+                    s.add_log(format!("VAR {} OFF FAIL: {}", idx, e), Color::Red);
+                }
+            }
+            s.add_log("TODAS LAS ESTRATEGIAS APAGADAS", Color::Green);
         }
         // ─── Houdini 65: /h = toggle, /h5..h100 = ON + budget ───
         'h' => {
@@ -249,6 +264,61 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
 
 fn find_variant<'a>(variants: &'a [OdiseoVariant], code: &str) -> Option<&'a OdiseoVariant> {
     variants.iter().find(|v| v.code.as_deref() == Some(code))
+}
+
+fn apply_hft_state(new_hft: &HftState, s: &mut State) {
+    // ─── Position detection: track entry/exit from HFT state ───
+    // Houdini 65 UP
+    if new_hft.hd65_up == 2 && s.prev_hd65_up != 2 {
+        s.pos_h65_up = true;
+        s.pos_h65_entry_up = new_hft.clob_trade_up;
+        s.add_log(format!("▲ H65 ENTER UP @ {:.4}", s.pos_h65_entry_up), Color::Green);
+    } else if new_hft.hd65_up != 2 && s.prev_hd65_up == 2 {
+        s.pos_h65_up = false;
+        let pnl = if s.pos_h65_entry_up > 0.0 && new_hft.clob_trade_up > 0.0 {
+            s.h65_budget * (new_hft.clob_trade_up / s.pos_h65_entry_up - 1.0)
+        } else { 0.0 };
+        s.add_log(format!("▲ H65 EXIT UP @ {:.4} PnL:{:+.2}", new_hft.clob_trade_up, pnl),
+            if pnl >= 0.0 { Color::Green } else { Color::Red });
+    }
+    // Houdini 65 DOWN
+    if new_hft.hd65_dn == 2 && s.prev_hd65_dn != 2 {
+        s.pos_h65_dn = true;
+        s.pos_h65_entry_dn = new_hft.clob_trade_dn;
+        s.add_log(format!("▼ H65 ENTER DN @ {:.4}", s.pos_h65_entry_dn), Color::Red);
+    } else if new_hft.hd65_dn != 2 && s.prev_hd65_dn == 2 {
+        s.pos_h65_dn = false;
+        let pnl = if s.pos_h65_entry_dn > 0.0 && new_hft.clob_trade_dn > 0.0 {
+            s.h65_budget * (new_hft.clob_trade_dn / s.pos_h65_entry_dn - 1.0)
+        } else { 0.0 };
+        s.add_log(format!("▼ H65 EXIT DN @ {:.4} PnL:{:+.2}", new_hft.clob_trade_dn, pnl),
+            if pnl >= 0.0 { Color::Green } else { Color::Red });
+    }
+    // Odiseo 83 UP
+    if new_hft.od83_up == 2 && s.prev_od83_up != 2 {
+        s.pos_odi_up = true;
+        s.pos_odi_entry_up = new_hft.clob_trade_up;
+        s.add_log(format!("▲ O83 ENTER UP @ {:.4}", s.pos_odi_entry_up), Color::Green);
+    } else if new_hft.od83_up != 2 && s.prev_od83_up == 2 {
+        s.pos_odi_up = false;
+        s.add_log(format!("▲ O83 EXIT UP @ {:.4}", new_hft.clob_trade_up), Color::Yellow);
+    }
+    // Odiseo 83 DOWN
+    if new_hft.od83_dn == 2 && s.prev_od83_dn != 2 {
+        s.pos_odi_dn = true;
+        s.pos_odi_entry_dn = new_hft.clob_trade_dn;
+        s.add_log(format!("▼ O83 ENTER DN @ {:.4}", s.pos_odi_entry_dn), Color::Red);
+    } else if new_hft.od83_dn != 2 && s.prev_od83_dn == 2 {
+        s.pos_odi_dn = false;
+        s.add_log(format!("▼ O83 EXIT DN @ {:.4}", new_hft.clob_trade_dn), Color::Yellow);
+    }
+
+    s.prev_hd65_up = new_hft.hd65_up;
+    s.prev_hd65_dn = new_hft.hd65_dn;
+    s.prev_od83_up = new_hft.od83_up;
+    s.prev_od83_dn = new_hft.od83_dn;
+    s.hft = new_hft.clone();
+    s.odi_filters = s.hft.od83_filters;
 }
 
 fn detect_trades(v: &OdiseoVariant, last_t_up: i64, last_t_dn: i64,
@@ -412,6 +482,11 @@ async fn main() -> io::Result<()> {
                     let txt = msg.message.unwrap_or_default();
                     s.add_log(format!("{} {}", if ok {"OK"}else{"FAIL"}, txt), if ok{Color::Green}else{Color::Red});
                 }
+                Some("hft_state") => {
+                    if let Some(ref hft) = msg.data {
+                        apply_hft_state(hft, &mut s);
+                    }
+                }
                 _ => {}
             }
         }
@@ -451,58 +526,12 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // ─── Poll HFT (500ms) ────────────────────────────────────────
+        // ─── Poll HFT (500ms, fallback si WS hft_state no llega) ─────
         if s.last_poll_hft.elapsed() > Duration::from_millis(500) {
             s.last_poll_hft = Instant::now();
             if let Some(data) = http_get::<HftState>("/api/hft/latest").await {
                 s.last_api_ok = Instant::now();
-
-                // ─── Position detection: track entry/exit from HFT state ───
-                let new_hft = &data;
-
-                // Houdini 65 UP
-                if new_hft.hd65_up == 2 && s.prev_hd65_up != 2 {
-                    s.pos_h65_up = true;
-                    s.pos_h65_entry_up = new_hft.clob_trade_up;
-                    s.add_log(format!("▲ H65 ENTER UP @ {:.4}", s.pos_h65_entry_up), Color::Green);
-                } else if new_hft.hd65_up != 2 && s.prev_hd65_up == 2 {
-                    s.pos_h65_up = false;
-                    s.add_log(format!("▲ H65 EXIT UP @ {:.4}", new_hft.clob_trade_up), Color::Yellow);
-                }
-                // Houdini 65 DOWN
-                if new_hft.hd65_dn == 2 && s.prev_hd65_dn != 2 {
-                    s.pos_h65_dn = true;
-                    s.pos_h65_entry_dn = new_hft.clob_trade_dn;
-                    s.add_log(format!("▼ H65 ENTER DN @ {:.4}", s.pos_h65_entry_dn), Color::Red);
-                } else if new_hft.hd65_dn != 2 && s.prev_hd65_dn == 2 {
-                    s.pos_h65_dn = false;
-                    s.add_log(format!("▼ H65 EXIT DN @ {:.4}", new_hft.clob_trade_dn), Color::Yellow);
-                }
-                // Odiseo 83 UP
-                if new_hft.od83_up == 2 && s.prev_od83_up != 2 {
-                    s.pos_odi_up = true;
-                    s.pos_odi_entry_up = new_hft.clob_trade_up;
-                    s.add_log(format!("▲ O83 ENTER UP @ {:.4}", s.pos_odi_entry_up), Color::Green);
-                } else if new_hft.od83_up != 2 && s.prev_od83_up == 2 {
-                    s.pos_odi_up = false;
-                    s.add_log(format!("▲ O83 EXIT UP @ {:.4}", new_hft.clob_trade_up), Color::Yellow);
-                }
-                // Odiseo 83 DOWN
-                if new_hft.od83_dn == 2 && s.prev_od83_dn != 2 {
-                    s.pos_odi_dn = true;
-                    s.pos_odi_entry_dn = new_hft.clob_trade_dn;
-                    s.add_log(format!("▼ O83 ENTER DN @ {:.4}", s.pos_odi_entry_dn), Color::Red);
-                } else if new_hft.od83_dn != 2 && s.prev_od83_dn == 2 {
-                    s.pos_odi_dn = false;
-                    s.add_log(format!("▼ O83 EXIT DN @ {:.4}", new_hft.clob_trade_dn), Color::Yellow);
-                }
-
-                s.prev_hd65_up = new_hft.hd65_up;
-                s.prev_hd65_dn = new_hft.hd65_dn;
-                s.prev_od83_up = new_hft.od83_up;
-                s.prev_od83_dn = new_hft.od83_dn;
-                s.hft = data;
-                s.odi_filters = s.hft.od83_filters;
+                apply_hft_state(&data, &mut s);
             }
         }
 

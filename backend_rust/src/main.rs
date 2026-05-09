@@ -942,6 +942,10 @@ async fn capture_combined(
         hft.od83_event = rec.od83_event.clone();
         hft.hd65_event = rec.houdini65_event.clone();
     }
+    // ─── Broadcast HFT state in real-time via WebSocket ────────────────
+    if let Ok(json) = serde_json::to_string(&*state.latest_hft.read().await) {
+        let _ = state.broadcast_tx.send(format!("{{\"type\":\"hft_state\",\"data\":{json}}}"));
+    }
 
     // Per-session CSV file (multi-writer: each session gets its own file)
     state.session_manager.push(&rec);
