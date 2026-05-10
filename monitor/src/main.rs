@@ -157,16 +157,14 @@ impl State {
     }
 }
 
-/// Slash command parser: /b /s /l /p — manual trading
+/// Slash command parser: /10up65 /15d40e35 /p — manual trading
 async fn exec_slash_command(cmd: &str, s: &mut State) {
     let cmd = cmd.trim();
     if cmd.is_empty() { return; }
 
     let first = cmd.chars().next().unwrap();
-    let rest = &cmd[1..];
 
     match first {
-        // ─── PANIC ───
         'p' => {
             s.add_log("PANIC — liquidando TODO", Color::Red);
             if let Err(e) = http_post("/api/panic", "{}").await {
@@ -175,54 +173,69 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                 s.add_log("TODO LIQUIDADO", Color::Green);
             }
         }
-        // ─── BUY UP market (/b10 = $10) ───
-        'b' => {
-            let amt: f64 = rest.parse().unwrap_or(10.0);
-            let amt = if amt < 1.0 { 1.0 } else if amt > 200.0 { 200.0 } else { amt };
-            s.add_log(format!("▶ BUY UP market ${:.0}", amt), Color::Green);
-            if let Err(e) = http_post("/api/orders/market", &format!(r#"{{"side":"buy","outcome":"up","amount_usdc":{}}}"#, amt)).await {
-                s.add_log(format!("BUY FAIL: {}", e), Color::Red);
-            }
-        }
-        // ─── BUY DOWN market (/B15 = $15) ───
-        'B' => {
-            let amt: f64 = rest.parse().unwrap_or(10.0);
-            let amt = if amt < 1.0 { 1.0 } else if amt > 200.0 { 200.0 } else { amt };
-            s.add_log(format!("▶ BUY DN market ${:.0}", amt), Color::Red);
-            if let Err(e) = http_post("/api/orders/market", &format!(r#"{{"side":"buy","outcome":"down","amount_usdc":{}}}"#, amt)).await {
-                s.add_log(format!("BUY FAIL: {}", e), Color::Red);
-            }
-        }
-        // ─── SELL UP market (/s) ───
-        's' => {
-            s.add_log("▶ SELL UP market", Color::Yellow);
-            if let Err(e) = http_post("/api/panic", r#"{"outcome":"up"}"#).await {
-                s.add_log(format!("SELL FAIL: {}", e), Color::Red);
-            }
-        }
-        // ─── SELL DOWN market (/S) ───
-        'S' => {
-            s.add_log("▶ SELL DN market", Color::Yellow);
-            if let Err(e) = http_post("/api/panic", r#"{"outcome":"down"}"#).await {
-                s.add_log(format!("SELL FAIL: {}", e), Color::Red);
-            }
-        }
-        // ─── LIMIT BUY UP (/l65 = limit buy at 0.65 with $10) ───
-        'l' => {
-            if let Ok(price) = rest.parse::<f64>() {
-                let p = if price < 0.01 { 0.01 } else if price > 0.99 { 0.99 } else { price };
-                s.add_log(format!("▶ LIMIT BUY UP @{:.2} $10", p), Color::Cyan);
-                if let Err(e) = http_post("/api/orders/limit", &format!(r#"{{"side":"buy","outcome":"up","price":{},"size":10}}"#, p)).await {
-                    s.add_log(format!("LIMIT FAIL: {}", e), Color::Red);
-                }
-            } else {
-                s.add_log("USO: /l65 (price in cents)", Color::Red);
-            }
-        }
         _ => {
-            s.add_log(format!("?: /{}   |  /b /B /s /S /l /p", cmd), Color::Red);
+            // Parse compact command: /10up65 or /15d40e35
+            let rest = cmd;
+            let (amount, remaining) = match parse_amount(rest) {
+                Some(v) => v,
+                None => { s.add_log(format!("?: /{}   formato: /10up65 /15d40e35 /p", rest), Color::Red); return; }
+            };
+            let (side, remaining) = match parse_side_name(remaining) {
+                Some(v) => v,
+                None => { s.add_log(format!("?: /{} — usa 'up' o 'd'", rest), Color::Red); return; }
+            };
+            let (price, remaining) = match parse_cents(remaining) {
+                Some(v) => v,
+                None => { s.add_log(format!("?: /{} — falta precio", rest), Color::Red); return; }
+            };
+            let exit_price = if remaining.starts_with('e') {
+                parse_cents(&remaining[1..]).map(|(p, _)| p)
+            } else { None };
+
+            let outcome = if side == "up" { "up" } else { "down" };
+            let size = (amount / price).floor().max(1.0);
+
+            // Place limit BUY
+            s.add_log(format!("▶ LIMIT BUY {} ${:.0} @{:.2} sz={:.0}", outcome.to_uppercase(), amount, price, size),
+                if side == "up" { Color::Green } else { Color::Red });
+            if let Err(e) = http_post("/api/orders/limit",
+                &format!(r#"{{"side":"buy","outcome":"{}","price":{},"size":{}}}"#, outcome, price, size)).await {
+                s.add_log(format!("BUY FAIL: {}", e), Color::Red);
+            }
+
+            // Place exit limit SELL if specified
+            if let Some(exit) = exit_price {
+                s.add_log(format!("▶ LIMIT SELL {} @{:.2} (exit)", outcome.to_uppercase(), exit), Color::Yellow);
+                if let Err(e) = http_post("/api/orders/limit",
+                    &format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, exit, size)).await {
+                    s.add_log(format!("EXIT FAIL: {}", e), Color::Red);
+                }
+            }
         }
     }
+}
+
+fn parse_amount(s: &str) -> Option<(f64, &str)> {
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    if end == 0 { return None; }
+    let n: f64 = s[..end].parse().ok()?;
+    if n < 1.0 || n > 200.0 { return None; }
+    Some((n, &s[end..]))
+}
+
+fn parse_side_name(s: &str) -> Option<(&str, &str)> {
+    if s.starts_with("up") { Some(("up", &s[2..])) }
+    else if s.starts_with('d') { Some(("down", &s[1..])) }
+    else { None }
+}
+
+fn parse_cents(s: &str) -> Option<(f64, &str)> {
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    if end == 0 { return None; }
+    let n: f64 = s[..end].parse().ok()?;
+    let price = n / 100.0;
+    if price <= 0.0 || price >= 1.0 { return None; }
+    Some((price, &s[end..]))
 }
 
 // ─── Variant detection ──────────────────────────────────────────────
