@@ -108,7 +108,9 @@ pub struct OdiseoTradingManager {
     pub filter_chain: FilterChain,     // pre-entry filter layer
     session_history: Mutex<Vec<OdiseoSessionSummary>>, // per-session snapshots
     prev_snapshot: Mutex<HashMap<String, OdiseoStats>>,
-    pub last_trigger: Mutex<u8>,  // 0=none, 1=CLOB momentum, 2=BTC big move // previous stats for delta calc
+    pub last_trigger: Mutex<u8>,  // 0=none, 1=CLOB momentum, 2=BTC big move
+    pub last_clob_delta: Mutex<f64>,  // last computed CLOB price delta
+    pub last_btc_vel: Mutex<f64>,     // BTC velocity at last momentum eval // previous stats for delta calc
 }
 
 impl OdiseoTradingManager {
@@ -117,7 +119,7 @@ impl OdiseoTradingManager {
         let mut enabled = Vec::with_capacity(n);
         for _ in 0..n { enabled.push(AtomicBool::new(false)); }
         let budgets = vec![20.0; n];
-        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain(), session_history: Mutex::new(Vec::new()), prev_snapshot: Mutex::new(HashMap::new()), last_trigger: Mutex::new(0) }
+        Self { sessions: Mutex::new(HashMap::new()), stats: Mutex::new(ODISEO_DEFS.iter().map(OdiseoStats::new).collect()), live_mode: AtomicBool::new(false), enabled, budgets: Mutex::new(budgets), reinvest: AtomicBool::new(true), max_sessions: Mutex::new(vec![0u32; n]), sessions_done: Mutex::new(vec![0u32; n]), cmd_tx, filter_chain: FilterChain::default_chain(), session_history: Mutex::new(Vec::new()), prev_snapshot: Mutex::new(HashMap::new()), last_trigger: Mutex::new(0), last_clob_delta: Mutex::new(0.0), last_btc_vel: Mutex::new(0.0) }
     }
     pub fn set_live_mode(&self, on:bool) { self.live_mode.store(on, Ordering::Relaxed); }
     pub fn set_variant(&self, idx:usize, on:bool) { if idx < self.enabled.len() { self.enabled[idx].store(on, Ordering::Relaxed); } }
@@ -312,6 +314,8 @@ impl OdiseoTradingManager {
                 let clob_ok = gap >= def.momentum_delta;
                 let btc_ok = if is_up { vel > 10.0 } else { vel < -10.0 };
                 // Enter on CLOB momentum OR BTC big move + CLOB confirming
+                *self.last_clob_delta.lock().unwrap() = gap;
+                *self.last_btc_vel.lock().unwrap() = vel;
                 if clob_ok || (btc_ok && px > pos.prices.get(0).copied().unwrap_or(0.0)) {
                     // Track which trigger fired
                     *self.last_trigger.lock().unwrap() = if clob_ok { 1 } else { 2 };

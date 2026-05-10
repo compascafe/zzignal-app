@@ -282,6 +282,18 @@ fn draw_senna_panel(f: &mut Frame, area: Rect, s: &State) {
             status_line.push(Span::styled("ACTIVO", Style::default().fg(Color::Green).add_modifier(b)));
             status_line.push(Span::styled(format!("  ${:.0}", s.sen_budget), Style::default().fg(Color::White)));
             lines.push(Line::from(status_line));
+            // Momentum indicators
+            let clob_ok = s.hft.sen_clob_delta >= 0.015;
+            let btc_ok = (s.hft.sen_btc_vel > 10.0) || (s.hft.sen_btc_vel < -10.0);
+            let clob_c = if clob_ok { Color::Green } else { Color::DarkGray };
+            let btc_c = if btc_ok { Color::Green } else { Color::DarkGray };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  CLOB Δ:{:+.4}", s.hft.sen_clob_delta), Style::default().fg(clob_c).add_modifier(b)),
+                Span::styled(if clob_ok {" ✓"}else{""}, Style::default().fg(Color::Green)),
+                Span::styled(format!("  BTC vel:{:.4}", s.hft.sen_btc_vel), Style::default().fg(btc_c).add_modifier(b)),
+                Span::styled(if btc_ok {" ✓"}else{""}, Style::default().fg(Color::Green)),
+                Span::styled("  >0.015/>10", Style::default().fg(Color::DarkGray)),
+            ]));
             lines.push(Line::from(Span::styled(
                 "  Esperando señal de momentum...",
                 Style::default().fg(Color::DarkGray))));

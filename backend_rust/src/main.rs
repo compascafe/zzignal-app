@@ -998,6 +998,8 @@ async fn capture_combined(
         hft.sen_up_bal = rec.scalper_up_balance;
         hft.sen_dn_bal = rec.scalper_down_balance;
         hft.sen_event = rec.scalper_event.clone();
+        hft.sen_clob_delta = *state.odiseo_trading.last_clob_delta.lock().unwrap();
+        hft.sen_btc_vel = *state.odiseo_trading.last_btc_vel.lock().unwrap();
     }
     // ─── Broadcast HFT state in real-time via WebSocket ────────────────
     if let Ok(json) = serde_json::to_string(&*state.latest_hft.read().await) {
