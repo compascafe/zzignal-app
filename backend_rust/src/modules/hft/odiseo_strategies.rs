@@ -376,8 +376,9 @@ impl OdiseoTradingManager {
                 if let Some(ref tx) = self.cmd_tx {
                     let outcome = if is_up { WorkerOutcome::Up } else { WorkerOutcome::Down };
                     if def.momentum_delta > 0.0 {
-                        // Scalp mode: market buy (instant fill, Dublin 155ms latency)
-                        let _ = tx.send(CmdMsg::PlaceMarketOrder { side: OrderSide::Buy, outcome, amount_usdc: budget });
+                        // Scalp: limit buy at signal+0.02 (buys at right price, not worst ask)
+                        let limit_price = (px + 0.02).min(0.99);
+                        let _ = tx.send(CmdMsg::PlaceLimitOrder { side: OrderSide::Buy, outcome, price: limit_price, size: pos.size });
                     } else {
                         // Threshold mode: limit buy at signal+0.02 to prevent slippage
                         let limit_price = (px + 0.02).min(def.tp_price - 0.01);
