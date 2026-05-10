@@ -714,41 +714,17 @@ async fn main() -> io::Result<()> {
                     terminal.show_cursor()?;
                     return Ok(());
                 }
-                KeyCode::Right | KeyCode::Tab => { s.tab = (s.tab + 1) % 4; }
-                KeyCode::Left => { s.tab = if s.tab == 0 { 3 } else { s.tab - 1 }; }
-                KeyCode::Down | KeyCode::Char('j') if s.tab == 2 => {
-                    if s.selected_session + 1 < s.sessions.len() { s.selected_session += 1; }
-                }
-                KeyCode::Up | KeyCode::Char('k') if s.tab == 2 => {
-                    if s.selected_session > 0 { s.selected_session -= 1; }
-                }
+                KeyCode::Tab => { s.tab = if s.tab == 0 { 1 } else { 0 }; }
                 KeyCode::Char('/') => {
                     s.input_mode = InputMode::Command; s.input_buf.clear();
                 }
-                // ── Sessions tab ──
-                KeyCode::Char('s') if s.tab == 2 => {
+                // ── Sessions ──
+                KeyCode::Char('s') => {
                     s.add_log("Starting 15-min session...", Color::Green);
                     let now = chrono::Utc::now();
                     let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
                     if let Err(e) = http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await {
                         s.add_log(format!("Session start FAIL: {}", e), Color::Red);
-                    }
-                }
-                KeyCode::Char('S') if s.tab == 2 => {
-                    let stop_id = s.sessions.get(s.selected_session)
-                        .filter(|s| s.status == "recording")
-                        .map(|s| s.id);
-                    if let Some(id) = stop_id {
-                        s.add_log(format!("Stopping session #{}", id), Color::Yellow);
-                        if let Err(e) = http_post(&format!("/api/sessions/{}/stop", id), "{}").await {
-                            s.add_log(format!("Session stop FAIL: {}", e), Color::Red);
-                        }
-                    }
-                }
-                KeyCode::Char('e') if s.tab == 2 => {
-                    let export_id = s.sessions.get(s.selected_session).map(|s| s.id);
-                    if let Some(id) = export_id {
-                        s.add_log(format!("Export: {}/api/sessions/{}/export", API_URL, id), Color::Cyan);
                     }
                 }
                 _ => {}

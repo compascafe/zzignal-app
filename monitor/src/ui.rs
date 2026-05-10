@@ -7,7 +7,7 @@ use ratatui::Frame;
 use crate::InputMode;
 use crate::State;
 
-const TAB_NAMES: &[&str] = &["Dashboard", "Trading", "Sessions", "Signals"];
+const TAB_NAMES: &[&str] = &["LIVE", "PAPER"];
 
 pub fn draw(f: &mut Frame, s: &State) {
     let area = f.area();
@@ -19,10 +19,10 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Length(1),     // commit bar
         Constraint::Length(1),     // tab bar
         Constraint::Length(pos_h), // position bar
-        Constraint::Min(1),        // main content
+        Constraint::Min(1),        // main content (dashboard)
     ];
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
-    constraints.push(Constraint::Length(2)); // footer
+    constraints.push(Constraint::Length(3)); // footer
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut ci = 0;
@@ -39,7 +39,8 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── TAB BAR ──────────────────────────────────────────────────────
     let tab_titles: Vec<Line> = TAB_NAMES.iter().enumerate().map(|(i, name)| {
         let style = if i == s.tab {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            if i == 0 { Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD) }
+            else { Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD) }
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -48,17 +49,11 @@ pub fn draw(f: &mut Frame, s: &State) {
     f.render_widget(Tabs::new(tab_titles).block(Block::default().borders(Borders::BOTTOM)), chunks[ci]);
     ci += 1;
 
-    // ─── POSITION BAR (always visible) ─────────────────────────────────
+    // ─── POSITION BAR ─────────────────────────────────────────────────
     draw_position_bar(f, chunks[ci], s); ci += 1;
 
-    // ─── MAIN CONTENT ─────────────────────────────────────────────────
-    match s.tab {
-        0 => draw_dashboard(f, chunks[ci], s),
-        1 => draw_trading(f, chunks[ci], s),
-        2 => draw_sessions(f, chunks[ci], s),
-        3 => draw_signals(f, chunks[ci], s),
-        _ => {}
-    }
+    // ─── DASHBOARD ────────────────────────────────────────────────────
+    draw_dashboard(f, chunks[ci], s);
     ci += 1;
 
     // ─── COMMAND BAR (modal) ────────────────────────────────────
@@ -76,16 +71,13 @@ pub fn draw(f: &mut Frame, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
-    let warn_h = if s.warnings.is_empty() { 0 } else { s.warnings.len().min(3) as u16 };
     let mut constraints = vec![
         Constraint::Length(3),     // header
         Constraint::Length(1),     // ping bar
-        Constraint::Length(1),     // banner
-        Constraint::Length(7),     // Odiseo
-        Constraint::Length(7),     // Houdini
-        Constraint::Length(3 + warn_h), // Alertas
+        Constraint::Length(6),     // Senna status panel
+        Constraint::Length(5),     // operations log
     ];
-    constraints.push(Constraint::Min(2)); // log
+    constraints.push(Constraint::Min(2)); // event log
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut idx: usize = 0;
@@ -96,45 +88,13 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     // Ping bar
     draw_ping_bar(f, m[idx], s); idx += 1;
 
-    // Banner
-    draw_banner(f, m[idx], s); idx += 1;
+    // Senna Status Panel
+    draw_senna_panel(f, m[idx], s); idx += 1;
 
-    // Odiseo panel
-    draw_odiseo_panel(f, m[idx], s); idx += 1;
+    // Operations log (recent entries/exits)
+    draw_senna_operations(f, m[idx], s); idx += 1;
 
-    // Houdini panel
-    draw_houdini_panel(f, m[idx], s); idx += 1;
-
-    // Alertas (always visible: status + warnings)
-    {
-        let mut alert_lines: Vec<Line> = Vec::new();
-        // Odiseo 83 status
-        let o83_status = if s.odi_enabled {
-            Span::styled("Odiseo 83: ACTIVADO", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-        } else {
-            Span::styled("Odiseo 83: DESACTIVADO", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-        };
-        alert_lines.push(Line::from(o83_status));
-        // Houdini 65 status
-        let h65_status = if s.h65_enabled {
-            Span::styled("Houdini 65: ACTIVADO", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-        } else {
-            Span::styled("Houdini 65: DESACTIVADO", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-        };
-        alert_lines.push(Line::from(h65_status));
-        // Warnings below
-        for w in s.warnings.iter().take(3) {
-            alert_lines.push(Line::from(Span::styled(format!("⚠ {}", w), Style::default().fg(Color::Yellow))));
-        }
-        f.render_widget(
-            Paragraph::new(alert_lines)
-                .block(Block::default().borders(Borders::ALL).title("Alertas")
-                    .border_style(Style::default().fg(Color::Red))),
-            m[idx]);
-        idx += 1;
-    }
-
-    // Log
+    // Event log
     let lines: Vec<Line> = s.log.iter().map(|e| Line::from(vec![
         Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
         Span::styled(&e.text, Style::default().fg(e.color)),
@@ -144,7 +104,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
 
 fn draw_header(f: &mut Frame, area: Rect, s: &State) {
     let h = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,7); 7]).split(area);
+        .constraints([Constraint::Ratio(1,5); 5]).split(area);
 
     // BTC
     let btc_ref = if s.btc_entry > 0.0 { s.btc_entry } else { s.btc_open };
@@ -191,37 +151,17 @@ fn draw_header(f: &mut Frame, area: Rect, s: &State) {
             .block(Block::default().borders(Borders::ALL).title("HEALTH")),
         h[3]);
 
-    // Odiseo 83 status
-    let o_st = if s.odi_enabled { Color::Green } else { Color::DarkGray };
+    // SENNA
+    let sen_st = if s.sen_enabled { Color::Green } else { Color::DarkGray };
     f.render_widget(
-        Paragraph::new(if s.odi_enabled {
-            format!("O83 ON ${:.0}", s.odi_budget)
+        Paragraph::new(if s.sen_enabled {
+            format!("SENNA ${:.0}", s.sen_budget)
         } else {
-            "O83 OFF".into()
+            "SENNA OFF".into()
         })
-            .style(Style::default().fg(o_st).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(sen_st).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL)),
         h[4]);
-
-    // Houdini 65 status
-    let h_st = if s.h65_enabled { Color::Green } else { Color::DarkGray };
-    f.render_widget(
-        Paragraph::new(if s.h65_enabled {
-            format!("H65 ON ${:.0}", s.h65_budget)
-        } else {
-            "H65 OFF".into()
-        })
-            .style(Style::default().fg(h_st).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL)),
-        h[5]);
-
-    // Orders
-    let o_c = if s.orders > 0 { Color::Yellow } else { Color::DarkGray };
-    f.render_widget(
-        Paragraph::new(format!("Ordenes: {}", s.orders))
-            .style(Style::default().fg(o_c).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL)),
-        h[6]);
 }
 
 fn draw_banner(f: &mut Frame, area: Rect, s: &State) {
@@ -266,45 +206,138 @@ fn draw_ping_bar(f: &mut Frame, area: Rect, s: &State) {
     );
 }
 
-fn draw_odiseo_panel(f: &mut Frame, area: Rect, s: &State) {
-    let panels = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)]).split(area);
+// ═══════════════════════════════════════════════════════════════════
+// SENNA STATUS PANEL — real-time position + PnL
+// ═══════════════════════════════════════════════════════════════════
 
-    let t = s.odi_t_up + s.odi_t_dn;
-    let w = s.odi_w_up + s.odi_w_dn;
+fn draw_senna_panel(f: &mut Frame, area: Rect, s: &State) {
+    let mut lines: Vec<Line> = Vec::new();
+    let b = Modifier::BOLD;
+
+    if s.sen_enabled && s.sen_budget > 0.0 {
+        let mut status_line = vec![
+            Span::styled("⚡ SENNA ", Style::default().fg(Color::Cyan).add_modifier(b)),
+        ];
+
+        if s.pos_sen_up {
+            let entry = s.pos_sen_entry_up;
+            let current = s.hft.clob_trade_up;
+            let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
+            let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
+            let pnl_pct = if entry > 0.0 { (current / entry - 1.0) * 100.0 } else { 0.0 };
+            let cents = entry * 100.0;
+            let tp_pct = (15.0 - 0.1 * cents).max(3.0).min(12.0);
+            let tp = entry * (1.0 + tp_pct / 100.0);
+            let sl = entry * (1.0 - tp_pct * 0.6 / 100.0);
+
+            let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
+            let bg = if pnl >= 0.0 { Color::Green } else { Color::Red };
+
+            status_line.push(Span::styled("▲ UP ", Style::default().fg(Color::Green).add_modifier(b)));
+            status_line.push(Span::styled(format!("{:.0}ct @ {:.4}", sz, entry), Style::default().fg(Color::White)));
+            lines.push(Line::from(status_line));
+
+            lines.push(Line::from(Span::styled(
+                format!("  PnL: {:+.2} ({:+.1}%)  |  Bid: {:.4}  |  TP: {:.4} ({:.1}%)  SL: {:.4}",
+                    pnl, pnl_pct, current, tp, tp_pct, sl),
+                Style::default().fg(pnl_c).add_modifier(b))));
+
+            f.render_widget(
+                Paragraph::new(lines)
+                    .style(Style::default().fg(Color::Black).bg(bg))
+                    .block(Block::default().borders(Borders::ALL).title("SENNA — POSICION ABIERTA")),
+                area);
+            return;
+        } else if s.pos_sen_dn {
+            let entry = s.pos_sen_entry_dn;
+            let current = s.hft.clob_trade_dn;
+            let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
+            let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
+            let pnl_pct = if entry > 0.0 { (current / entry - 1.0) * 100.0 } else { 0.0 };
+            let cents = entry * 100.0;
+            let tp_pct = (15.0 - 0.1 * cents).max(3.0).min(12.0);
+            let tp = entry * (1.0 + tp_pct / 100.0);
+            let sl = entry * (1.0 - tp_pct * 0.6 / 100.0);
+
+            let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
+            let bg = if pnl >= 0.0 { Color::Green } else { Color::Red };
+            status_line.push(Span::styled("▼ DN ", Style::default().fg(Color::Red).add_modifier(b)));
+            status_line.push(Span::styled(format!("{:.0}ct @ {:.4}", sz, entry), Style::default().fg(Color::White)));
+            lines.push(Line::from(status_line));
+            lines.push(Line::from(Span::styled(
+                format!("  PnL: {:+.2} ({:+.1}%)  |  Bid: {:.4}  |  TP: {:.4} ({:.1}%)  SL: {:.4}",
+                    pnl, pnl_pct, current, tp, tp_pct, sl),
+                Style::default().fg(pnl_c).add_modifier(b))));
+
+            f.render_widget(
+                Paragraph::new(lines)
+                    .style(Style::default().fg(Color::Black).bg(bg))
+                    .block(Block::default().borders(Borders::ALL).title("SENNA — POSICION ABIERTA")),
+                area);
+            return;
+        } else {
+            status_line.push(Span::styled("ACTIVO", Style::default().fg(Color::Green).add_modifier(b)));
+            status_line.push(Span::styled(format!("  ${:.0}", s.sen_budget), Style::default().fg(Color::White)));
+            lines.push(Line::from(status_line));
+            lines.push(Line::from(Span::styled(
+                "  Esperando señal de momentum...",
+                Style::default().fg(Color::DarkGray))));
+        }
+    } else if s.sen_enabled {
+        lines.push(Line::from(Span::styled("⚡ SENNA ACTIVO — sin presupuesto", Style::default().fg(Color::Yellow).add_modifier(b))));
+        lines.push(Line::from(Span::styled("  Usa /s10 para asignar $10", Style::default().fg(Color::DarkGray))));
+    } else {
+        lines.push(Line::from(Span::styled("○ SENNA OFF", Style::default().fg(Color::DarkGray).add_modifier(b))));
+        lines.push(Line::from(Span::styled("  Usa /s5..s100 para activar", Style::default().fg(Color::DarkGray))));
+    }
+
+    // Stats footer
+    let t = s.sen_t_up + s.sen_t_dn;
+    let w = s.sen_w_up + s.sen_w_dn;
     let wr = if t > 0 { format!("{:.0}%", w as f64 / t as f64 * 100.0) } else { "-".into() };
-    let pnl_pct = if s.odi_budget > 0.0 { s.odi_pnl / s.odi_budget * 100.0 } else { 0.0 };
-    let pc = if s.odi_pnl > 0.001 { Color::Green } else if s.odi_pnl < -0.001 { Color::Red } else { Color::Gray };
-    let bc = if s.live && s.odi_enabled { Color::Red } else { Color::DarkGray };
+    lines.push(Line::from(Span::styled(
+        format!("  Trades: {}  Wins: {}  WR: {}  PnL: {:+.2}  Sessions: {}",
+            t, w, wr, s.sen_pnl, s.sen_sessions),
+        Style::default().fg(Color::Gray))));
 
-    let stats = format!(
-        "Budget: ${:.0}   Balance: ${:.2}   PnL: {:+.4} ({:+.1}%)\n\
-         Win Rate: {} ({}/{} trades)   Accuracy: {:.0}%\n\
-         Sessions: {}   Avg PnL: {:+.4}   Best: {:+.4}   Worst: {:+.4}",
-        s.odi_budget, s.odi_bal, s.odi_pnl, pnl_pct,
-        wr, w, t, s.odi_accuracy * 100.0,
-        s.odi_sessions, s.odi_avg_pnl, s.odi_best, s.odi_worst,
-    );
     f.render_widget(
-        Paragraph::new(stats).style(Style::default().fg(pc))
-            .block(Block::default().borders(Borders::ALL)
-                .title(format!("{} — Estrategia Principal", s.odi_label))
-                .border_style(Style::default().fg(bc))),
-        panels[0]);
+        Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title("SENNA — Scalper Momentum")),
+        area);
+}
 
-    let exit_info = format!(
-        "ENTRADAS / SALIDAS\n\
-         UP:   {}/{} trades   won {}/{}   TP {}   SL {}\n\
-         DOWN: {}/{} trades   won {}/{}   TP {}   SL {}\n\
-         TOTAL: {} trades   {} TP   {} SL",
-        s.odi_w_up, s.odi_t_up, s.odi_w_up.max(0), s.odi_t_up, s.odi_tp_up, s.odi_sl_up,
-        s.odi_w_dn, s.odi_t_dn, s.odi_w_dn.max(0), s.odi_t_dn, s.odi_tp_dn, s.odi_sl_dn,
-        t, s.odi_tp_up + s.odi_tp_dn, s.odi_sl_up + s.odi_sl_dn,
-    );
+// ═══════════════════════════════════════════════════════════════════
+// SENNA OPERATIONS — recent entries/exits
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_senna_operations(f: &mut Frame, area: Rect, s: &State) {
+    let mut lines: Vec<Line> = Vec::new();
+    // Show last 5 Senna-related log entries
+    let senna_logs: Vec<_> = s.log.iter()
+        .filter(|e| e.text.contains("SENNA") || e.text.contains("Market") || e.text.contains("Limit"))
+        .take(6).collect();
+
+    if senna_logs.is_empty() {
+        lines.push(Line::from(Span::styled("  Sin operaciones aún", Style::default().fg(Color::DarkGray))));
+    } else {
+        for e in &senna_logs {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
+                Span::styled(&e.text, Style::default().fg(e.color)),
+            ]));
+        }
+    }
+    // Add open orders count
+    if s.orders > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  Órdenes abiertas: {}", s.orders),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+    }
+
     f.render_widget(
-        Paragraph::new(exit_info).style(Style::default().fg(Color::Gray))
-            .block(Block::default().borders(Borders::ALL).title("Detalle UP/DOWN")),
-        panels[1]);
+        Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title("Operaciones Senna")),
+        area);
 }
 
 fn draw_houdini_panel(f: &mut Frame, area: Rect, s: &State) {
@@ -815,135 +848,41 @@ fn draw_market_state(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
-    let tab_name = TAB_NAMES[s.tab];
-
-    // ─── Houdini 65 position ────────────────────────────────────
-    let (h65_pos, h65_style) = if s.pos_h65_up {
-        let entry = s.pos_h65_entry_up;
-        let current = s.hft.clob_trade_up;
-        let pnl = if entry > 0.0 && current > 0.0 {
-            s.h65_budget * (current / entry - 1.0)
-        } else { 0.0 };
-        let gain = pnl >= 0.0;
-        let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!(
-            "▲ H65 UP   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            s.h65_budget, current, pnl,
-            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
-        );
-        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
-    } else if s.pos_h65_dn {
-        let entry = s.pos_h65_entry_dn;
-        let current = s.hft.clob_trade_dn;
-        let pnl = if entry > 0.0 && current > 0.0 {
-            s.h65_budget * (current / entry - 1.0)
-        } else { 0.0 };
-        let gain = pnl >= 0.0;
-        let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!(
-            "▼ H65 DN   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            s.h65_budget, current, pnl,
-            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
-        );
-        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
-    } else if s.h65_enabled && s.h65_budget > 0.0 {
-        (format!("◆ H65 activo   esperando entrada   ${:.0}", s.h65_budget),
-         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-    } else if s.h65_enabled {
-        (format!("◆ H65 activo   esperando presupuesto"),
-         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-    } else {
-        (format!("○ H65 OFF   usa /h5..h100 para activar"),
-         Style::default().fg(Color::DarkGray))
-    };
-
-    // ─── Odiseo 83 position ─────────────────────────────────────
-    let (odi_pos, odi_style) = if s.pos_odi_up {
-        let entry = s.pos_odi_entry_up;
-        let current = s.hft.clob_trade_up;
-        let pnl = if entry > 0.0 && current > 0.0 {
-            s.odi_budget * (current / entry - 1.0)
-        } else { 0.0 };
-        let gain = pnl >= 0.0;
-        let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!(
-            "▲ O83 UP   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            s.odi_budget, current, pnl,
-            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
-        );
-        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
-    } else if s.pos_odi_dn {
-        let entry = s.pos_odi_entry_dn;
-        let current = s.hft.clob_trade_dn;
-        let pnl = if entry > 0.0 && current > 0.0 {
-            s.odi_budget * (current / entry - 1.0)
-        } else { 0.0 };
-        let gain = pnl >= 0.0;
-        let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!(
-            "▼ O83 DN   ${:.0}→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            s.odi_budget, current, pnl,
-            if entry>0.0{(current/entry-1.0)*100.0}else{0.0}
-        );
-        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
-    } else if s.odi_enabled && s.odi_budget > 0.0 {
-        (format!("◆ O83 activo   esperando entrada   ${:.0}", s.odi_budget),
-         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-    } else if s.odi_enabled {
-        (format!("◆ O83 activo   esperando presupuesto"),
-         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-    } else {
-        (format!("○ O83 OFF   usa /o5..o100 para activar"),
-         Style::default().fg(Color::DarkGray))
-    };
-
-    let h = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 3); 3]).split(area);
-
-    f.render_widget(
-        Paragraph::new(h65_pos).style(h65_style)
-            .block(Block::default().borders(Borders::ALL).title(format!("Houdini 65 | {tab_name}"))),
-        h[0]);
-
-    f.render_widget(
-        Paragraph::new(odi_pos).style(odi_style)
-            .block(Block::default().borders(Borders::ALL).title(format!("Odiseo 83 | {tab_name}"))),
-        h[1]);
-
-    // ─── Senna position ─────────────────────────────────────
     let (sen_pos, sen_style) = if s.pos_sen_up {
         let entry = s.pos_sen_entry_up;
         let current = s.hft.clob_trade_up;
+        let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
         let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
         let gain = pnl >= 0.0;
         let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!("⚡ SENNA UP ${:.0}→{:.4} PnL:{:+.2} {:.1}%",
-            s.sen_budget, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
+        let txt = format!("▲ SENNA UP  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            sz, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
         (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
     } else if s.pos_sen_dn {
         let entry = s.pos_sen_entry_dn;
         let current = s.hft.clob_trade_dn;
+        let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
         let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
         let gain = pnl >= 0.0;
         let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!("⚡ SENNA DN ${:.0}→{:.4} PnL:{:+.2} {:.1}%",
-            s.sen_budget, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
+        let txt = format!("▼ SENNA DN  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            sz, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
         (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
     } else if s.sen_enabled && s.sen_budget > 0.0 {
-        (format!("⚡ SENNA activo   esperando momentum   ${:.0}", s.sen_budget),
+        (format!("⚡ SENNA activo  ${:.0}  esperando momentum...", s.sen_budget),
          Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
     } else if s.sen_enabled {
-        (format!("⚡ SENNA activo   esperando presupuesto"),
+        (format!("⚡ SENNA activo  sin presupuesto"),
          Style::default().fg(Color::Cyan))
     } else {
-        (format!("○ SENNA OFF   usa /s5..s100 para activar"),
+        (format!("○ SENNA OFF  /s5..s100 para activar"),
          Style::default().fg(Color::DarkGray))
     };
 
     f.render_widget(
         Paragraph::new(sen_pos).style(sen_style)
-            .block(Block::default().borders(Borders::ALL).title(format!("Senna | {tab_name}"))),
-        h[2]);
+            .block(Block::default().borders(Borders::ALL).title("Senna")),
+        area);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -968,15 +907,16 @@ fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
-    let line1 = "[/]comandos  /h5..h100 /o5..o100 /p  [←→]tab  [q]salir";
-    let line2 = if s.pos_h65_up || s.pos_h65_dn {
-        "POSICION ABIERTA — /p para liquidar"
+    let line1 = "[/]comandos  /s5..s100 /p  [Tab]cambiar  [q]salir";
+    let line2 = "[b]BUY UP  [B]BUY DN  [x]SELL UP  [X]SELL DN  [c]Cancel All";
+    let line3 = if s.pos_sen_up || s.pos_sen_dn {
+        "POSICION ABIERTA — /p para liquidar TODO"
     } else {
-        "Sin posicion abierta — /h10 para activar Houdini $10"
+        "Senna activo — esperando senal de momentum"
     };
 
     f.render_widget(
-        Paragraph::new(format!("{}\n{}", line1, line2))
+        Paragraph::new(format!("{}\n{}\n{}", line1, line2, line3))
             .style(Style::default().fg(Color::DarkGray)),
         area,
     );
