@@ -183,21 +183,24 @@ fn draw_banner(f: &mut Frame, area: Rect, s: &State) {
 fn draw_ping_bar(f: &mut Frame, area: Rect, s: &State) {
     let ws_ms = s.last_ws.elapsed().as_millis() as u64;
     let api_ms = s.last_api_ok.elapsed().as_millis() as u64;
+    let btc_vol = s.hft.btc_volume_24h;
 
-    // Mini sparkline from last 10 pings (WS)
     let spark: String = s.ws_pings.iter().take(10).rev().map(|&p| {
         if p < 200 { '▁' } else if p < 500 { '▂' } else if p < 1000 { '▄' } else if p < 2000 { '▆' } else { '█' }
     }).collect();
 
     let ws_c = if ws_ms < 300 { Color::Green } else if ws_ms < 1000 { Color::Yellow } else { Color::Red };
     let api_c = if api_ms < 500 { Color::Green } else if api_ms < 2000 { Color::Yellow } else { Color::Red };
+    let vol_c = if btc_vol > 20000.0 { Color::Green } else if btc_vol > 10000.0 { Color::Yellow } else { Color::Red };
 
     let text = vec![
         Span::styled("WS:", Style::default().fg(Color::DarkGray)),
         Span::styled(format!("{}ms ", ws_ms), Style::default().fg(ws_c).add_modifier(Modifier::BOLD)),
         Span::styled(format!("{} ", spark), Style::default().fg(Color::Cyan)),
         Span::styled("API:", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("{}ms", api_ms), Style::default().fg(api_c).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{}ms ", api_ms), Style::default().fg(api_c).add_modifier(Modifier::BOLD)),
+        Span::styled("BTCvol:", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{:.0}", btc_vol), Style::default().fg(vol_c).add_modifier(Modifier::BOLD)),
     ];
 
     f.render_widget(

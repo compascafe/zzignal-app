@@ -976,6 +976,7 @@ async fn capture_combined(
         hft.btc_vel = rec.price_velocity;
         hft.btc_acel = rec.btc_acel;
         hft.btc_volatility = rec.btc_volatility;
+        hft.btc_volume_24h = rec.binance_vol_24h;
         hft.spoof = rec.spoofing_flag;
         hft.dump_score = rec.dump_score;
         hft.ask_wall = rec.ask_wall;

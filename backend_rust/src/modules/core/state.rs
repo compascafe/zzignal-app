@@ -42,6 +42,7 @@ pub struct LatestHftState {
     pub btc_vel: f64,
     pub btc_acel: f64,
     pub btc_volatility: f64,  // EMA of |velocity| — micro-volatility indicator
+    pub btc_volume_24h: f64,      // BTC 24h volume from Binance
     pub spoof: u8,
     pub dump_score: u8,
     pub ask_wall: u8,
