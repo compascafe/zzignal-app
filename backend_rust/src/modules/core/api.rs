@@ -748,7 +748,7 @@ fn book_snapshot_to_json(book: &Option<crate::modules::core::worker::BookSnapsho
             "bids": b.bids.iter().map(|l| json!({"price": l.price, "size": l.size})).collect::<Vec<_>>(),
             "asks": b.asks.iter().map(|l| json!({"price": l.price, "size": l.size})).collect::<Vec<_>>(),
         }),
-        None => json!(null),
+        None => json!({"bids": [], "asks": []}), // always return valid object
     }
 }
 
