@@ -97,6 +97,7 @@ struct State {
     book_up: api::BookDepth,
     book_dn: api::BookDepth,
     last_poll_depth: Instant,
+    prev_secs_left: i32,
 }
 
 impl State {
@@ -153,6 +154,7 @@ impl State {
             book_up: api::BookDepth::default(),
             book_dn: api::BookDepth::default(),
             last_poll_depth: Instant::now(),
+            prev_secs_left: -1,
         }
     }
 
@@ -372,6 +374,15 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     s.prev_sen_dn = new_hft.sen_dn;
     s.hft = new_hft.clone();
     s.odi_filters = s.hft.od83_filters;
+
+    // ─── Session change detection: clear stale book data ───────────
+    let secs = new_hft.secs_left;
+    if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
+        s.book_up = api::BookDepth::default();
+        s.book_dn = api::BookDepth::default();
+        s.add_log(format!("SESSION RESET — new orderbook"), Color::Yellow);
+    }
+    s.prev_secs_left = secs;
 }
 
 fn detect_trades(v: &OdiseoVariant, last_t_up: i64, last_t_dn: i64,
