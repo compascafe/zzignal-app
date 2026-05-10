@@ -4,6 +4,20 @@ use serde::Deserialize;
 pub const WS_URL: &str = "ws://localhost:8080/ws";
 pub const API_URL: &str = "http://localhost:8080";
 
+// ─── Orderbook Depth ──────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct BookLevel {
+    pub price: f64,
+    pub size: f64,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct BookDepth {
+    pub bids: Vec<BookLevel>,
+    pub asks: Vec<BookLevel>,
+}
+
 // ─── WebSocket Messages ─────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Default)]

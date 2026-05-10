@@ -74,8 +74,10 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let mut constraints = vec![
         Constraint::Length(3),     // header
         Constraint::Length(1),     // ping bar
-        Constraint::Length(5),     // indicators panel
-        Constraint::Length(4),     // trading commands
+        Constraint::Length(1),     // session bar
+        Constraint::Length(3),     // UP/DOWN prices
+        Constraint::Length(5),     // depth panel
+        Constraint::Length(4),     // indicators + state
     ];
     constraints.push(Constraint::Min(2)); // event log
 
@@ -88,11 +90,17 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     // Ping bar
     draw_ping_bar(f, m[idx], s); idx += 1;
 
-    // Indicators
-    draw_indicators(f, m[idx], s); idx += 1;
+    // Session bar
+    draw_session_bar(f, m[idx], s); idx += 1;
 
-    // Trading commands
-    draw_trading_commands(f, m[idx], s); idx += 1;
+    // UP/DOWN Prices
+    draw_price_panel(f, m[idx], s); idx += 1;
+
+    // Depth panel
+    draw_depth_panel(f, m[idx], s); idx += 1;
+
+    // Indicators + State
+    draw_indicators(f, m[idx], s); idx += 1;
 
     // Event log
     let lines: Vec<Line> = s.log.iter().map(|e| Line::from(vec![
@@ -103,120 +111,179 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// INDICATORS PANEL — momentum signals for manual trading
+// ORDERBOOK DEPTH — 20 levels bids/asks
 // ═══════════════════════════════════════════════════════════════════
 
-fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
+fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
     let chunks = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
         .split(area);
 
-    // Left: momentum indicators
-    let b = Modifier::BOLD;
-    let mut lines: Vec<Line> = Vec::new();
-
-    let clob_d = s.hft.sen_clob_delta;
-    let btc_v = s.hft.sen_btc_vel;
-
-    lines.push(Line::from(Span::styled("── MOMENTUM ──", Style::default().fg(Color::Cyan).add_modifier(b))));
-    let clob_ok = clob_d >= 0.015;
-    let clob_c = if clob_ok { Color::Green } else { Color::Red };
-    lines.push(Line::from(vec![
-        Span::styled(format!("{:.4}", clob_d), Style::default().fg(clob_c).add_modifier(b)),
-        Span::styled(" CLOB Δ", Style::default().fg(Color::DarkGray)),
-        Span::styled(if clob_ok {" ✓"}else{" (min 0.015)"}, Style::default().fg(if clob_ok {Color::Green}else{Color::DarkGray})),
-    ]));
-
-    let btc_ok = (btc_v > 10.0) || (btc_v < -10.0);
-    let btc_c = if btc_ok { Color::Green } else { Color::Red };
-    lines.push(Line::from(vec![
-        Span::styled(format!("{:.4}", btc_v), Style::default().fg(btc_c).add_modifier(b)),
-        Span::styled(" BTC vel", Style::default().fg(Color::DarkGray)),
-        Span::styled(if btc_ok {" ✓"}else{""}, Style::default().fg(Color::Green)),
-    ]));
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("── PRECIOS ──", Style::default().fg(Color::Cyan).add_modifier(b))));
-    lines.push(Line::from(vec![
-        Span::styled(format!("{:.4}", s.hft.clob_trade_up), Style::default().fg(Color::White).add_modifier(b)),
-        Span::styled(" UP", Style::default().fg(Color::Green)),
-        Span::styled(format!("  {:.4}", s.hft.clob_trade_dn), Style::default().fg(Color::White).add_modifier(b)),
-        Span::styled(" DN", Style::default().fg(Color::Red)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(format!("{:.0}", s.hft.btc_volume_24h), Style::default().fg(Color::Yellow).add_modifier(b)),
-        Span::styled(" BTC vol", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("  {:.1}%", s.hft.imbalance*100.0), Style::default().fg(Color::Cyan)),
-        Span::styled(" imb", Style::default().fg(Color::DarkGray)),
-    ]));
-
+    // UP depth
+    let max_size_up = s.book_up.bids.iter().map(|l| l.size)
+        .chain(s.book_up.asks.iter().map(|l| l.size))
+        .fold(0.0f64, f64::max).max(1.0);
+    let bar_w = chunks[0].width.saturating_sub(14) as usize;
+    let mut up_lines: Vec<Line> = Vec::new();
+    // Asks (sell wall - red, reversed)
+    for l in s.book_up.asks.iter().take(10).rev() {
+        let w = ((l.size / max_size_up) * bar_w as f64) as usize;
+        let bar = "█".repeat(w.min(bar_w));
+        up_lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Red)),
+            Span::styled(bar, Style::default().fg(Color::Red)),
+            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+    // Bids (buy wall - green)
+    for l in s.book_up.bids.iter().take(10) {
+        let w = ((l.size / max_size_up) * bar_w as f64) as usize;
+        let bar = "█".repeat(w.min(bar_w));
+        up_lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Green)),
+            Span::styled(bar, Style::default().fg(Color::Green)),
+            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
     f.render_widget(
-        Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title("INDICADORES")),
+        Paragraph::new(up_lines)
+            .block(Block::default().borders(Borders::ALL).title("UP Book").border_style(Style::default().fg(Color::Green))),
         chunks[0]);
 
-    // Right: position + open orders
-    let mut right: Vec<Line> = Vec::new();
-    right.push(Line::from(Span::styled("── POSICION ──", Style::default().fg(Color::Cyan).add_modifier(b))));
-    if s.pos_sen_up || s.pos_sen_dn {
-        let side = if s.pos_sen_up { "▲ UP" } else { "▼ DN" };
-        let entry = if s.pos_sen_up { s.pos_sen_entry_up } else { s.pos_sen_entry_dn };
-        let current = if s.pos_sen_up { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
-        let pnl = if entry > 0.0 && current > 0.0 { (current/entry - 1.0) * 100.0 } else { 0.0 };
-        let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
-        right.push(Line::from(Span::styled(format!("{}  @{:.4}  PnL:{:+.1}%", side, entry, pnl),
-            Style::default().fg(pnl_c).add_modifier(b))));
-    } else {
-        right.push(Line::from(Span::styled("Sin posicion", Style::default().fg(Color::DarkGray))));
+    // DOWN depth
+    let max_size_dn = s.book_dn.bids.iter().map(|l| l.size)
+        .chain(s.book_dn.asks.iter().map(|l| l.size))
+        .fold(0.0f64, f64::max).max(1.0);
+    let mut dn_lines: Vec<Line> = Vec::new();
+    for l in s.book_dn.asks.iter().take(10).rev() {
+        let w = ((l.size / max_size_dn) * bar_w as f64) as usize;
+        let bar = "█".repeat(w.min(bar_w));
+        dn_lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Red)),
+            Span::styled(bar, Style::default().fg(Color::Red)),
+            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+        ]));
     }
-    right.push(Line::from(""));
-    right.push(Line::from(Span::styled("── ORDENES ──", Style::default().fg(Color::Cyan).add_modifier(b))));
-    let ord_c = if s.orders > 0 { Color::Yellow } else { Color::DarkGray };
-    right.push(Line::from(Span::styled(format!("Abiertas: {}", s.orders), Style::default().fg(ord_c).add_modifier(b))));
-
+    for l in s.book_dn.bids.iter().take(10) {
+        let w = ((l.size / max_size_dn) * bar_w as f64) as usize;
+        let bar = "█".repeat(w.min(bar_w));
+        dn_lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Green)),
+            Span::styled(bar, Style::default().fg(Color::Green)),
+            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
     f.render_widget(
-        Paragraph::new(right)
-            .block(Block::default().borders(Borders::ALL).title("ESTADO")),
+        Paragraph::new(dn_lines)
+            .block(Block::default().borders(Borders::ALL).title("DOWN Book").border_style(Style::default().fg(Color::Red))),
         chunks[1]);
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// TRADING COMMANDS — manual trade help
+// SESSION BAR
 // ═══════════════════════════════════════════════════════════════════
 
-fn draw_trading_commands(f: &mut Frame, area: Rect, s: &State) {
-    let mut lines: Vec<Line> = Vec::new();
+fn draw_session_bar(f: &mut Frame, area: Rect, s: &State) {
+    let sl = s.hft.secs_left;
+    let min = sl / 60;
+    let sec = sl % 60;
+    let sl_c = if sl > 300 { Color::Green } else if sl > 60 { Color::Yellow } else { Color::Red };
+    let text = vec![
+        Span::styled("BTC 15-min  |  ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{}:{:02}", min, sec), Style::default().fg(sl_c).add_modifier(Modifier::BOLD)),
+        Span::styled(if sl > 0 { " restantes" } else { " FINALIZADA" }, Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("  |  BTC ${:.0}", s.btc), Style::default().fg(Color::White)),
+    ];
+    f.render_widget(Paragraph::new(Line::from(text)), area);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UP/DOWN PRICES — Polymarket style
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_price_panel(f: &mut Frame, area: Rect, s: &State) {
+    let chunks = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(area);
     let b = Modifier::BOLD;
-    lines.push(Line::from(Span::styled("COMANDOS MANUALES", Style::default().fg(Color::White).add_modifier(b))));
-    lines.push(Line::from(""));
+
+    // UP Panel
+    let up_px = s.hft.clob_trade_up;
+    let up_c = if up_px >= 0.65 { Color::Green } else if up_px >= 0.50 { Color::Yellow } else { Color::Red };
+    let up_lines = vec![
+        Line::from(Span::styled("▲ UP", Style::default().fg(Color::Green).add_modifier(b))),
+        Line::from(Span::styled(format!("{:.4}", up_px), Style::default().fg(up_c).add_modifier(b))),
+        Line::from(Span::styled(if up_px >= 0.65 {"▲ momentum"}else{""}, Style::default().fg(Color::DarkGray))),
+    ];
+    f.render_widget(
+        Paragraph::new(up_lines)
+            .block(Block::default().borders(Borders::ALL).title("UP").border_style(Style::default().fg(Color::Green))),
+        chunks[0]);
+
+    // DOWN Panel
+    let dn_px = s.hft.clob_trade_dn;
+    let dn_c = if dn_px >= 0.65 { Color::Green } else if dn_px >= 0.50 { Color::Yellow } else { Color::Red };
+    let dn_lines = vec![
+        Line::from(Span::styled("▼ DOWN", Style::default().fg(Color::Red).add_modifier(b))),
+        Line::from(Span::styled(format!("{:.4}", dn_px), Style::default().fg(dn_c).add_modifier(b))),
+        Line::from(Span::styled(if dn_px >= 0.65 {"▲ momentum"}else{""}, Style::default().fg(Color::DarkGray))),
+    ];
+    f.render_widget(
+        Paragraph::new(dn_lines)
+            .block(Block::default().borders(Borders::ALL).title("DOWN").border_style(Style::default().fg(Color::Red))),
+        chunks[1]);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INDICATORS + STATE
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
+    let b = Modifier::BOLD;
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Momentum signals
+    let clob_d = s.hft.sen_clob_delta;
+    let btc_v = s.hft.sen_btc_vel;
+    let clob_ok = clob_d >= 0.015;
+    let btc_ok = (btc_v > 10.0) || (btc_v < -10.0);
+
     lines.push(Line::from(vec![
-        Span::styled("  /b10", Style::default().fg(Color::Green).add_modifier(b)),
-        Span::styled("  BUY UP market $10", Style::default().fg(Color::DarkGray)),
+        Span::styled("MOMENTUM ", Style::default().fg(Color::Cyan).add_modifier(b)),
+        Span::styled(format!("CLOB Δ:{:+.4}", clob_d), Style::default().fg(if clob_ok{Color::Green}else{Color::DarkGray})),
+        Span::styled(if clob_ok {" ✓"}else{""}, Style::default().fg(Color::Green)),
+        Span::styled(format!("  BTC vel:{:.3}", btc_v), Style::default().fg(if btc_ok{Color::Green}else{Color::DarkGray})),
+        Span::styled(if btc_ok {" ✓"}else{""}, Style::default().fg(Color::Green)),
     ]));
+
+    // Imbalance + Volume
     lines.push(Line::from(vec![
-        Span::styled("  /B10", Style::default().fg(Color::Red).add_modifier(b)),
-        Span::styled("  BUY DN market $10", Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("Vol:{:.0}", s.hft.btc_volume_24h), Style::default().fg(Color::Yellow)),
+        Span::styled(format!("  Imb:{:.1}%", s.hft.imbalance * 100.0), Style::default().fg(Color::Cyan)),
+        Span::styled(format!("  Spread:{:.4}", s.hft.spread), Style::default().fg(Color::Gray)),
     ]));
-    lines.push(Line::from(vec![
-        Span::styled("  /s", Style::default().fg(Color::Yellow).add_modifier(b)),
-        Span::styled("    SELL UP market todo", Style::default().fg(Color::DarkGray)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  /S", Style::default().fg(Color::Yellow).add_modifier(b)),
-        Span::styled("    SELL DN market todo", Style::default().fg(Color::DarkGray)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  /l65", Style::default().fg(Color::Cyan).add_modifier(b)),
-        Span::styled("  LIMIT buy UP at 0.65 $10", Style::default().fg(Color::DarkGray)),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  /p", Style::default().fg(Color::Red).add_modifier(b)),
-        Span::styled("    PANIC — liquidar TODO", Style::default().fg(Color::DarkGray)),
-    ]));
+
+    // Position
+    if s.pos_sen_up || s.pos_sen_dn {
+        let (side, entry, current) = if s.pos_sen_up {
+            ("▲ UP", s.pos_sen_entry_up, s.hft.clob_trade_up)
+        } else {
+            ("▼ DN", s.pos_sen_entry_dn, s.hft.clob_trade_dn)
+        };
+        let pnl = if entry > 0.0 && current > 0.0 { (current/entry - 1.0) * 100.0 } else { 0.0 };
+        let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
+        lines.push(Line::from(Span::styled(
+            format!("POS: {} @{:.4}  PnL:{:+.1}%  Ordenes:{}", side, entry, pnl, s.orders),
+            Style::default().fg(pnl_c).add_modifier(b))));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("Sin posicion  |  Ordenes:{}  |  SL:{}% {}", s.orders, s.sl_pct, if s.sl_market{"MKT"}else{"LMT"}),
+            Style::default().fg(Color::DarkGray))));
+    }
 
     f.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title("TRADING")),
+            .block(Block::default().borders(Borders::ALL).title("ESTADO")),
         area);
 }
 

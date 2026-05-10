@@ -94,6 +94,9 @@ struct State {
     last_api_ok: Instant,
     ws_pings: VecDeque<u64>,   // last 20 WS latencies (ms)
     api_pings: VecDeque<u64>,  // last 20 API latencies (ms)
+    book_up: api::BookDepth,
+    book_dn: api::BookDepth,
+    last_poll_depth: Instant,
 }
 
 impl State {
@@ -147,6 +150,9 @@ impl State {
             last_api_ok: Instant::now(),
             ws_pings: VecDeque::with_capacity(20),
             api_pings: VecDeque::with_capacity(20),
+            book_up: api::BookDepth::default(),
+            book_dn: api::BookDepth::default(),
+            last_poll_depth: Instant::now(),
         }
     }
 
@@ -455,8 +461,6 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let paper_mode = std::env::args().any(|a| a == "--paper");
@@ -610,6 +614,17 @@ async fn main() -> io::Result<()> {
             s.last_poll_sessions = Instant::now();
             if let Some(data) = http_get::<Vec<SessionInfo>>("/api/sessions").await {
                 s.sessions = data;
+            }
+        }
+
+        // ─── Poll Depth (1s) ─────────────────────────────────────────
+        if s.last_poll_depth.elapsed() > Duration::from_secs(1) {
+            s.last_poll_depth = Instant::now();
+            if let Some(d) = http_get::<BookDepth>("/api/book/up").await {
+                s.book_up = d;
+            }
+            if let Some(d) = http_get::<BookDepth>("/api/book/down").await {
+                s.book_dn = d;
             }
         }
 
