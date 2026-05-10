@@ -131,30 +131,29 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
 
 fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c: Color,
                    book: &crate::api::BookDepth, bids_fb: &[(f64,f64)], asks_fb: &[(f64,f64)]) {
-    let bids: Vec<(f64,f64)> = if !book.bids.is_empty() {
-        book.bids.iter().map(|l| (l.price, l.size)).collect()
+    // Prevent excessive CPU on large books (session transitions could flood)
+    let mut bids: Vec<(f64,f64)> = if !book.bids.is_empty() {
+        book.bids.iter().take(200).map(|l| (l.price, l.size)).collect()
     } else {
-        bids_fb.to_vec()
+        bids_fb.iter().take(200).copied().collect()
     };
-    let asks: Vec<(f64,f64)> = if !book.asks.is_empty() {
-        book.asks.iter().map(|l| (l.price, l.size)).collect()
+    let mut asks: Vec<(f64,f64)> = if !book.asks.is_empty() {
+        book.asks.iter().take(200).map(|l| (l.price, l.size)).collect()
     } else {
-        asks_fb.to_vec()
+        asks_fb.iter().take(200).copied().collect()
     };
 
     let best_bid = bids.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max);
     let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
 
     // Display: worst ask at top → best ask at bottom → spread → best bid → worst bid
-    // asks: sort ascending (best=lowest first), take N closest to best_ask, reverse
-    let mut asks_sorted: Vec<_> = asks.clone();
-    asks_sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let top_asks: Vec<_> = asks_sorted.into_iter().take(15).rev().collect();
+    // asks: sort ascending (best=lowest first), take closest N, reverse
+    asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let top_asks: Vec<_> = asks.into_iter().take(15).rev().collect();
 
-    // bids: sort descending (best=highest first), take N closest to best_bid
-    let mut bids_sorted: Vec<_> = bids.clone();
-    bids_sorted.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let top_bids: Vec<_> = bids_sorted.into_iter().take(15).collect();
+    // bids: sort descending (best=highest first), take closest N
+    bids.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let top_bids: Vec<_> = bids.into_iter().take(15).collect();
 
     let max_size = top_asks.iter().map(|&(_,s)| s)
         .chain(top_bids.iter().map(|&(_,s)| s))
