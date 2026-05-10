@@ -22,7 +22,7 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Min(1),        // main content (dashboard)
     ];
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
-    constraints.push(Constraint::Length(3)); // footer
+    constraints.push(Constraint::Length(1)); // footer
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut ci = 0;
@@ -907,16 +907,9 @@ fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
-    let line1 = "[/]comandos  /s5..s100 /p  [Tab]cambiar  [q]salir";
-    let line2 = "[b]BUY UP  [B]BUY DN  [x]SELL UP  [X]SELL DN  [c]Cancel All";
-    let line3 = if s.pos_sen_up || s.pos_sen_dn {
-        "POSICION ABIERTA — /p para liquidar TODO"
-    } else {
-        "Senna activo — esperando senal de momentum"
-    };
-
+    let line = "[/]comandos  /s5..s100 /p  [Tab]cambiar  [q]salir";
     f.render_widget(
-        Paragraph::new(format!("{}\n{}\n{}", line1, line2, line3))
+        Paragraph::new(line)
             .style(Style::default().fg(Color::DarkGray)),
         area,
     );
