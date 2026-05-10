@@ -71,44 +71,39 @@ pub fn draw(f: &mut Frame, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
-    let mut constraints = vec![
-        Constraint::Length(3),     // header
-        Constraint::Length(1),     // ping bar
-        Constraint::Length(1),     // session bar
-        Constraint::Length(2),     // UP/DOWN prices
-        Constraint::Length(17),    // depth panel — orderbook en vivo
+    let constraints = vec![
+        Constraint::Length(2),     // header compact
+        Constraint::Length(1),     // ping + session bar
+        Constraint::Length(1),     // UP/DOWN prices
+        Constraint::Min(6),        // depth panel — TODO el espacio
+        Constraint::Length(2),     // estado + eventos (compacto)
     ];
-    constraints.push(Constraint::Min(1)); // event log + estado (minimo)
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut idx: usize = 0;
 
-    // Header
     draw_header(f, m[idx], s); idx += 1;
 
-    // Ping bar
+    // Ping + session combined
     draw_ping_bar(f, m[idx], s); idx += 1;
 
-    // Session bar
-    draw_session_bar(f, m[idx], s); idx += 1;
-
-    // UP/DOWN Prices
+    // UP/DOWN prices compact
     draw_price_panel(f, m[idx], s); idx += 1;
 
-    // Depth panel
+    // Depth panel — takes all remaining space
     draw_depth_panel(f, m[idx], s); idx += 1;
 
-    // Event log + indicators (compacto, lo que quede)
-    let remaining = m[idx];
-    let bottom = Layout::default().direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(0)])
-        .split(remaining);
-    draw_indicators_compact(f, bottom[0], s);
-    let lines: Vec<Line> = s.log.iter().take(3).map(|e| Line::from(vec![
+    // Estado + eventos combined in 2 lines at the very bottom
+    let bottom = m[idx];
+    let bot_split = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(bottom);
+    draw_indicators_compact(f, bot_split[0], s);
+    let event_line: Vec<Line> = s.log.iter().take(2).map(|e| Line::from(vec![
         Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
         Span::styled(&e.text, Style::default().fg(e.color)),
     ])).collect();
-    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Eventos")), bottom[1]);
+    f.render_widget(Paragraph::new(event_line).block(Block::default().borders(Borders::ALL).title("EVENTOS")), bot_split[1]);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -146,14 +141,15 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let best_bid = bids.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max);
     let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
 
-    // Display: worst ask at top → best ask at bottom → spread → best bid → worst bid
-    // asks: sort ascending (best=lowest first), take closest N, reverse
-    asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let top_asks: Vec<_> = asks.into_iter().take(15).rev().collect();
+    // Available content lines = area height - 2 (borders) - 1 (spread)
+    let avail = (area.height as usize).saturating_sub(3);
+    let half = (avail / 2).max(4).min(8);  // 4-8 per side, both sides fit
 
-    // bids: sort descending (best=highest first), take closest N
+    asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let top_asks: Vec<_> = asks.into_iter().take(half).rev().collect();
+
     bids.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let top_bids: Vec<_> = bids.into_iter().take(15).collect();
+    let top_bids: Vec<_> = bids.into_iter().take(half).collect();
 
     let max_size = top_asks.iter().map(|&(_,s)| s)
         .chain(top_bids.iter().map(|&(_,s)| s))
@@ -241,36 +237,21 @@ fn draw_session_bar(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_price_panel(f: &mut Frame, area: Rect, s: &State) {
-    let chunks = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
-        .split(area);
-    let b = Modifier::BOLD;
-
-    // UP Panel
     let up_px = s.hft.clob_trade_up;
-    let up_c = if up_px >= 0.65 { Color::Green } else if up_px >= 0.50 { Color::Yellow } else { Color::Red };
-    let up_lines = vec![
-        Line::from(Span::styled("▲ UP", Style::default().fg(Color::Green).add_modifier(b))),
-        Line::from(Span::styled(format!("{:.4}", up_px), Style::default().fg(up_c).add_modifier(b))),
-        Line::from(Span::styled(if up_px >= 0.65 {"▲ momentum"}else{""}, Style::default().fg(Color::DarkGray))),
-    ];
-    f.render_widget(
-        Paragraph::new(up_lines)
-            .block(Block::default().borders(Borders::ALL).title("UP").border_style(Style::default().fg(Color::Green))),
-        chunks[0]);
-
-    // DOWN Panel
     let dn_px = s.hft.clob_trade_dn;
+    let up_c = if up_px >= 0.65 { Color::Green } else if up_px >= 0.50 { Color::Yellow } else { Color::Red };
     let dn_c = if dn_px >= 0.65 { Color::Green } else if dn_px >= 0.50 { Color::Yellow } else { Color::Red };
-    let dn_lines = vec![
-        Line::from(Span::styled("▼ DOWN", Style::default().fg(Color::Red).add_modifier(b))),
-        Line::from(Span::styled(format!("{:.4}", dn_px), Style::default().fg(dn_c).add_modifier(b))),
-        Line::from(Span::styled(if dn_px >= 0.65 {"▲ momentum"}else{""}, Style::default().fg(Color::DarkGray))),
+    let vol = s.hft.btc_volume_24h;
+    let vol_c = if vol > 20000.0 { Color::Green } else if vol > 10000.0 { Color::Yellow } else { Color::Red };
+
+    let line = vec![
+        Span::styled("▲ UP ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{:.4} ", up_px), Style::default().fg(up_c)),
+        Span::styled("▼ DN ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{:.4} ", dn_px), Style::default().fg(dn_c)),
+        Span::styled(format!("BTCvol:{:.0}", vol), Style::default().fg(vol_c)),
     ];
-    f.render_widget(
-        Paragraph::new(dn_lines)
-            .block(Block::default().borders(Borders::ALL).title("DOWN").border_style(Style::default().fg(Color::Red))),
-        chunks[1]);
+    f.render_widget(Paragraph::new(Line::from(line)), area);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -393,30 +374,29 @@ fn draw_banner(f: &mut Frame, area: Rect, s: &State) {
 fn draw_ping_bar(f: &mut Frame, area: Rect, s: &State) {
     let ws_ms = s.last_ws.elapsed().as_millis() as u64;
     let api_ms = s.last_api_ok.elapsed().as_millis() as u64;
-    let btc_vol = s.hft.btc_volume_24h;
+
+    let ws_c = if ws_ms < 300 { Color::Green } else if ws_ms < 1000 { Color::Yellow } else { Color::Red };
+    let api_c = if api_ms < 500 { Color::Green } else if api_ms < 2000 { Color::Yellow } else { Color::Red };
+
+    let sl = s.hft.secs_left;
+    let min = sl / 60;
+    let sec = sl % 60;
+    let sl_c = if sl > 300 { Color::Green } else if sl > 60 { Color::Yellow } else { Color::Red };
 
     let spark: String = s.ws_pings.iter().take(10).rev().map(|&p| {
         if p < 200 { '▁' } else if p < 500 { '▂' } else if p < 1000 { '▄' } else if p < 2000 { '▆' } else { '█' }
     }).collect();
 
-    let ws_c = if ws_ms < 300 { Color::Green } else if ws_ms < 1000 { Color::Yellow } else { Color::Red };
-    let api_c = if api_ms < 500 { Color::Green } else if api_ms < 2000 { Color::Yellow } else { Color::Red };
-    let vol_c = if btc_vol > 20000.0 { Color::Green } else if btc_vol > 10000.0 { Color::Yellow } else { Color::Red };
-
     let text = vec![
         Span::styled("WS:", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("{}ms ", ws_ms), Style::default().fg(ws_c).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("{} ", spark), Style::default().fg(Color::Cyan)),
+        Span::styled(format!("{}ms {} ", ws_ms, spark), Style::default().fg(ws_c).add_modifier(Modifier::BOLD)),
         Span::styled("API:", Style::default().fg(Color::DarkGray)),
         Span::styled(format!("{}ms ", api_ms), Style::default().fg(api_c).add_modifier(Modifier::BOLD)),
-        Span::styled("BTCvol:", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("{:.0}", btc_vol), Style::default().fg(vol_c).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("SESION {}:{:02}", min, sec), Style::default().fg(sl_c).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  BTC ${:.0}", s.btc), Style::default().fg(Color::White)),
     ];
 
-    f.render_widget(
-        Paragraph::new(Line::from(text)),
-        area,
-    );
+    f.render_widget(Paragraph::new(Line::from(text)), area);
 }
 
 // ═══════════════════════════════════════════════════════════════════
