@@ -75,6 +75,10 @@ struct State {
     odi_lock: bool,
     sen_lock: bool,
 
+    // ─── SL config ───
+    sl_pct: f64,       // default 12 (%)
+    sl_market: bool,   // true=market sell, false=limit sell
+
     // ─── Budget input mode ───
     input_mode: InputMode,
     input_buf: String,
@@ -129,6 +133,7 @@ impl State {
             pos_sen_entry_up: 0.0, pos_sen_entry_dn: 0.0,
             prev_sen_up: 0, prev_sen_dn: 0,
             h65_lock: false, odi_lock: false, sen_lock: false,
+            sl_pct: 12.0, sl_market: true,
             input_mode: InputMode::Normal,
             input_buf: String::new(),
             orders: 0,
@@ -173,6 +178,24 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
                 s.add_log("TODO LIQUIDADO", Color::Green);
             }
         }
+        // ─── SL config: /sl = toggle MKT/LMT, /sl10 = 10%, /nsl = OFF ───
+        's' if cmd.len() >= 2 && cmd.as_bytes()[1] == b'l' => {
+            let rest = &cmd[2..];
+            if rest.is_empty() {
+                s.sl_market = !s.sl_market;
+                s.add_log(format!("SL: {} {}", if s.sl_market {"MARKET"}else{"LIMIT"}, if s.sl_pct > 0.0 {format!("{}%", s.sl_pct)}else{"OFF".into()}), Color::Yellow);
+            } else if let Ok(pct) = rest.parse::<f64>() {
+                s.sl_pct = pct.max(1.0).min(50.0);
+                s.add_log(format!("SL: {}% {}", s.sl_pct, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
+            } else {
+                s.add_log("USO: /sl  |  /sl10  |  /nsl", Color::Red);
+            }
+        }
+        // ─── No SL: /nsl ───
+        'n' if cmd == "nsl" => {
+            s.sl_pct = 0.0;
+            s.add_log("SL: OFF — sin stop loss", Color::DarkGray);
+        }
         _ => {
             // Parse compact command: /10up65 or /15d40e35
             let rest = cmd;
@@ -196,11 +219,29 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
             let size = (amount / price).floor().max(1.0);
 
             // Place limit BUY
-            s.add_log(format!("▶ LIMIT BUY {} ${:.0} @{:.2} sz={:.0}", outcome.to_uppercase(), amount, price, size),
+            let sl_price = price * (1.0 - s.sl_pct / 100.0);
+            s.add_log(format!("▶ BUY {} ${:.0} @{:.2} sz={:.0}",
+                outcome.to_uppercase(), amount, price, size),
                 if side == "up" { Color::Green } else { Color::Red });
+            if s.sl_pct > 0.0 {
+                s.add_log(format!("  SL: {}% {}  — colocar tras ver FILL real", s.sl_pct, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
+            } else {
+                s.add_log("  SL: OFF", Color::DarkGray);
+            }
             if let Err(e) = http_post("/api/orders/limit",
                 &format!(r#"{{"side":"buy","outcome":"{}","price":{},"size":{}}}"#, outcome, price, size)).await {
                 s.add_log(format!("BUY FAIL: {}", e), Color::Red);
+            }
+
+            // Place SL order (limit sell at SL price)
+            if !s.sl_market {
+                s.add_log(format!("▶ SL LIMIT SELL {} @{:.4}", outcome.to_uppercase(), sl_price), Color::Yellow);
+                if let Err(e) = http_post("/api/orders/limit",
+                    &format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, sl_price, size)).await {
+                    s.add_log(format!("SL FAIL: {}", e), Color::Red);
+                }
+            } else {
+                s.add_log(format!("  SL: {}% MARKET — ejecutar manual si precio baja a {:.4}", s.sl_pct, sl_price), Color::DarkGray);
             }
 
             // Place exit limit SELL if specified
