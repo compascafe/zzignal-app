@@ -350,7 +350,7 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
             }
         }
         _ => {
-            s.add_log(format!("?: /{}   |  /h5..h100 /o5..o100 /s5..s100 /p", cmd), Color::Red);
+            s.add_log(format!("?: /{}   |  /s5..s100 /p", cmd), Color::Red);
         }
     }
 }

@@ -7,7 +7,7 @@ use ratatui::Frame;
 use crate::InputMode;
 use crate::State;
 
-const TAB_NAMES: &[&str] = &["LIVE", "PAPER"];
+const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY"];
 
 pub fn draw(f: &mut Frame, s: &State) {
     let area = f.area();
@@ -19,7 +19,7 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Length(1),     // commit bar
         Constraint::Length(1),     // tab bar
         Constraint::Length(pos_h), // position bar
-        Constraint::Min(1),        // main content (dashboard)
+        Constraint::Min(1),        // dashboard
     ];
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
     constraints.push(Constraint::Length(1)); // footer
@@ -39,8 +39,8 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── TAB BAR ──────────────────────────────────────────────────────
     let tab_titles: Vec<Line> = TAB_NAMES.iter().enumerate().map(|(i, name)| {
         let style = if i == s.tab {
-            if i == 0 { Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD) }
-            else { Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD) }
+            if i == 0 { Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD) }
+            else { Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD) }
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -52,7 +52,7 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── POSITION BAR ─────────────────────────────────────────────────
     draw_position_bar(f, chunks[ci], s); ci += 1;
 
-    // ─── DASHBOARD ────────────────────────────────────────────────────
+    // ─── MAIN ─────────────────────────────────────────────────────────
     draw_dashboard(f, chunks[ci], s);
     ci += 1;
 
