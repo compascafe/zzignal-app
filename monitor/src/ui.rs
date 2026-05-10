@@ -76,10 +76,10 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
         Constraint::Length(1),     // ping bar
         Constraint::Length(1),     // session bar
         Constraint::Length(3),     // UP/DOWN prices
-        Constraint::Length(5),     // depth panel
-        Constraint::Length(4),     // indicators + state
+        Constraint::Length(7),     // depth panel (mas espacio)
+        Constraint::Length(3),     // indicators + state (compacto)
     ];
-    constraints.push(Constraint::Min(2)); // event log
+    constraints.push(Constraint::Min(1)); // event log (minimo)
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut idx: usize = 0;
@@ -99,11 +99,11 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     // Depth panel
     draw_depth_panel(f, m[idx], s); idx += 1;
 
-    // Indicators + State
-    draw_indicators(f, m[idx], s); idx += 1;
+    // Indicators compact
+    draw_indicators_compact(f, m[idx], s); idx += 1;
 
-    // Event log
-    let lines: Vec<Line> = s.log.iter().map(|e| Line::from(vec![
+    // Event log (compact)
+    let lines: Vec<Line> = s.log.iter().take(4).map(|e| Line::from(vec![
         Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
         Span::styled(&e.text, Style::default().fg(e.color)),
     ])).collect();
@@ -238,7 +238,7 @@ fn draw_price_panel(f: &mut Frame, area: Rect, s: &State) {
 // INDICATORS + STATE
 // ═══════════════════════════════════════════════════════════════════
 
-fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
+fn draw_indicators_compact(f: &mut Frame, area: Rect, s: &State) {
     let b = Modifier::BOLD;
     let mut lines: Vec<Line> = Vec::new();
 
