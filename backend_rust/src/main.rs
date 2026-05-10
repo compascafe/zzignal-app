@@ -88,9 +88,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (*creds).clone(),
     );
 
-    // ─── Variants start OFF — trader must activate via /h10 or /o20 ───
-    state.odiseo_trading.set_variant(0, false); // Odiseo 83
-    state.odiseo_trading.set_variant(1, false); // Houdini 65
+    // ─── ESTRATEGIAS AUTOMATICAS DESACTIVADAS — trading manual ───
+    // Los indicadores (momentum, BTC vel, CLOB delta) siguen activos
+    // Las ordenes se ejecutan MANUALMENTE desde el TUI via comandos /b /s /l
+    state.odiseo_trading.set_live_mode(false);
+    state.odiseo_trading.set_variant(0, false); // Odiseo 83 OFF
+    state.odiseo_trading.set_variant(1, false); // Houdini 65 OFF
+    state.odiseo_trading.set_variant(2, false); // Senna OFF
 
     // ─── Import Wisdom from file (CLI: --import-wisdom <path>) ──────────────
     if let Some(pos) = std::env::args().position(|a| a == "--import-wisdom") {
@@ -766,59 +770,15 @@ async fn capture_combined(
             depth_concentration: rec.depth_concentration,
         };
 
-        let (odiseo_trades, _odiseo_signal) = state.odiseo_trading.on_tick(
-            active_sid,
-            state.t5_manager.seconds_left(active_sid) as i32,
-            rec.poly_bid_vol_all, rec.poly_ask_vol_all,
-            rec.poly_imbalance, rec.price_velocity,
-            lt_up, lt_down,
-            &filter_ctx,
-        );
-        rec.od83_filters = state.odiseo_trading.filter_chain.enabled_mask();
-        let entry_trigger = *state.odiseo_trading.last_trigger.lock().unwrap();
-        for (code, active, entry, size, pnl, exit_price, exit_reason, balance) in odiseo_trades {
-            match code.as_str() {
-                "odiseo83_up"   => { 
-                    if rec.odiseo83_up_active == 0 && active == 2 { rec.od83_event = "IN_UP".into(); }
-                    else if rec.odiseo83_up_active == 2 && active == 0 && exit_reason > 0 { rec.od83_event = "OUT_UP".into(); }
-                    rec.odiseo83_up_active = active; rec.odiseo83_up_entry_price = entry; rec.odiseo83_up_size = size; rec.odiseo83_up_pnl = pnl; rec.odiseo83_up_exit_price = exit_price; rec.odiseo83_up_exit_reason = exit_reason; rec.odiseo83_up_balance = balance;
-                }
-                "odiseo83_down" => {
-                    if rec.odiseo83_down_active == 0 && active == 2 { rec.od83_event = "IN_DN".into(); }
-                    else if rec.odiseo83_down_active == 2 && active == 0 && exit_reason > 0 { rec.od83_event = "OUT_DN".into(); }
-                    rec.odiseo83_down_active = active; rec.odiseo83_down_entry_price = entry; rec.odiseo83_down_size = size; rec.odiseo83_down_pnl = pnl; rec.odiseo83_down_exit_price = exit_price; rec.odiseo83_down_exit_reason = exit_reason; rec.odiseo83_down_balance = balance;
-                }
-                "houdini65_up" => {
-                    if rec.houdini65_up_active == 0 && active == 2 { rec.houdini65_event = "IN_UP".into(); }
-                    else if rec.houdini65_up_active == 2 && active == 0 && exit_reason > 0 { rec.houdini65_event = "OUT_UP".into(); }
-                    rec.houdini65_up_active = active; rec.houdini65_up_entry_price = entry; rec.houdini65_up_size = size; rec.houdini65_up_pnl = pnl; rec.houdini65_up_exit_price = exit_price; rec.houdini65_up_exit_reason = exit_reason; rec.houdini65_up_balance = balance;
-                }
-                "houdini65_down" => {
-                    if rec.houdini65_down_active == 0 && active == 2 { rec.houdini65_event = "IN_DN".into(); }
-                    else if rec.houdini65_down_active == 2 && active == 0 && exit_reason > 0 { rec.houdini65_event = "OUT_DN".into(); }
-                    rec.houdini65_down_active = active; rec.houdini65_down_entry_price = entry; rec.houdini65_down_size = size; rec.houdini65_down_pnl = pnl; rec.houdini65_down_exit_price = exit_price; rec.houdini65_down_exit_reason = exit_reason; rec.houdini65_down_balance = balance;
-                }
-                "scalper_up" => {
-                    if rec.scalper_up_active == 0 && active == 2 {
-                        rec.scalper_event = "IN_UP".into(); rec.entry_trigger = entry_trigger;
-                        let cents = entry * 100.0;
-                        rec.tp_pct = (15.0 - 0.1 * cents).max(3.0).min(12.0);
-                    }
-                    else if rec.scalper_up_active == 2 && active == 0 && exit_reason > 0 { rec.scalper_event = "OUT_UP".into(); }
-                    rec.scalper_up_active = active; rec.scalper_up_entry_price = entry; rec.scalper_up_size = size; rec.scalper_up_pnl = pnl; rec.scalper_up_exit_price = exit_price; rec.scalper_up_exit_reason = exit_reason; rec.scalper_up_balance = balance;
-                }
-                "scalper_down" => {
-                    if rec.scalper_down_active == 0 && active == 2 {
-                        rec.scalper_event = "IN_DN".into(); rec.entry_trigger = entry_trigger;
-                        let cents = entry * 100.0;
-                        rec.tp_pct = (15.0 - 0.1 * cents).max(3.0).min(12.0);
-                    }
-                    else if rec.scalper_down_active == 2 && active == 0 && exit_reason > 0 { rec.scalper_event = "OUT_DN".into(); }
-                    rec.scalper_down_active = active; rec.scalper_down_entry_price = entry; rec.scalper_down_size = size; rec.scalper_down_pnl = pnl; rec.scalper_down_exit_price = exit_price; rec.scalper_down_exit_reason = exit_reason; rec.scalper_down_balance = balance;
-                }
-                _ => {}
-            }
+        // ─── INDICATORS ONLY — no automated trading ──────────────────
+        // Compute momentum signals for manual trader display
+        {
+            let gap = lt_up.unwrap_or(0.0) - wu.iter().rev().nth(1).map(|(p,_)| *p).unwrap_or(0.0);
+            *state.odiseo_trading.last_clob_delta.lock().unwrap() = gap;
+            *state.odiseo_trading.last_btc_vel.lock().unwrap() = rec.price_velocity;
+            rec.od83_filters = 0;
         }
+        // Skip on_tick() — strategies disabled, manual trading only
     } // end Odiseo trading block
 
     // ─── Anti-Flash Dump metrics ───────────────────────────────────────
