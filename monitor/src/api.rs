@@ -34,6 +34,11 @@ pub struct WsMsg {
     /// Real-time HFT state (broadcast in-band, ~every tick)
     #[serde(default)]
     pub data: Option<HftState>,
+    /// Orderbook snapshot (broadcast from CLOB WS)
+    #[serde(default)]
+    pub side: Option<String>,
+    #[serde(default)]
+    pub book: Option<BookDepth>,
 }
 
 // ─── REST Response Types ────────────────────────────────────────────

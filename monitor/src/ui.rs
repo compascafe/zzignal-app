@@ -121,12 +121,23 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
 
     let bar_w = chunks[0].width.saturating_sub(14) as usize;
 
-    // UP depth from WS
-    let max_up = s.hft.depth_up_bids.iter().map(|&(_,s)| s)
-        .chain(s.hft.depth_up_asks.iter().map(|&(_,s)| s))
+    // ─── UP depth (primary: book_up WS, fallback: hft.depth_up) ───
+    let up_bids: Vec<(f64,f64)> = if !s.book_up.bids.is_empty() {
+        s.book_up.bids.iter().map(|l| (l.price, l.size)).collect()
+    } else {
+        s.hft.depth_up_bids.clone()
+    };
+    let up_asks: Vec<(f64,f64)> = if !s.book_up.asks.is_empty() {
+        s.book_up.asks.iter().map(|l| (l.price, l.size)).collect()
+    } else {
+        s.hft.depth_up_asks.clone()
+    };
+
+    let max_up = up_bids.iter().map(|&(_,s)| s)
+        .chain(up_asks.iter().map(|&(_,s)| s))
         .fold(0.0f64, f64::max).max(1.0);
     let mut up_lines: Vec<Line> = Vec::new();
-    for &(price, size) in s.hft.depth_up_asks.iter().take(10).rev() {
+    for &(price, size) in up_asks.iter().take(10).rev() {
         let w = ((size / max_up) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         up_lines.push(Line::from(vec![
@@ -135,7 +146,7 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
-    for &(price, size) in s.hft.depth_up_bids.iter().take(10) {
+    for &(price, size) in up_bids.iter().take(10) {
         let w = ((size / max_up) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         up_lines.push(Line::from(vec![
@@ -143,18 +154,32 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
             Span::styled(bar, Style::default().fg(Color::Green)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
+    }
+    if up_lines.is_empty() {
+        up_lines.push(Line::from(Span::styled("  esperando...", Style::default().fg(Color::DarkGray))));
     }
     f.render_widget(
         Paragraph::new(up_lines)
             .block(Block::default().borders(Borders::ALL).title("UP Book").border_style(Style::default().fg(Color::Green))),
         chunks[0]);
 
-    // DOWN depth from WS
-    let max_dn = s.hft.depth_dn_bids.iter().map(|&(_,s)| s)
-        .chain(s.hft.depth_dn_asks.iter().map(|&(_,s)| s))
+    // ─── DOWN depth (primary: book_dn WS, fallback: hft.depth_dn) ───
+    let dn_bids: Vec<(f64,f64)> = if !s.book_dn.bids.is_empty() {
+        s.book_dn.bids.iter().map(|l| (l.price, l.size)).collect()
+    } else {
+        s.hft.depth_dn_bids.clone()
+    };
+    let dn_asks: Vec<(f64,f64)> = if !s.book_dn.asks.is_empty() {
+        s.book_dn.asks.iter().map(|l| (l.price, l.size)).collect()
+    } else {
+        s.hft.depth_dn_asks.clone()
+    };
+
+    let max_dn = dn_bids.iter().map(|&(_,s)| s)
+        .chain(dn_asks.iter().map(|&(_,s)| s))
         .fold(0.0f64, f64::max).max(1.0);
     let mut dn_lines: Vec<Line> = Vec::new();
-    for &(price, size) in s.hft.depth_dn_asks.iter().take(10).rev() {
+    for &(price, size) in dn_asks.iter().take(10).rev() {
         let w = ((size / max_dn) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         dn_lines.push(Line::from(vec![
@@ -163,7 +188,7 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
-    for &(price, size) in s.hft.depth_dn_bids.iter().take(10) {
+    for &(price, size) in dn_bids.iter().take(10) {
         let w = ((size / max_dn) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         dn_lines.push(Line::from(vec![
@@ -171,6 +196,9 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
             Span::styled(bar, Style::default().fg(Color::Green)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
+    }
+    if dn_lines.is_empty() {
+        dn_lines.push(Line::from(Span::styled("  esperando...", Style::default().fg(Color::DarkGray))));
     }
     f.render_widget(
         Paragraph::new(dn_lines)

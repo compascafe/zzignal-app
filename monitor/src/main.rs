@@ -554,6 +554,15 @@ async fn main() -> io::Result<()> {
                         apply_hft_state(hft, &mut s);
                     }
                 }
+                Some("book") => {
+                    if let Some(ref book) = msg.book {
+                        match msg.side.as_deref() {
+                            Some("up") => s.book_up = book.clone(),
+                            Some("down") => s.book_dn = book.clone(),
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {}
             }
         }
