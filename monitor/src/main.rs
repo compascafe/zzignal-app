@@ -617,17 +617,6 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // ─── Poll Depth (1s) ─────────────────────────────────────────
-        if s.last_poll_depth.elapsed() > Duration::from_secs(1) {
-            s.last_poll_depth = Instant::now();
-            if let Some(d) = http_get::<BookDepth>("/api/book/up").await {
-                s.book_up = d;
-            }
-            if let Some(d) = http_get::<BookDepth>("/api/book/down").await {
-                s.book_dn = d;
-            }
-        }
-
         // ─── Keyboard ────────────────────────────────────────────────
         while let Ok(k) = irx.try_recv() {
             // ── Command mode ──────────────────────────────────────

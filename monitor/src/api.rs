@@ -111,6 +111,10 @@ pub struct HftState {
     pub sen_event: String,
     pub sen_clob_delta: f64,
     pub sen_btc_vel: f64,
+    pub depth_up_bids: Vec<(f64,f64)>,
+    pub depth_up_asks: Vec<(f64,f64)>,
+    pub depth_dn_bids: Vec<(f64,f64)>,
+    pub depth_dn_asks: Vec<(f64,f64)>,
 }
 
 #[derive(Debug, Deserialize, Default)]

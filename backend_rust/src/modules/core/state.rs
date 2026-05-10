@@ -66,6 +66,10 @@ pub struct LatestHftState {
     pub sen_event: String,
     pub sen_clob_delta: f64,    // CLOB momentum: token Δ price
     pub sen_btc_vel: f64,       // BTC velocity at last eval
+    pub depth_up_bids: Vec<(f64,f64)>,  // top 10 UP bids (price,size)
+    pub depth_up_asks: Vec<(f64,f64)>,  // top 10 UP asks
+    pub depth_dn_bids: Vec<(f64,f64)>,  // top 10 DN bids
+    pub depth_dn_asks: Vec<(f64,f64)>,  // top 10 DN asks
 }
 
 pub struct AppState {

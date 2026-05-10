@@ -119,30 +119,29 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
         .split(area);
 
-    // UP depth
-    let max_size_up = s.book_up.bids.iter().map(|l| l.size)
-        .chain(s.book_up.asks.iter().map(|l| l.size))
-        .fold(0.0f64, f64::max).max(1.0);
     let bar_w = chunks[0].width.saturating_sub(14) as usize;
+
+    // UP depth from WS
+    let max_up = s.hft.depth_up_bids.iter().map(|&(_,s)| s)
+        .chain(s.hft.depth_up_asks.iter().map(|&(_,s)| s))
+        .fold(0.0f64, f64::max).max(1.0);
     let mut up_lines: Vec<Line> = Vec::new();
-    // Asks (sell wall - red, reversed)
-    for l in s.book_up.asks.iter().take(10).rev() {
-        let w = ((l.size / max_size_up) * bar_w as f64) as usize;
+    for &(price, size) in s.hft.depth_up_asks.iter().take(10).rev() {
+        let w = ((size / max_up) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         up_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Red)),
+            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Red)),
             Span::styled(bar, Style::default().fg(Color::Red)),
-            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
-    // Bids (buy wall - green)
-    for l in s.book_up.bids.iter().take(10) {
-        let w = ((l.size / max_size_up) * bar_w as f64) as usize;
+    for &(price, size) in s.hft.depth_up_bids.iter().take(10) {
+        let w = ((size / max_up) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         up_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Green)),
+            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Green)),
             Span::styled(bar, Style::default().fg(Color::Green)),
-            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
     f.render_widget(
@@ -150,27 +149,27 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
             .block(Block::default().borders(Borders::ALL).title("UP Book").border_style(Style::default().fg(Color::Green))),
         chunks[0]);
 
-    // DOWN depth
-    let max_size_dn = s.book_dn.bids.iter().map(|l| l.size)
-        .chain(s.book_dn.asks.iter().map(|l| l.size))
+    // DOWN depth from WS
+    let max_dn = s.hft.depth_dn_bids.iter().map(|&(_,s)| s)
+        .chain(s.hft.depth_dn_asks.iter().map(|&(_,s)| s))
         .fold(0.0f64, f64::max).max(1.0);
     let mut dn_lines: Vec<Line> = Vec::new();
-    for l in s.book_dn.asks.iter().take(10).rev() {
-        let w = ((l.size / max_size_dn) * bar_w as f64) as usize;
+    for &(price, size) in s.hft.depth_dn_asks.iter().take(10).rev() {
+        let w = ((size / max_dn) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         dn_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Red)),
+            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Red)),
             Span::styled(bar, Style::default().fg(Color::Red)),
-            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
-    for l in s.book_dn.bids.iter().take(10) {
-        let w = ((l.size / max_size_dn) * bar_w as f64) as usize;
+    for &(price, size) in s.hft.depth_dn_bids.iter().take(10) {
+        let w = ((size / max_dn) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         dn_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", l.price), Style::default().fg(Color::Green)),
+            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Green)),
             Span::styled(bar, Style::default().fg(Color::Green)),
-            Span::styled(format!(" {:.0}", l.size), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
     f.render_widget(
