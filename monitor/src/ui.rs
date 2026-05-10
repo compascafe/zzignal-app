@@ -22,7 +22,7 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Min(1),        // dashboard
     ];
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
-    constraints.push(Constraint::Length(1)); // footer
+    constraints.push(Constraint::Length(2)); // footer
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut ci = 0;
@@ -1040,9 +1040,13 @@ fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
-    let line = "[/]comandos  /s5..s100 /p  [Tab]cambiar  [q]salir";
+    let sl_info = if s.sl_pct > 0.0 {
+        format!("{:.0}% {}", s.sl_pct, if s.sl_market {"MKT"}else{"LMT"})
+    } else { "OFF".into() };
+    let line1 = format!("TRADE: /10up65 /15d40  |  EXIT: /20up65e70  |  SL:{} /sl /sl10 /nsl  |  /p=PANIC", sl_info);
+    let line2 = "[/]abrir comandos  [Tab]DINERO REAL/PAPER  [q]salir";
     f.render_widget(
-        Paragraph::new(line)
+        Paragraph::new(format!("{}\n{}", line1, line2))
             .style(Style::default().fg(Color::DarkGray)),
         area,
     );
