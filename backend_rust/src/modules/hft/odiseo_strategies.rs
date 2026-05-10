@@ -362,14 +362,11 @@ impl OdiseoTradingManager {
                 }
             }
             // ─────────────────────────────────────────────────────────
-            // Scalp mode: use best_ask as entry (real fill price from market buy)
-            let entry_px = if def.momentum_delta > 0.0 && ctx.best_ask > 0.0 && ctx.best_ask < 1.0 {
-                ctx.best_ask
-            } else { px };
-            pos.entered = true; pos.entry_price = entry_px;
+            // Use px (signal price) as entry — best_ask can have wide spreads
+            pos.entered = true; pos.entry_price = px;
             pos.signal_px = px;  // signal price (before slippage)
-            pos.size = (budget/entry_px).floor().max(1.0);
-            pos.max_price = entry_px; pos.min_price = entry_px; pos.prev_vol = if is_up{av}else{bv};
+            pos.size = (budget/px).floor().max(1.0);
+            pos.max_price = px; pos.min_price = px; pos.prev_vol = if is_up{av}else{bv};
             pos.confirm_count = 0;
             pos.entry_seconds = seconds_left;  // for Senna timeout
             *sig |= if is_up{1}else{2};
