@@ -157,7 +157,7 @@ impl State {
     }
 }
 
-/// Slash command parser: /h10 /o20 /p  (budgets: 5..100, multiples of 5)
+/// Slash command parser: /b /s /l /p — manual trading
 async fn exec_slash_command(cmd: &str, s: &mut State) {
     let cmd = cmd.trim();
     if cmd.is_empty() { return; }
@@ -166,191 +166,61 @@ async fn exec_slash_command(cmd: &str, s: &mut State) {
     let rest = &cmd[1..];
 
     match first {
-        // ─── PANIC: liquidate + market sell + disable ALL strategies ───
+        // ─── PANIC ───
         'p' => {
-            s.add_log("PANIC — liquidando + apagando TODO", Color::Red);
-            s.pos_h65_up = false; s.pos_h65_dn = false;
-            s.pos_odi_up = false; s.pos_odi_dn = false;
-            s.h65_enabled = false; s.odi_enabled = false;
-            // NO lock — let poll confirm backend state
-
-            // 1. PANIC endpoint (cancel + market sell + internal disable_all)
+            s.add_log("PANIC — liquidando TODO", Color::Red);
             if let Err(e) = http_post("/api/panic", "{}").await {
                 s.add_log(format!("PANIC FAIL: {}", e), Color::Red);
-            }
-
-            // 2. Explicitly disable LIVE mode
-            if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":false}").await {
-                s.add_log(format!("LIVE OFF FAIL: {}", e), Color::Red);
-            }
-
-            // 3. Explicitly disable ALL variants (same as zz-emergency)
-            for idx in 0..3 {
-                let body = format!("{{\"index\":{},\"enable\":false}}", idx);
-                if let Err(e) = http_post("/api/odiseo/variant", &body).await {
-                    s.add_log(format!("VAR {} OFF FAIL: {}", idx, e), Color::Red);
-                }
-            }
-            s.add_log("TODAS LAS ESTRATEGIAS APAGADAS", Color::Green);
-        }
-        // ─── Houdini 65: /h = toggle, /h5..h100 = ON + budget + LIVE ───
-        'h' => {
-            let idx = 1;
-            if rest.is_empty() {
-                s.h65_enabled = !s.h65_enabled;
-                s.h65_lock = true;
-                if s.h65_enabled {
-                    s.selected_variant = 1;
-                    s.add_log(format!("H65 ON  ${:.0}", s.h65_budget), Color::Green);
-                    // also enable LIVE mode so orders are real
-                    let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
-                } else {
-                    s.add_log("H65 OFF", Color::DarkGray);
-                }
-                if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.h65_enabled)).await {
-                    s.add_log(format!("H65 API FAIL: {}", e), Color::Red);
-                    s.h65_lock = false;
-                }
             } else {
-                match rest.parse::<f64>() {
-                    Ok(amt) if amt >= 5.0 && amt <= 100.0 && amt.trunc() % 5.0 == 0.0 => {
-                        s.h65_budget = amt;
-                        s.h65_enabled = true;
-                        s.selected_variant = 1;
-                        s.h65_lock = true;
-                        s.add_log(format!("H65 LIVE ${:.0}", amt), Color::Green);
-                        let mut ok = true;
-                        // 1. Enable LIVE mode (orders reales)
-                        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
-                            s.add_log(format!("LIVE ON FAIL: {}", e), Color::Red);
-                            ok = false;
-                        }
-                        // 2. Disable all other variants except Houdini 65
-                        for i in 0..3 {
-                            if i == idx { continue; }
-                            let body = format!("{{\"index\":{},\"enable\":false}}", i);
-                            let _ = http_post("/api/odiseo/variant", &body).await;
-                        }
-                        // 3. Enable Houdini 65
-                        if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
-                            s.add_log(format!("H65 API FAIL: {}", e), Color::Red);
-                            ok = false;
-                        }
-                        // 4. Set budget
-                        if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
-                            s.add_log(format!("H65 BUDGET API FAIL: {}", e), Color::Red);
-                            ok = false;
-                        }
-                        if !ok { s.h65_lock = false; }
-                    }
-                    _ => {
-                        s.add_log("USO: /h5..h100 (múltiplos de 5)", Color::Red);
-                    }
-                }
+                s.add_log("TODO LIQUIDADO", Color::Green);
             }
         }
-        // ─── Odiseo 83: /o = toggle, /o5..o100 = ON + budget + LIVE ───
-        'o' => {
-            let idx = 0;
-            if rest.is_empty() {
-                s.odi_enabled = !s.odi_enabled;
-                s.odi_lock = true;
-                if s.odi_enabled {
-                    s.selected_variant = 0;
-                    s.add_log(format!("O83 ON  ${:.0}", s.odi_budget), Color::Green);
-                    let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
-                } else {
-                    s.add_log("O83 OFF", Color::DarkGray);
-                }
-                if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.odi_enabled)).await {
-                    s.add_log(format!("O83 API FAIL: {}", e), Color::Red);
-                    s.odi_lock = false;
-                }
-            } else {
-                match rest.parse::<f64>() {
-                    Ok(amt) if amt >= 5.0 && amt <= 100.0 && amt.trunc() % 5.0 == 0.0 => {
-                        s.odi_budget = amt;
-                        s.odi_enabled = true;
-                        s.selected_variant = 0;
-                        s.odi_lock = true;
-                        s.add_log(format!("O83 LIVE ${:.0}", amt), Color::Green);
-                        let mut ok = true;
-                        // 1. Enable LIVE mode
-                        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
-                            s.add_log(format!("LIVE ON FAIL: {}", e), Color::Red);
-                            ok = false;
-                        }
-                        // 2. Disable all other variants except Odiseo 83
-                        for i in 0..3 {
-                            if i == idx { continue; }
-                            let body = format!("{{\"index\":{},\"enable\":false}}", i);
-                            let _ = http_post("/api/odiseo/variant", &body).await;
-                        }
-                        // 3. Enable Odiseo 83
-                        if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
-                            s.add_log(format!("O83 API FAIL: {}", e), Color::Red);
-                            ok = false;
-                        }
-                        // 4. Set budget
-                        if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
-                            s.add_log(format!("O83 BUDGET API FAIL: {}", e), Color::Red);
-                            ok = false;
-                        }
-                        if !ok { s.odi_lock = false; }
-                    }
-                    _ => {
-                        s.add_log("USO: /o5..o100 (múltiplos de 5)", Color::Red);
-                    }
-                }
+        // ─── BUY UP market (/b10 = $10) ───
+        'b' => {
+            let amt: f64 = rest.parse().unwrap_or(10.0);
+            let amt = if amt < 1.0 { 1.0 } else if amt > 200.0 { 200.0 } else { amt };
+            s.add_log(format!("▶ BUY UP market ${:.0}", amt), Color::Green);
+            if let Err(e) = http_post("/api/orders/market", &format!(r#"{{"side":"buy","outcome":"up","amount_usdc":{}}}"#, amt)).await {
+                s.add_log(format!("BUY FAIL: {}", e), Color::Red);
             }
         }
-        // ─── Senna (Scalper Momentum): /s = toggle, /s5..s100 = ON + budget ───
+        // ─── BUY DOWN market (/B15 = $15) ───
+        'B' => {
+            let amt: f64 = rest.parse().unwrap_or(10.0);
+            let amt = if amt < 1.0 { 1.0 } else if amt > 200.0 { 200.0 } else { amt };
+            s.add_log(format!("▶ BUY DN market ${:.0}", amt), Color::Red);
+            if let Err(e) = http_post("/api/orders/market", &format!(r#"{{"side":"buy","outcome":"down","amount_usdc":{}}}"#, amt)).await {
+                s.add_log(format!("BUY FAIL: {}", e), Color::Red);
+            }
+        }
+        // ─── SELL UP market (/s) ───
         's' => {
-            let idx = 2;
-            if rest.is_empty() {
-                s.sen_enabled = !s.sen_enabled;
-                s.sen_lock = true;
-                if s.sen_enabled {
-                    s.selected_variant = 2;
-                    s.add_log(format!("SENNA ON ${:.0}", s.sen_budget), Color::Green);
-                    let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
-                } else {
-                    s.add_log("SENNA OFF", Color::DarkGray);
-                }
-                if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":{}}}", idx, s.sen_enabled)).await {
-                    s.add_log(format!("SENNA API FAIL: {}", e), Color::Red);
-                    s.sen_lock = false;
+            s.add_log("▶ SELL UP market", Color::Yellow);
+            if let Err(e) = http_post("/api/panic", r#"{"outcome":"up"}"#).await {
+                s.add_log(format!("SELL FAIL: {}", e), Color::Red);
+            }
+        }
+        // ─── SELL DOWN market (/S) ───
+        'S' => {
+            s.add_log("▶ SELL DN market", Color::Yellow);
+            if let Err(e) = http_post("/api/panic", r#"{"outcome":"down"}"#).await {
+                s.add_log(format!("SELL FAIL: {}", e), Color::Red);
+            }
+        }
+        // ─── LIMIT BUY UP (/l65 = limit buy at 0.65 with $10) ───
+        'l' => {
+            if let Ok(price) = rest.parse::<f64>() {
+                let p = if price < 0.01 { 0.01 } else if price > 0.99 { 0.99 } else { price };
+                s.add_log(format!("▶ LIMIT BUY UP @{:.2} $10", p), Color::Cyan);
+                if let Err(e) = http_post("/api/orders/limit", &format!(r#"{{"side":"buy","outcome":"up","price":{},"size":10}}"#, p)).await {
+                    s.add_log(format!("LIMIT FAIL: {}", e), Color::Red);
                 }
             } else {
-                match rest.parse::<f64>() {
-                    Ok(amt) if amt >= 5.0 && amt <= 100.0 && amt.trunc() % 5.0 == 0.0 => {
-                        s.sen_budget = amt;
-                        s.sen_enabled = true;
-                        s.selected_variant = 2;
-                        s.sen_lock = true;
-                        s.add_log(format!("SENNA LIVE ${:.0}", amt), Color::Green);
-                        let mut ok = true;
-                        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
-                            s.add_log(format!("LIVE ON FAIL: {}", e), Color::Red);
-                            ok = false;
-                        }
-                        for i in 0..3 { if i == idx { continue; }
-                            let _ = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":false}}", i)).await;
-                        }
-                        if let Err(e) = http_post("/api/odiseo/variant", &format!("{{\"index\":{},\"enable\":true}}", idx)).await {
-                            s.add_log(format!("SENNA API FAIL: {}", e), Color::Red); ok = false;
-                        }
-                        if let Err(e) = http_post("/api/odiseo/budget", &format!("{{\"index\":{},\"amount\":{}}}", idx, amt)).await {
-                            s.add_log(format!("SENNA BUDGET FAIL: {}", e), Color::Red); ok = false;
-                        }
-                        if !ok { s.sen_lock = false; }
-                    }
-                    _ => { s.add_log("USO: /s5..s100 (múltiplos de 5)", Color::Red); }
-                }
+                s.add_log("USO: /l65 (price in cents)", Color::Red);
             }
         }
         _ => {
-            s.add_log(format!("?: /{}   |  /s5..s100 /p", cmd), Color::Red);
+            s.add_log(format!("?: /{}   |  /b /B /s /S /l /p", cmd), Color::Red);
         }
     }
 }
