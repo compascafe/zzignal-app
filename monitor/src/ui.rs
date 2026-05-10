@@ -76,8 +76,8 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
         Constraint::Length(1),     // ping bar
         Constraint::Length(1),     // session bar
         Constraint::Length(3),     // UP/DOWN prices
-        Constraint::Length(7),     // depth panel (mas espacio)
-        Constraint::Length(3),     // indicators + state (compacto)
+        Constraint::Length(13),    // depth panel — orderbook en vivo
+        Constraint::Length(2),     // indicators + state (compacto)
     ];
     constraints.push(Constraint::Min(1)); // event log (minimo)
 
@@ -121,89 +121,96 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
 
     let bar_w = chunks[0].width.saturating_sub(14) as usize;
 
-    // ─── UP depth (primary: book_up WS, fallback: hft.depth_up) ───
-    let up_bids: Vec<(f64,f64)> = if !s.book_up.bids.is_empty() {
-        s.book_up.bids.iter().map(|l| (l.price, l.size)).collect()
+    // ─── UP depth ───
+    draw_book_side(f, chunks[0], bar_w, "UP", Color::Green, &s.book_up, &s.hft.depth_up_bids, &s.hft.depth_up_asks);
+
+    // ─── DOWN depth ───
+    draw_book_side(f, chunks[1], bar_w, "DOWN", Color::Red, &s.book_dn, &s.hft.depth_dn_bids, &s.hft.depth_dn_asks);
+}
+
+fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c: Color,
+                   book: &crate::api::BookDepth, bids_fb: &[(f64,f64)], asks_fb: &[(f64,f64)]) {
+    let bids: Vec<(f64,f64)> = if !book.bids.is_empty() {
+        book.bids.iter().map(|l| (l.price, l.size)).collect()
     } else {
-        s.hft.depth_up_bids.clone()
+        bids_fb.to_vec()
     };
-    let up_asks: Vec<(f64,f64)> = if !s.book_up.asks.is_empty() {
-        s.book_up.asks.iter().map(|l| (l.price, l.size)).collect()
+    let asks: Vec<(f64,f64)> = if !book.asks.is_empty() {
+        book.asks.iter().map(|l| (l.price, l.size)).collect()
     } else {
-        s.hft.depth_up_asks.clone()
+        asks_fb.to_vec()
     };
 
-    let max_up = up_bids.iter().map(|&(_,s)| s)
-        .chain(up_asks.iter().map(|&(_,s)| s))
+    let best_bid = bids.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max);
+    let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
+
+    // Filter: solo niveles cerca de la acción (top bids, top asks)
+    let top_asks: Vec<_> = asks.iter().filter(|&&(p,_)| p <= best_ask + 0.08).take(6).cloned().collect();
+    let top_bids: Vec<_> = bids.iter().filter(|&&(p,_)| p >= best_bid - 0.08).take(6).cloned().collect();
+    // Reverse asks so highest (farthest) is at top, ask ceiling at bottom
+    let top_asks: Vec<_> = top_asks.into_iter().rev().collect();
+
+    let max_size = top_asks.iter().map(|&(_,s)| s)
+        .chain(top_bids.iter().map(|&(_,s)| s))
         .fold(0.0f64, f64::max).max(1.0);
-    let mut up_lines: Vec<Line> = Vec::new();
-    for &(price, size) in up_asks.iter().take(10).rev() {
-        let w = ((size / max_up) * bar_w as f64) as usize;
+
+    let spread = if best_bid > 0.0 && best_ask > 0.0 { best_ask - best_bid } else { 0.0 };
+    let mid = if best_bid > 0.0 && best_ask > 0.0 { (best_bid + best_ask) / 2.0 } else { 0.0 };
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Asks (venta) — rojo, descienden hacia el ceiling
+    for &(price, size) in &top_asks {
+        let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
-        up_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Red)),
+        let is_ceiling = (price - best_ask).abs() < 0.0001;
+        let c = if is_ceiling { Color::Yellow } else { Color::Red };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4} ", price), Style::default().fg(c)),
             Span::styled(bar, Style::default().fg(Color::Red)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
-    for &(price, size) in up_bids.iter().take(10) {
-        let w = ((size / max_up) * bar_w as f64) as usize;
+
+    // ─── SPREAD ZONE ─── ceiling / floor
+    if best_bid > 0.0 && best_ask > 0.0 {
+        let spread_str = format!("{:.4}", spread);
+        let mid_str = format!("{:.4}", mid);
+        let s_label = format!("── SPREAD {spread_str} ── MID {mid_str} ──");
+        lines.push(Line::from(vec![
+            Span::styled(s_label, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+
+    // Bids (compra) — verde, ascienden desde el floor
+    for &(price, size) in &top_bids {
+        let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
-        up_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Green)),
+        let is_floor = (price - best_bid).abs() < 0.0001;
+        let c = if is_floor { Color::Yellow } else { Color::Green };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4} ", price), Style::default().fg(c)),
             Span::styled(bar, Style::default().fg(Color::Green)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
-    if up_lines.is_empty() {
-        up_lines.push(Line::from(Span::styled("  esperando...", Style::default().fg(Color::DarkGray))));
-    }
-    f.render_widget(
-        Paragraph::new(up_lines)
-            .block(Block::default().borders(Borders::ALL).title("UP Book").border_style(Style::default().fg(Color::Green))),
-        chunks[0]);
 
-    // ─── DOWN depth (primary: book_dn WS, fallback: hft.depth_dn) ───
-    let dn_bids: Vec<(f64,f64)> = if !s.book_dn.bids.is_empty() {
-        s.book_dn.bids.iter().map(|l| (l.price, l.size)).collect()
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled("  esperando...", Style::default().fg(Color::DarkGray))));
+    }
+
+    let title = if best_bid > 0.0 && best_ask > 0.0 {
+        format!("{label}  ceil:{best_ask:.4}  floor:{best_bid:.4}")
     } else {
-        s.hft.depth_dn_bids.clone()
-    };
-    let dn_asks: Vec<(f64,f64)> = if !s.book_dn.asks.is_empty() {
-        s.book_dn.asks.iter().map(|l| (l.price, l.size)).collect()
-    } else {
-        s.hft.depth_dn_asks.clone()
+        format!("{label} Book")
     };
 
-    let max_dn = dn_bids.iter().map(|&(_,s)| s)
-        .chain(dn_asks.iter().map(|&(_,s)| s))
-        .fold(0.0f64, f64::max).max(1.0);
-    let mut dn_lines: Vec<Line> = Vec::new();
-    for &(price, size) in dn_asks.iter().take(10).rev() {
-        let w = ((size / max_dn) * bar_w as f64) as usize;
-        let bar = "█".repeat(w.min(bar_w));
-        dn_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Red)),
-            Span::styled(bar, Style::default().fg(Color::Red)),
-            Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-    for &(price, size) in dn_bids.iter().take(10) {
-        let w = ((size / max_dn) * bar_w as f64) as usize;
-        let bar = "█".repeat(w.min(bar_w));
-        dn_lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", price), Style::default().fg(Color::Green)),
-            Span::styled(bar, Style::default().fg(Color::Green)),
-            Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-    if dn_lines.is_empty() {
-        dn_lines.push(Line::from(Span::styled("  esperando...", Style::default().fg(Color::DarkGray))));
-    }
     f.render_widget(
-        Paragraph::new(dn_lines)
-            .block(Block::default().borders(Borders::ALL).title("DOWN Book").border_style(Style::default().fg(Color::Red))),
-        chunks[1]);
+        Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(border_c))
+        ),
+        area,
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
