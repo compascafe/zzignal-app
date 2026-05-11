@@ -1289,6 +1289,85 @@ mod tests {
     }
 
     #[test]
+    fn gemini_50_cases() {
+        // ─── 50 cases: valid + invalid + edge ───
+        let cases: Vec<(&str, &str)> = vec![
+            // === VALID: sin exit (budget g cents) ===
+            // #1-3  trigger mínimo (target pequeño, trigger justo >0)
+            ("1g6",   "GEMINI $1 @0.0600 exit=None"),        // #1  trigger=0.01  mínimo válido
+            ("1g7",   "GEMINI $1 @0.0700 exit=None"),        // #2  trigger=0.02
+            ("3g8",   "GEMINI $3 @0.0800 exit=None"),        // #3  trigger=0.03
+            // #4-6  targets bajos (0.10-0.30)
+            ("2g10",  "GEMINI $2 @0.1000 exit=None"),        // #4  trigger=0.05
+            ("5g15",  "GEMINI $5 @0.1500 exit=None"),        // #5  trigger=0.10
+            ("10g20", "GEMINI $10 @0.2000 exit=None"),       // #6  trigger=0.15
+            // #7-10 targets medios (0.30-0.60)
+            ("7g33",  "GEMINI $7 @0.3300 exit=None"),        // #7  trigger=0.28
+            ("12g48", "GEMINI $12 @0.4800 exit=None"),       // #8  trigger=0.43
+            ("15g50", "GEMINI $15 @0.5000 exit=None"),       // #9  trigger=0.45
+            ("20g55", "GEMINI $20 @0.5500 exit=None"),       // #10 trigger=0.50
+            // #11-15 targets clásicos (0.60-0.75)
+            ("5g60",  "GEMINI $5 @0.6000 exit=None"),        // #11 trigger=0.55
+            ("5g65",  "GEMINI $5 @0.6500 exit=None"),        // #12 trigger=0.60
+            ("5g70",  "GEMINI $5 @0.7000 exit=None"),        // #13 trigger=0.65
+            ("8g72",  "GEMINI $8 @0.7200 exit=None"),        // #14 trigger=0.67
+            ("10g75", "GEMINI $10 @0.7500 exit=None"),       // #15 trigger=0.70
+            // #16-18 targets altos (0.80-0.99)
+            ("15g80", "GEMINI $15 @0.8000 exit=None"),       // #16 trigger=0.75
+            ("25g85", "GEMINI $25 @0.8500 exit=None"),       // #17 trigger=0.80
+            ("30g90", "GEMINI $30 @0.9000 exit=None"),       // #18 trigger=0.85
+            ("50g92", "GEMINI $50 @0.9200 exit=None"),       // #19 trigger=0.87
+            ("8g92",  "GEMINI $8 @0.9200 exit=None"),        // #20 trigger=0.87
+            // #21-22 extremos de budget
+            ("1g10",  "GEMINI $1 @0.1000 exit=None"),        // #21 budget mínimo $1
+            ("200g10","GEMINI $200 @0.1000 exit=None"),      // #22 budget máximo $200
+            ("1g99",  "GEMINI $1 @0.9900 exit=None"),        // #23 target máximo 0.99
+            ("200g6", "GEMINI $200 @0.0600 exit=None"),      // #24 budget máx + trigger=0.01
+            // #25-27 budgets variados
+            ("35g45", "GEMINI $35 @0.4500 exit=None"),       // #25
+            ("60g38", "GEMINI $60 @0.3800 exit=None"),       // #26
+            ("150g77","GEMINI $150 @0.7700 exit=None"),      // #27
+            ("77g66", "GEMINI $77 @0.6600 exit=None"),       // #28
+            ("99g88", "GEMINI $99 @0.8800 exit=None"),       // #29
+
+            // === VALID: con exit (budget g cents e cents) ===
+            ("5g70e80",  "GEMINI $5 @0.7000 exit=Some(0.8)"),      // #30 clásico
+            ("7g70e82",  "GEMINI $7 @0.7000 exit=Some(0.82)"),     // #31
+            ("10g50e60", "GEMINI $10 @0.5000 exit=Some(0.6)"),     // #32
+            ("20g55e70", "GEMINI $20 @0.5500 exit=Some(0.7)"),     // #33
+            ("15g30e45", "GEMINI $15 @0.3000 exit=Some(0.45)"),    // #34
+            ("8g80e92",  "GEMINI $8 @0.8000 exit=Some(0.92)"),     // #35
+            ("25g60e75", "GEMINI $25 @0.6000 exit=Some(0.75)"),    // #36
+            ("50g45e55", "GEMINI $50 @0.4500 exit=Some(0.55)"),    // #37
+            ("100g65e80","GEMINI $100 @0.6500 exit=Some(0.8)"),    // #38
+            ("200g15e30","GEMINI $200 @0.1500 exit=Some(0.3)"),    // #39
+            ("1g10e20",  "GEMINI $1 @0.1000 exit=Some(0.2)"),      // #40 budget mín con exit
+            ("3g20e35",  "GEMINI $3 @0.2000 exit=Some(0.35)"),     // #41
+            ("1g6e12",   "GEMINI $1 @0.0600 exit=Some(0.12)"),     // #42 trigger=0.01
+            ("6g11e22",  "GEMINI $6 @0.1100 exit=Some(0.22)"),     // #43 trigger=0.06
+
+            // === INVALID: trigger <= 0 ===
+            ("5g5",   "UNKNOWN:5g5"),       // #44 target=0.05 trigger=0.00 → inválido
+            ("10g1",  "UNKNOWN:10g1"),      // #45 target=0.01 trigger=-0.04
+            ("10g2",  "UNKNOWN:10g2"),      // #46 target=0.02 trigger=-0.03
+            ("10g3",  "UNKNOWN:10g3"),      // #47 target=0.03 trigger=-0.02
+            ("10g4",  "UNKNOWN:10g4"),      // #48 target=0.04 trigger=-0.01
+
+            // === INVALID: sin budget o syntax incorrecta ===
+            ("g70",   "UNKNOWN:g70"),       // #49 falta presupuesto
+            ("g99",   "UNKNOWN:g99"),       // #50 sin dígito inicial
+        ];
+        for (i, (input, expected)) in cases.iter().enumerate() {
+            let result = parsed(input);
+            if expected.starts_with("UNKNOWN") {
+                assert!(result.starts_with("UNKNOWN"), "#{} FAIL: /{input} → got '{result}', expected UNKNOWN", i+1);
+            } else {
+                assert_eq!(result, *expected, "#{} FAIL: /{input}", i+1);
+            }
+        }
+    }
+
+    #[test]
     fn parser_helpers() {
         assert_eq!(parse_amount("10up65"), Some((10.0, "up65")));
         assert_eq!(parse_amount("200d50"), Some((200.0, "d50")));
