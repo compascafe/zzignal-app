@@ -17,7 +17,7 @@ pub fn draw(f: &mut Frame, s: &State) {
         return;
     }
 
-    let pos_h = 1;
+    let pos_h = 3;
     let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
     let trade_h = if s.mt_state > 0 || !s.trade_log.is_empty() { 6 } else { 0 };
 
@@ -230,19 +230,68 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
 
 // ─── INDICATORS — 4 blank cards ───────────────────────────────
 
-fn draw_indicators(f: &mut Frame, area: Rect, _s: &State) {
+fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let cols = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1,4); 4]).split(area);
 
-    let labels = ["S1", "S2", "S3", "S4"];
+    let b = Modifier::BOLD;
+
+    // S1 = GEMINI
+    {
+        let gemini_lines: Vec<Line> = if s.gemini_active && !s.gemini_triggered {
+            let mut lines = vec![
+                Line::from(Span::styled("GEMINI", Style::default().fg(Color::Magenta).add_modifier(b))),
+                Line::from(Span::styled(
+                    format!("@{:.2}\u{2192}{:.2} ${:.0}", s.gemini_trigger, s.gemini_target, s.gemini_budget),
+                    Style::default().fg(Color::White))),
+            ];
+            if s.gemini_exit > 0.0 {
+                lines.push(Line::from(Span::styled(
+                    format!("EXIT @{:.2}", s.gemini_exit),
+                    Style::default().fg(Color::Cyan))));
+            }
+            lines
+        } else if s.gemini_triggered || s.mt_state >= 1 {
+            let mut lines = vec![
+                Line::from(Span::styled("GEMINI", Style::default().fg(Color::Magenta).add_modifier(b))),
+            ];
+            if !s.gemini_outcome.is_empty() {
+                let out_c = if s.gemini_outcome == "up" { Color::Green } else { Color::Red };
+                let sz = if s.mt_size > 0.0 { format!("sz={:.0}", s.mt_size) } else { String::new() };
+                lines.push(Line::from(Span::styled(
+                    format!("{} @{:.4} {}", s.gemini_outcome.to_uppercase(), s.gemini_target, sz),
+                    Style::default().fg(out_c))));
+            }
+            match s.mt_state {
+                1 => lines.push(Line::from(Span::styled("TRIGGERED", Style::default().fg(Color::Yellow).add_modifier(b)))),
+                2 => lines.push(Line::from(Span::styled("ACTIVE", Style::default().fg(Color::Green).add_modifier(b)))),
+                3 => lines.push(Line::from(Span::styled("EXITING", Style::default().fg(Color::Cyan).add_modifier(b)))),
+                _ => {}
+            }
+            lines
+        } else {
+            vec![
+                Line::from(Span::styled("S1", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("\u{2014}", Style::default().fg(Color::Rgb(20, 28, 40)))),
+            ]
+        };
+        let border_c = if s.gemini_active || s.gemini_triggered { Color::Magenta } else { Color::Rgb(20, 30, 45) };
+        let title = if s.gemini_active || s.gemini_triggered { "GEMINI" } else { "S1" };
+        f.render_widget(
+            Paragraph::new(gemini_lines)
+                .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(border_c))),
+            cols[0]);
+    }
+
+    let labels = ["S2", "S3", "S4"];
     for (i, label) in labels.iter().enumerate() {
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(*label, Style::default().fg(Color::DarkGray))),
-                Line::from(Span::styled("—", Style::default().fg(Color::Rgb(20, 28, 40)))),
+                Line::from(Span::styled("\u{2014}", Style::default().fg(Color::Rgb(20, 28, 40)))),
             ]).block(Block::default().borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
-            cols[i]);
+            cols[i + 1]);
     }
 }
 
@@ -596,11 +645,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
 
     let mut lines: Vec<Line> = Vec::new();
 
-    let grid = || Line::from(Span::styled(
-        "─".repeat((bar_w + 16).min(area.width as usize)),
-        Style::default().fg(Color::Rgb(18, 24, 36))));
-
-    for (i, &(price, size)) in top_asks.iter().enumerate() {
+    for &(price, size) in top_asks.iter() {
         let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         let is_ceiling = (price - best_ask).abs() < 0.0001;
@@ -610,7 +655,6 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
             Span::styled(bar, Style::default().fg(Color::Red)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
-        if i > 0 && i % 2 == 0 { lines.push(grid()); }
     }
 
     if best_bid > 0.0 && best_ask > 0.0 {
@@ -622,7 +666,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
         ]));
     }
 
-    for (i, &(price, size)) in top_bids.iter().enumerate() {
+    for &(price, size) in top_bids.iter() {
         let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         let is_floor = (price - best_bid).abs() < 0.0001;
@@ -632,7 +676,6 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
             Span::styled(bar, Style::default().fg(Color::Green)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
-        if i > 0 && i % 2 == 0 { lines.push(grid()); }
     }
 
     if lines.is_empty() {
@@ -1017,10 +1060,11 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
             Span::styled("/alert up 0.70  ", Style::default().fg(Color::DarkGray)),
             Span::styled("/co /p /pos /man", Style::default().fg(Color::DarkGray)),
         ]),
-        Line::from(Span::styled(
-            " [/]comando  [↑↓]historial  [Tab]vista  [Esc/q]salir",
-            Style::default().fg(Color::Rgb(30, 40, 55)),
-        )),
+        Line::from(vec![
+            Span::styled(" /5g70 /5g70e80  ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled("Gemini trigger  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" [/]comando  [Tab]vista  [Esc/q]salir", Style::default().fg(Color::Rgb(30, 40, 55))),
+        ]),
     ];
 
     f.render_widget(Paragraph::new(lines), area);

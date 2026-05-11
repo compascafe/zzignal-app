@@ -139,6 +139,15 @@ struct State {
 
     // /man page
     pub show_man: bool,
+
+    // Gemini
+    pub gemini_active: bool,
+    pub gemini_budget: f64,
+    pub gemini_target: f64,
+    pub gemini_trigger: f64,
+    pub gemini_exit: f64,
+    pub gemini_outcome: String,
+    pub gemini_triggered: bool,
 }
 
 #[derive(Clone)]
@@ -232,6 +241,13 @@ impl State {
             history_cursor: None,
             alerts: Vec::new(),
             show_man: false,
+            gemini_active: false,
+            gemini_budget: 0.0,
+            gemini_target: 0.0,
+            gemini_trigger: 0.0,
+            gemini_exit: 0.0,
+            gemini_outcome: String::new(),
+            gemini_triggered: false,
         }
     }
 
@@ -386,6 +402,26 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.session_open_btc = new_hft.btc_price;
     }
     s.prev_secs_left = secs;
+
+    check_gemini_trigger(s);
+}
+
+fn check_gemini_trigger(s: &mut State) {
+    if !s.gemini_active || s.gemini_triggered { return; }
+    let up_px = s.hft.clob_trade_up;
+    let dn_px = s.hft.clob_trade_dn;
+    let trigger = s.gemini_trigger;
+    if up_px > 0.0 && up_px <= trigger {
+        s.gemini_triggered = true;
+        s.gemini_outcome = "up".to_string();
+        s.add_log(format!("⚡ GEMINI TRIGGERED UP @{:.4} (trigger {:.4})", up_px, trigger), Color::Green);
+        s.add_trade_log(format!("⚡ GEMINI UP @{:.4}→{:.4} ${:.0}", trigger, s.gemini_target, s.gemini_budget), Color::Green);
+    } else if dn_px > 0.0 && dn_px <= trigger {
+        s.gemini_triggered = true;
+        s.gemini_outcome = "down".to_string();
+        s.add_log(format!("⚡ GEMINI TRIGGERED DN @{:.4} (trigger {:.4})", dn_px, trigger), Color::Red);
+        s.add_trade_log(format!("⚡ GEMINI DN @{:.4}→{:.4} ${:.0}", trigger, s.gemini_target, s.gemini_budget), Color::Red);
+    }
 }
 
 fn detect_trades(v: &OdiseoVariant, last_t_up: i64, last_t_dn: i64,
@@ -717,6 +753,11 @@ async fn main() -> io::Result<()> {
                 }
                 _ => {}
             }
+        }
+
+        // Gemini trigger → place buy
+        if s.gemini_triggered && s.mt_state == 0 {
+            commands::trigger_gemini_buy(&mut s).await;
         }
 
         terminal.draw(|f| ui::draw(f, &s))?;

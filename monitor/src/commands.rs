@@ -43,6 +43,9 @@ pub const REGISTRY: &[CmdDef] = &[
     // ── EMERGENCIA ──
     CmdDef { syntax: "/p                      ", desc: "PANIC: liquidar todo", category: "EMERGENCIA" },
     CmdDef { syntax: "/co                     ", desc: "CASH OUT: market sell + PANIC — todo a USD", category: "EMERGENCIA" },
+    // ── GEMINI ──
+    CmdDef { syntax: "/<usd>g<cents>          ", desc: "Gemini $X target Y, trigger Y−0.05", category: "GEMINI" },
+    CmdDef { syntax: "/<usd>g<cents>e<cents>  ", desc: "Gemini + exit automático", category: "GEMINI" },
     // ── INFO ──
     CmdDef { syntax: "/pos                    ", desc: "Ver posición actual (tamaño, entry, P&L)", category: "INFO" },
     CmdDef { syntax: "/alert up 0.70          ", desc: "Alerta visual+sonido al tocar precio", category: "INFO" },
@@ -78,6 +81,7 @@ enum Parsed {
     AlertClear,
     Undo,
     CashOut,
+    Gemini { budget: f64, target: f64, exit: Option<f64> },
     Unknown(String),
 }
 
@@ -161,7 +165,10 @@ fn parse(input: &str) -> Parsed {
             }
         }
         'u' if rest.is_empty() => Parsed::Undo,
-        _ if first.is_ascii_digit() => parse_buy_legacy(input),
+        _ if first.is_ascii_digit() => {
+            if let Some(gemini) = try_parse_gemini(input) { gemini }
+            else { parse_buy_legacy(input) }
+        }
         _ => Parsed::Unknown(input.to_string()),
     }
 }
@@ -303,6 +310,19 @@ fn parse_cents(s: &str) -> Option<(f64, &str)> {
     Some((price, &s[end..]))
 }
 
+fn try_parse_gemini(input: &str) -> Option<Parsed> {
+    let (amount, rem) = parse_amount(input)?;
+    if !rem.starts_with('g') { return None; }
+    let rem = &rem[1..];
+    let (target, rem) = parse_cents(rem)?;
+    let exit = if rem.starts_with('e') {
+        parse_cents(&rem[1..]).map(|(p, _)| p)
+    } else { None };
+    let trigger = target - 0.05;
+    if trigger <= 0.0 { return None; }
+    Some(Parsed::Gemini { budget: amount, target, exit })
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // EXECUTOR
 // ═══════════════════════════════════════════════════════════════════
@@ -331,6 +351,7 @@ async fn execute(cmd: Parsed, s: &mut State) {
         Parsed::AlertClear => exec_alert_clear(s),
         Parsed::Undo => exec_undo(s).await,
         Parsed::CashOut => exec_cashout(s).await,
+        Parsed::Gemini { budget, target, exit } => exec_gemini(budget, target, exit, s).await,
         Parsed::Unknown(input) => {
             s.add_log(format!("?: /{} — desconocido", input), Color::Red);
         }
@@ -432,6 +453,19 @@ async fn place_manual_buy(amount: f64, side: &str, price: f64, exit_price: Optio
 // ═══════════════════════════════════════════════════════════════════
 
 async fn cancel_active(s: &mut State) {
+    if s.gemini_active {
+        s.gemini_active = false;
+        s.gemini_budget = 0.0;
+        s.gemini_target = 0.0;
+        s.gemini_trigger = 0.0;
+        s.gemini_exit = 0.0;
+        s.gemini_outcome.clear();
+        s.gemini_triggered = false;
+        s.add_log("GEMINI cancelado".to_string(), Color::Yellow);
+        s.add_trade_log("\u{2717} GEMINI cancelado".to_string(), Color::Yellow);
+        return;
+    }
+
     if s.mt_state == 0 && s.open_orders.is_empty() {
         s.add_log("Nada que cancelar", Color::DarkGray);
         s.add_trade_log("\u{2717} Cancel: sin ordenes activas", Color::DarkGray);
@@ -691,6 +725,41 @@ async fn cancel_all_manual(s: &mut State) {
         }
     }
     s.reset_manual();
+}
+
+async fn exec_gemini(budget: f64, target: f64, exit: Option<f64>, s: &mut State) {
+    let trigger = target - 0.05;
+    s.gemini_active = true;
+    s.gemini_budget = budget;
+    s.gemini_target = target;
+    s.gemini_trigger = trigger;
+    s.gemini_exit = exit.unwrap_or(0.0);
+    s.gemini_outcome.clear();
+    s.gemini_triggered = false;
+
+    let desc = if let Some(ex) = exit {
+        format!("GEMINI UP/DN @{:.2}→{:.2} ${:.0} EXIT @{:.2}", trigger, target, budget, ex)
+    } else {
+        format!("GEMINI UP/DN @{:.2}→{:.2} ${:.0}", trigger, target, budget)
+    };
+    s.add_log(desc.clone(), Color::Magenta);
+    s.add_trade_log(format!("⚡ GEMINI @{:.2}→{:.2} ${:.0}", trigger, target, budget), Color::Magenta);
+}
+
+pub async fn trigger_gemini_buy(s: &mut State) {
+    if !s.gemini_triggered || s.mt_state != 0 { return; }
+    let outcome = s.gemini_outcome.clone();
+    let budget = s.gemini_budget;
+    let target = s.gemini_target;
+    let exit = if s.gemini_exit > 0.0 { Some(s.gemini_exit) } else { None };
+
+    // Clear trigger flag before placing to avoid loop
+    s.gemini_triggered = false;
+    s.gemini_active = false;
+
+    place_manual_buy(budget, &outcome, target, exit, None, s).await;
+    s.add_log(format!("🚀 GEMINI BUY {} @{:.4} ${:.0}", outcome.to_uppercase(), target, budget), Color::Magenta);
+    s.add_trade_log(format!("🚀 GEMINI BUY {} @{:.4} ${:.0}", outcome.to_uppercase(), target, budget), Color::Magenta);
 }
 
 pub async fn place_sl_order(s: &mut State) {
@@ -982,6 +1051,15 @@ async fn exec_cashout(s: &mut State) {
     s.add_log("💰 CASH OUT — liquidando todo".to_string(), Color::Yellow);
     s.add_trade_log("💰 CASH OUT — todo a USD".to_string(), Color::Yellow);
 
+    // Gemini: cancel if pending
+    s.gemini_active = false;
+    s.gemini_budget = 0.0;
+    s.gemini_target = 0.0;
+    s.gemini_trigger = 0.0;
+    s.gemini_exit = 0.0;
+    s.gemini_outcome.clear();
+    s.gemini_triggered = false;
+
     // 1) Market sell manual position
     if s.mt_state >= 2 {
         let outcome = s.mt_outcome.clone();
@@ -1057,6 +1135,8 @@ mod tests {
             Parsed::AlertClear => "ALERT-CLEAR".into(),
             Parsed::Undo => "UNDO".into(),
             Parsed::CashOut => "CASHOUT".into(),
+            Parsed::Gemini { budget, target, exit } =>
+                format!("GEMINI ${:.0} @{:.4} exit={:?}", budget, target, exit),
             Parsed::Unknown(s) => format!("UNKNOWN:{s}"),
         }
     }
@@ -1191,6 +1271,24 @@ mod tests {
     }
 
     #[test]
+    fn gemini_simple() {
+        assert_eq!(parsed("5g70"),    "GEMINI $5 @0.7000 exit=None");
+        assert_eq!(parsed("8g72"),    "GEMINI $8 @0.7200 exit=None");
+    }
+
+    #[test]
+    fn gemini_with_exit() {
+        assert_eq!(parsed("7g70e82"), "GEMINI $7 @0.7000 exit=Some(0.82)");
+        assert_eq!(parsed("5g70e80"), "GEMINI $5 @0.7000 exit=Some(0.8)");
+    }
+
+    #[test]
+    fn gemini_invalid() {
+        assert!(parsed("g70").starts_with("UNKNOWN"));
+        assert!(parsed("5g5").starts_with("UNKNOWN"));  // trigger = 0.05-0.05 = 0
+    }
+
+    #[test]
     fn parser_helpers() {
         assert_eq!(parse_amount("10up65"), Some((10.0, "up65")));
         assert_eq!(parse_amount("200d50"), Some((200.0, "d50")));
@@ -1239,6 +1337,9 @@ mod tests {
             ("p",           "PANIC"),
             ("man",         "MAN"),
             ("quit",        "QUIT"),
+            ("5g70",        "GEMINI $5 @0.7000 exit=None"),
+            ("7g70e82",     "GEMINI $7 @0.7000 exit=Some(0.82)"),
+            ("8g92",        "GEMINI $8 @0.9200 exit=None"),
         ];
         for (input, expected) in cases {
             assert_eq!(parsed(input), expected, "FAIL: /{input}");
