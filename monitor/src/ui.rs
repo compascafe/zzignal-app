@@ -29,7 +29,7 @@ pub fn draw(f: &mut Frame, s: &State) {
     ];
     if trade_h > 0 { constraints.push(Constraint::Length(trade_h)); }
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
-    constraints.push(Constraint::Length(10)); // footer: ayuda memoria
+    constraints.push(Constraint::Length(10)); // footer: ayuda
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut ci = 0;
@@ -99,10 +99,11 @@ pub fn draw(f: &mut Frame, s: &State) {
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
         Constraint::Length(3),     // market info
-        Constraint::Length(3),     // UP/DOWN price cards
+        Constraint::Length(2),     // UP/DOWN price cards
+        Constraint::Length(2),     // indicators (4 blank cards)
         Constraint::Length(2),     // manual trading status
         Constraint::Min(4),        // orderbook depth
-        Constraint::Length(5),     // positions + events
+        Constraint::Length(8),     // orders + positions + events
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -110,6 +111,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
 
     draw_market_info(f, m[idx], s); idx += 1;
     draw_price_cards(f, m[idx], s); idx += 1;
+    draw_indicators(f, m[idx], s); idx += 1;
     draw_manual_status(f, m[idx], s); idx += 1;
     draw_depth_panel(f, m[idx], s); idx += 1;
 
@@ -127,14 +129,18 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(1,4); 4]).split(area);
     let big = Modifier::BOLD;
 
-    let btc_delta = if s.btc_open > 0.0 { s.btc - s.btc_open }
-        else if s.btc_entry > 0.0 { s.btc - s.btc_entry } else { 0.0 };
+    let btc_ref = if s.session_open_btc > 0.0 { s.session_open_btc }
+        else if s.btc_open > 0.0 { s.btc_open }
+        else { s.btc };
+    let btc_delta = s.btc - btc_ref;
+    let btc_delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
     let btc_c = if btc_delta > 0.0 { Color::Green } else if btc_delta < 0.0 { Color::Red } else { Color::Yellow };
+    let arrow = if btc_delta > 0.0 { "↑" } else if btc_delta < 0.0 { "↓" } else { "→" };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big))),
-            Line::from(Span::styled(format!("{:+.0} USD", btc_delta), Style::default().fg(btc_c))),
-            Line::from(Span::styled("BTC", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(format!("{arrow} {:+.0} ({:+.1}%)", btc_delta, btc_delta_pct), Style::default().fg(btc_c))),
+            Line::from(Span::styled(format!("BTC — abrio ${:.0}", btc_ref), Style::default().fg(Color::DarkGray))),
         ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(btc_c))),
         cols[0]);
 
@@ -217,6 +223,24 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
                 Style::default().fg(if s.pos_sen_dn||s.pos_h65_dn||s.pos_odi_dn {Color::Red}else{Color::DarkGray}))),
         ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Red))),
         cols[1]);
+}
+
+// ─── INDICATORS — 4 blank cards ───────────────────────────────
+
+fn draw_indicators(f: &mut Frame, area: Rect, _s: &State) {
+    let cols = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,4); 4]).split(area);
+
+    let labels = ["S1", "S2", "S3", "S4"];
+    for (i, label) in labels.iter().enumerate() {
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(*label, Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled("—", Style::default().fg(Color::Rgb(20, 28, 40)))),
+            ]).block(Block::default().borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
+            cols[i]);
+    }
 }
 
 // ─── MANUAL TRADING STATUS BAR ────────────────────────────────────
