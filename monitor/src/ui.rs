@@ -98,12 +98,12 @@ pub fn draw(f: &mut Frame, s: &State) {
 
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
-        Constraint::Length(3),     // market info
-        Constraint::Length(2),     // UP/DOWN price cards
-        Constraint::Length(2),     // indicators (4 blank cards)
+        Constraint::Length(2),     // market info (compact)
+        Constraint::Length(2),     // UP/DOWN price cards (compact)
+        Constraint::Length(2),     // indicators
         Constraint::Length(2),     // manual trading status
-        Constraint::Min(4),        // orderbook depth
-        Constraint::Length(8),     // orders + positions + events
+        Constraint::Min(10),       // orderbook depth (THE STAR)
+        Constraint::Length(6),     // orders + positions + events
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -138,9 +138,11 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
     let arrow = if btc_delta > 0.0 { "↑" } else if btc_delta < 0.0 { "↓" } else { "→" };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big))),
-            Line::from(Span::styled(format!("{arrow} {:+.0} ({:+.1}%)", btc_delta, btc_delta_pct), Style::default().fg(btc_c))),
-            Line::from(Span::styled(format!("BTC — abrio ${:.0}", btc_ref), Style::default().fg(Color::DarkGray))),
+            Line::from(vec![
+                Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big)),
+                Span::styled(format!(" {arrow} {:+.0}", btc_delta), Style::default().fg(btc_c)),
+            ]),
+            Line::from(Span::styled(format!("abrio ${:.0}  {:+.1}%", btc_ref, btc_delta_pct), Style::default().fg(Color::DarkGray))),
         ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(btc_c))),
         cols[0]);
 
@@ -193,14 +195,11 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
             Line::from(vec![
                 Span::styled("▲ UP  ", Style::default().fg(Color::Green).add_modifier(big)),
                 Span::styled(format!("{:.4}", up_px), Style::default().fg(Color::White).add_modifier(big)),
-                Span::styled(format!("  {:+.2}%", up_diff), Style::default().fg(up_c).add_modifier(big)),
+                Span::styled(format!(" {:+.2}%", up_diff), Style::default().fg(up_c).add_modifier(big)),
             ]),
-            Line::from(Span::styled(format!("INIT {:.4}  |  vol {:.0}", up_init, s.hft.clob_trade_up_vol),
+            Line::from(Span::styled(format!("init {:.4}  vol {:.0}  {}", up_init, s.hft.clob_trade_up_vol,
+                if s.pos_sen_up||s.pos_h65_up||s.pos_odi_up {"▶ POS"}else{"—"}),
                 Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled(if s.pos_sen_up || s.pos_h65_up || s.pos_odi_up {
-                format!("▶ POSICION ABIERTA")
-            } else { "— sin posicion".into() },
-                Style::default().fg(if s.pos_sen_up||s.pos_h65_up||s.pos_odi_up {Color::Green}else{Color::DarkGray}))),
         ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Green))),
         cols[0]);
 
@@ -576,7 +575,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
 
     let avail = (area.height as usize).saturating_sub(3);
-    let half = (avail / 2).max(4).min(8);
+    let half = 8; // fixed: 8 asks + 1 spread + 8 bids = 17 lines
 
     asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let top_asks: Vec<_> = asks.into_iter().take(half).rev().collect();
