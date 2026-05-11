@@ -87,6 +87,7 @@ struct State {
     last_poll_odiseo: Instant,
     last_poll_btc: Instant,
     last_poll_hft: Instant,
+    last_poll_orders: Instant,
     last_poll_sessions: Instant,
     last_ws: Instant,
     last_api_ok: Instant,
@@ -108,9 +109,10 @@ struct State {
     pub mt_order_id: String,
     pub mt_exit_price: f64,
     pub mt_exit_order_id: String,
-    pub mt_state: u8,          // 0=IDLE 1=PENDING 2=ACTIVE 3=EXITING
+    pub mt_state: u8,
     pub mt_order_seen: bool,
-    pub mt_exit_order_seen: bool, // prevent false fill detection
+    pub mt_exit_order_seen: bool,
+    pub mt_order_placed_at: Instant, // to detect fast fills
     pub mt_pnl_cum: f64,
     pub mt_trades: i64,
     pub mt_wins: i64,
@@ -200,6 +202,7 @@ impl State {
             last_poll_odiseo: Instant::now(),
             last_poll_btc: Instant::now(),
             last_poll_hft: Instant::now(),
+            last_poll_orders: Instant::now(),
             last_poll_sessions: Instant::now(),
             last_ws: Instant::now(),
             last_api_ok: Instant::now(),
@@ -217,6 +220,7 @@ impl State {
             mt_order_id: String::new(), mt_exit_price: 0.0,
             mt_exit_order_id: String::new(),
             mt_state: 0, mt_order_seen: false, mt_exit_order_seen: false,
+            mt_order_placed_at: Instant::now(),
             mt_pnl_cum: 0.0, mt_trades: 0, mt_wins: 0,
             mt_last_fill_pct: 0.0,
             mt_sl_order_id: String::new(),
@@ -593,7 +597,6 @@ async fn main() -> io::Result<()> {
                 if nc != s.orders { s.add_log(format!("Orders: {} -> {}", s.orders, nc), Color::Cyan); }
                 s.orders = nc;
                 s.open_orders = orders;
-                commands::track_manual_fills(&mut s).await;
             }
         }
 
@@ -620,6 +623,17 @@ async fn main() -> io::Result<()> {
                 apply_hft_state(&data, &mut s);
                 commands::update_trailing_stop(&mut s).await;
                 commands::check_alerts(&mut s);
+            }
+        }
+
+        // Poll Orders (1s) — fast fill detection
+        if s.last_poll_orders.elapsed() > Duration::from_millis(1000) || s.mt_state == 1 {
+            s.last_poll_orders = Instant::now();
+            if let Some(orders) = http_get::<Vec<api::OrderInfo>>("/api/orders").await {
+                let nc = orders.len() as i64;
+                s.open_orders = orders;
+                s.orders = nc;
+                commands::track_manual_fills(&mut s).await;
             }
         }
 

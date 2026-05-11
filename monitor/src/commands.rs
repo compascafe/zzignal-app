@@ -367,6 +367,7 @@ async fn place_manual_buy(amount: f64, side: &str, price: f64, exit_price: Optio
     s.mt_state = 1;
     s.mt_outcome = outcome.to_string();
     s.mt_entry = price;
+    s.mt_order_placed_at = std::time::Instant::now();
     s.mt_fill_avg = price; // start at limit, update on partial fills
     s.mt_fill_count = 0;
     s.mt_size = size;
@@ -747,12 +748,27 @@ pub async fn track_manual_fills(s: &mut State) {
                 s.add_log(format!("◐ FILLING {} {:.0}%", s.mt_outcome.to_uppercase(), pct), Color::Yellow);
             }
         } else if s.mt_order_seen {
+            // Was seen, now gone → filled
             s.mt_state = 2;
             let outcome = s.mt_outcome.clone();
             let entry = s.mt_entry;
             let sz = s.mt_size;
             let budget = s.mt_budget;
             s.add_log(format!("▲ FILLED {} @{:.4} sz={:.0} ${:.2}",
+                outcome.to_uppercase(), entry, sz, budget), Color::Green);
+            s.add_trade_log(format!("✓ BUY {} sz={:.0} @{:.4} — ACTIVO",
+                outcome.to_uppercase(), sz, entry), Color::Green);
+            if !s.mt_exit_order_id.is_empty() { s.mt_state = 3; }
+        } else if s.mt_order_placed_at.elapsed() < std::time::Duration::from_secs(3) {
+            // Recently placed, not yet visible. Wait.
+        } else {
+            // Not seen for >3s → filled silently (fast fill between polls)
+            s.mt_state = 2;
+            let outcome = s.mt_outcome.clone();
+            let entry = s.mt_entry;
+            let sz = s.mt_size;
+            let budget = s.mt_budget;
+            s.add_log(format!("▲ FILLED {} @{:.4} sz={:.0} ${:.2} (fast)",
                 outcome.to_uppercase(), entry, sz, budget), Color::Green);
             s.add_trade_log(format!("✓ BUY {} sz={:.0} @{:.4} — ACTIVO",
                 outcome.to_uppercase(), sz, entry), Color::Green);
