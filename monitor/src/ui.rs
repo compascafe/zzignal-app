@@ -19,7 +19,6 @@ pub fn draw(f: &mut Frame, s: &State) {
 
     let pos_h = 3;
     let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
-    let trade_h = if s.mt_state > 0 || !s.trade_log.is_empty() { 6 } else { 0 };
 
     let mut constraints = vec![
         Constraint::Length(1),     // commit bar
@@ -27,7 +26,6 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Length(pos_h), // position bar
         Constraint::Min(4),        // dashboard
     ];
-    if trade_h > 0 { constraints.push(Constraint::Length(trade_h)); }
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
     constraints.push(Constraint::Length(10)); // footer: ayuda
 
@@ -79,12 +77,6 @@ pub fn draw(f: &mut Frame, s: &State) {
     }
     ci += 1;
 
-    // ─── TRADE LOG PANEL ──────────────────────────────────────────────
-    if trade_h > 0 {
-        draw_trade_log(f, chunks[ci], s);
-        ci += 1;
-    }
-
     // ─── COMMAND BAR (modal) ──────────────────────────────────────────
     if cmd_h > 0 {
         draw_command_bar(f, chunks[ci], s);
@@ -119,10 +111,10 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     draw_depth_panel(f, m[idx], s); idx += 1;
 
     let bottom = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(3,5), Constraint::Ratio(2,5)])
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
         .split(m[idx]);
     draw_positions_card(f, bottom[0], s);
-    draw_events_card(f, bottom[1], s);
+    draw_trade_log_inline(f, bottom[1], s);
 }
 
 // ─── MARKET INFO BAR ──────────────────────────────────────────────
@@ -520,52 +512,9 @@ fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
         area);
 }
 
-// ─── EVENTS CARD ──────────────────────────────────────────────────
+// ─── TRADE LOG INLINE ─────────────────────────────────────────────
 
-fn draw_events_card(f: &mut Frame, area: Rect, s: &State) {
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Show trade log first (clean trading events)
-    for e in s.trade_log.iter().take(2) {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
-            Span::styled(&e.text, Style::default().fg(e.color)),
-        ]));
-    }
-
-    // Fill remaining with critical log entries
-    for e in s.log.iter().filter(|e| e.text.contains("FAIL") || e.text.contains("PANIC")).take(2) {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
-            Span::styled(&e.text, Style::default().fg(e.color)),
-        ]));
-    }
-
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled("  esperando eventos...", Style::default().fg(Color::DarkGray))));
-    }
-
-    let latency_ms = s.last_api_ok.elapsed().as_millis() as u64;
-    let (health_txt, health_c) = if !s.connected {
-        ("NO CONEXION", Color::Red)
-    } else if latency_ms > 10_000 {
-        ("SIN DATOS", Color::Red)
-    } else if latency_ms > 2_000 {
-        ("LAG", Color::Yellow)
-    } else {
-        ("OK", Color::Green)
-    };
-
-    f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL)
-            .title(format!("EVENTOS [{}]", health_txt))
-            .border_style(Style::default().fg(health_c))),
-        area);
-}
-
-// ─── TRADE LOG PANEL ──────────────────────────────────────────────
-
-fn draw_trade_log(f: &mut Frame, area: Rect, s: &State) {
+fn draw_trade_log_inline(f: &mut Frame, area: Rect, s: &State) {
     let max_n = (area.height as usize).saturating_sub(2).min(5);
     let lines: Vec<Line> = s.trade_log.iter().take(max_n).map(|e| {
         Line::from(vec![
