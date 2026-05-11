@@ -281,6 +281,7 @@ impl State {
         self.mt_tsl_low = 1.0;
         self.mt_fill_avg = 0.0;
         self.mt_fill_count = 0;
+        self.trade_log.clear();
     }
 }
 

@@ -466,9 +466,21 @@ async fn cancel_active(s: &mut State) {
         return;
     }
 
+    // Active position with no pending orders → suggest /x or /lm
+    if s.mt_state >= 2 {
+        let has_pending = !s.mt_exit_order_id.is_empty() || !s.mt_sl_order_id.is_empty();
+        if !has_pending {
+            s.trade_log.clear();
+            s.add_log(format!("{} ACTIVO — usa /x o /lm para salir", s.mt_outcome.to_uppercase()), Color::Yellow);
+            s.add_trade_log(format!("\u{2717} {} ACTIVO — sal con /lm", s.mt_outcome.to_uppercase()), Color::Yellow);
+            return;
+        }
+    }
+
     if s.mt_state == 0 && s.open_orders.is_empty() {
-        s.add_log("Nada que cancelar", Color::DarkGray);
-        s.add_trade_log("\u{2717} Cancel: sin ordenes activas", Color::DarkGray);
+        s.trade_log.clear();
+        s.add_log("0 posiciones".to_string(), Color::DarkGray);
+        s.add_trade_log("\u{2717} 0 posiciones".to_string(), Color::DarkGray);
         return;
     }
 

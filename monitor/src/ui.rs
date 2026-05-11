@@ -305,12 +305,12 @@ fn draw_manual_status(f: &mut Frame, area: Rect, s: &State) {
 
     match s.mt_state {
         0 => {
-            spans.push(Span::styled("IDLE  ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("IDLE", Style::default().fg(Color::DarkGray)));
             if s.mt_pnl_cum != 0.0 {
-                let c = if s.mt_pnl_cum >= 0.0 { Color::Green } else { Color::Red };
-                spans.push(Span::styled(format!("ΣP&L {:+.2}  ", s.mt_pnl_cum), Style::default().fg(c).add_modifier(b)));
-                spans.push(Span::styled(format!("{}T/{}/{}W", s.mt_trades, s.mt_trades - s.mt_wins, s.mt_wins),
+                spans.push(Span::styled(format!("  Σ{:+.2} {}T", s.mt_pnl_cum, s.mt_trades),
                     Style::default().fg(Color::DarkGray)));
+            } else {
+                spans.push(Span::styled("  0 posiciones", Style::default().fg(Color::DarkGray)));
             }
         }
         1 => {
@@ -944,7 +944,7 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
         (format!("⚡ SENNA activo  ${:.0}  esperando momentum...", s.sen_budget),
          Style::default().fg(Color::Cyan).add_modifier(b))
     } else {
-        (format!("POS: 0  —  /l10up65 para abrir  |  /man = ayuda"),
+        (format!("0 POSICIONES  —  /l10up65 para abrir"),
          Style::default().fg(Color::DarkGray))
     };
 
