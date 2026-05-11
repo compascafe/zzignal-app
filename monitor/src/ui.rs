@@ -101,11 +101,11 @@ pub fn draw(f: &mut Frame, s: &State) {
 
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
-        Constraint::Length(3),     // market info
-        Constraint::Length(3),     // UP/DOWN price cards
-        Constraint::Length(2),     // indicators
-        Constraint::Length(2),     // manual trading status
-        Constraint::Min(18),       // orderbook depth (17 lines fixed)
+        Constraint::Length(4),     // market info
+        Constraint::Length(4),     // UP/DOWN price cards
+        Constraint::Length(3),     // indicators (S1..S4)
+        Constraint::Length(3),     // manual trading status
+        Constraint::Length(17),    // orderbook depth (fixed ~15 rows)
         Constraint::Length(6),     // orders + positions + events
     ];
 
@@ -628,7 +628,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
 
     let avail = (area.height as usize).saturating_sub(3);
-    let half = avail.min(10).max(4); // dynamic: more levels if space allows
+    let half = (avail.saturating_sub(1) / 2).min(9).max(3); // fit: half asks + spread + half bids ≤ avail
 
     asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let top_asks: Vec<_> = asks.into_iter().take(half).rev().collect();
