@@ -160,13 +160,26 @@ impl LogEntry {
 
 // ─── HTTP Helpers ───────────────────────────────────────────────────
 
+use std::time::Duration;
+
+fn client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap()
+    })
+}
+
 pub async fn http_get<T: for<'de> Deserialize<'de>>(path: &str) -> Option<T> {
     let url = format!("{API_URL}{path}");
-    reqwest::get(&url).await.ok()?.json::<T>().await.ok()
+    client().get(&url).send().await.ok()?.json::<T>().await.ok()
 }
 
 pub async fn http_post(path: &str, body: &str) -> Result<(), String> {
-    let resp = reqwest::Client::new()
+    let resp = client()
         .post(format!("{API_URL}{path}"))
         .header("Content-Type", "application/json")
         .body(body.to_string())
