@@ -557,6 +557,7 @@ async fn main() -> io::Result<()> {
                     let ok = msg.success.unwrap_or(false);
                     let txt = msg.message.unwrap_or_default();
                     s.add_log(format!("{} {}", if ok {"OK"}else{"FAIL"}, txt), if ok{Color::Green}else{Color::Red});
+                    if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
                 }
                 Some("hft_state") => {
                     if let Some(ref hft) = msg.data { apply_hft_state(hft, &mut s); }
@@ -569,6 +570,7 @@ async fn main() -> io::Result<()> {
                             _ => {}
                         }
                     }
+                    if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
                 }
                 _ => {}
             }
@@ -626,14 +628,17 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // Poll Orders (1s) — fast fill detection
-        if s.last_poll_orders.elapsed() > Duration::from_millis(1000) || s.mt_state == 1 {
-            s.last_poll_orders = Instant::now();
-            if let Some(orders) = http_get::<Vec<api::OrderInfo>>("/api/orders").await {
-                let nc = orders.len() as i64;
-                s.open_orders = orders;
-                s.orders = nc;
-                commands::track_manual_fills(&mut s).await;
+        // Poll Orders — 250ms if pending, 1s otherwise
+        {
+            let interval = if s.mt_state == 1 { Duration::from_millis(250) } else { Duration::from_millis(1000) };
+            if s.last_poll_orders.elapsed() > interval {
+                s.last_poll_orders = Instant::now();
+                if let Some(orders) = http_get::<Vec<api::OrderInfo>>("/api/orders").await {
+                    let nc = orders.len() as i64;
+                    s.open_orders = orders;
+                    s.orders = nc;
+                    commands::track_manual_fills(&mut s).await;
+                }
             }
         }
 
