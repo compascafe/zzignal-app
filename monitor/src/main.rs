@@ -99,6 +99,9 @@ struct State {
     book_dn: api::BookDepth,
     last_poll_depth: Instant,
     prev_secs_left: i32,
+    session_open_up: f64,
+    session_open_dn: f64,
+    session_open_btc: f64,
 }
 
 impl State {
@@ -157,6 +160,9 @@ impl State {
             book_dn: api::BookDepth::default(),
             last_poll_depth: Instant::now(),
             prev_secs_left: -1,
+            session_open_up: 0.0,
+            session_open_dn: 0.0,
+            session_open_btc: 0.0,
         }
     }
 
@@ -403,7 +409,16 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
         s.book_up = api::BookDepth::default();
         s.book_dn = api::BookDepth::default();
+        s.session_open_up = new_hft.clob_trade_up;
+        s.session_open_dn = new_hft.clob_trade_dn;
+        s.session_open_btc = new_hft.btc_price;
         s.add_log(format!("SESSION RESET — new orderbook"), Color::Yellow);
+    }
+    // First HFT data — capture initial session prices
+    if s.session_open_up == 0.0 && new_hft.clob_trade_up > 0.0 {
+        s.session_open_up = new_hft.clob_trade_up;
+        s.session_open_dn = new_hft.clob_trade_dn;
+        s.session_open_btc = new_hft.btc_price;
     }
     s.prev_secs_left = secs;
 }
