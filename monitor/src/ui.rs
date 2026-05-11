@@ -36,8 +36,11 @@ pub fn draw(f: &mut Frame, s: &State) {
 
     // ─── COMMIT BAR ────────────────────────────────────────────────────
     let commit = option_env!("GIT_HASH").unwrap_or("dev");
+    let total_w = area.width as usize;
+    let filler_w = total_w.saturating_sub(commit.len() + 19);
+    let filler = " ".repeat(filler_w.min(80));
     f.render_widget(
-        Paragraph::new(format!("DAVID@ZZIGNAL || on the other side  {}", commit))
+        Paragraph::new(format!("|ZZIGNAL{filler}{commit}|"))
             .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         chunks[ci],
     );
@@ -98,11 +101,11 @@ pub fn draw(f: &mut Frame, s: &State) {
 
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
-        Constraint::Length(2),     // market info (compact)
-        Constraint::Length(2),     // UP/DOWN price cards (compact)
+        Constraint::Length(3),     // market info
+        Constraint::Length(3),     // UP/DOWN price cards
         Constraint::Length(2),     // indicators
         Constraint::Length(2),     // manual trading status
-        Constraint::Min(10),       // orderbook depth (THE STAR)
+        Constraint::Min(18),       // orderbook depth (17 lines fixed)
         Constraint::Length(6),     // orders + positions + events
     ];
 
@@ -142,7 +145,8 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
                 Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big)),
                 Span::styled(format!(" {arrow} {:+.0}", btc_delta), Style::default().fg(btc_c)),
             ]),
-            Line::from(Span::styled(format!("abrio ${:.0}  {:+.1}%", btc_ref, btc_delta_pct), Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(format!("abrio ${:.0}", btc_ref), Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(format!("{:+.1}%", btc_delta_pct), Style::default().fg(btc_c))),
         ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(btc_c))),
         cols[0]);
 
@@ -592,7 +596,11 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
 
     let mut lines: Vec<Line> = Vec::new();
 
-    for &(price, size) in &top_asks {
+    let grid = || Line::from(Span::styled(
+        "─".repeat((bar_w + 16).min(area.width as usize)),
+        Style::default().fg(Color::Rgb(18, 24, 36))));
+
+    for (i, &(price, size)) in top_asks.iter().enumerate() {
         let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         let is_ceiling = (price - best_ask).abs() < 0.0001;
@@ -602,6 +610,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
             Span::styled(bar, Style::default().fg(Color::Red)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
+        if i > 0 && i % 2 == 0 { lines.push(grid()); }
     }
 
     if best_bid > 0.0 && best_ask > 0.0 {
@@ -613,7 +622,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
         ]));
     }
 
-    for &(price, size) in &top_bids {
+    for (i, &(price, size)) in top_bids.iter().enumerate() {
         let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
         let is_floor = (price - best_bid).abs() < 0.0001;
@@ -623,6 +632,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
             Span::styled(bar, Style::default().fg(Color::Green)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
+        if i > 0 && i % 2 == 0 { lines.push(grid()); }
     }
 
     if lines.is_empty() {
