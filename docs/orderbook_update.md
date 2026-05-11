@@ -1,8 +1,10 @@
-# Orderbook Update — Mayo 10, 2026
+# Orderbook + Graficos Update — Mayo 10, 2026
 
-## Commits
+## Commits (todos)
 
 ```
+1e8177e fix: tab bar con Paragraph+Span en vez de Tabs widget para evitar texto invisible
+e193c03 feat: tab GRAFICOS - DOM, TAP, Area Acumulada, Histograma + trade tracking
 0a4878a fix: timeout 3s en HTTP requests del TUI para evitar cuelgues en cambio de sesion
 a229925 layout: depth panel ocupa todo el espacio, header/ping/precios minimos
 5208502 fix: hard reset del orderbook cuando cambia de sesion (secs_left salta >60)
@@ -18,22 +20,67 @@ c34562d fix: depth panel enfocado en zona de accion - ceiling/floor + spread
 ## Archivos modificados
 
 ### `monitor/src/api.rs`
-- **WsMsg** nuevos campos: `side: Option<String>`, `book: Option<BookDepth>` — para parsear mensajes `book` del WebSocket
-- **Timeout 3s** en todos los HTTP requests (`reqwest::Client` con `.timeout(3s)`) — previene cuelgues del TUI cuando el backend no responde
+- **WsMsg**: `side: Option<String>`, `book: Option<BookDepth>` — parsea mensajes `book` del WS
+- **Timeout 3s**: `reqwest::Client` con `.timeout(3s)` — evita cuelgues del TUI
+- **TradeEntry** struct: `{ ts, side, price, size }` — para TAP (Time & Sales)
 
 ### `monitor/src/main.rs`
-- **Handler `"book"`** en el drenado de mensajes WS: actualiza `s.book_up` / `s.book_dn` directamente del CLOB WebSocket
-- **Session reset**: detecta cuando `secs_left` salta >60s (nueva sesión) y limpia `book_up`/`book_dn` a `default()`
-- **Campo `prev_secs_left: i32`** para trackear cambios de sesión
+- **Handler `"book"`**: actualiza `s.book_up` / `s.book_dn` desde CLOB WS
+- **Session reset**: `secs_left` salta >60s → limpia `book_up`/`book_dn` a default
+- **`prev_secs_left: i32`**: trackea cambios de sesión
+- **Trade tracking**: en `apply_hft_state`, detecta nuevos trades y los pushea a `s.trades`
+- **`trades: VecDeque<TradeEntry>`**: buffer de 100 trades para TAP
+- **Tab switching**: `(tab + 1) % 3` — 3 pestañas
 
 ### `monitor/src/ui.rs`
-- **Layout reorganizado**: depth panel usa `Constraint::Min(6)` — ocupa todo el espacio disponible. Header, ping, precios y eventos reducidos al mínimo
-- **`draw_depth_panel`** → **`draw_book_side`**: función extraída, recibe `book` como fuente primaria con fallback a `hft.depth_up_*`
-- **Ordenamiento explícito**: asks por precio ascendente (best first) → reverse para display; bids por precio descendente (best first). Display: worst ask → best ask (ceiling, yellow) → SPREAD → best bid (floor, yellow) → worst bid
-- **`sort_unstable_by`** + cap 200 niveles para rendimiento
-- **Niveles dinámicos**: `half = (area.height - 3) / 2`, clamp 4-8 por lado para que bids y asks quepan en pantalla
-- **Ping bar** ahora incluye sesión + BTC price
-- **Price panel** comprimido a 1 línea: ▲ UP + ▼ DN + BTCvol
+- **Layout reorganizado**: depth panel `Constraint::Min(6)` — ocupa todo el espacio
+- **`draw_book_side`**: sort explícito, ceiling/floor yellow, spread, niveles dinámicos
+- **Ping bar**: incluye sesión + BTC
+- **Price panel**: 1 línea (▲ UP + ▼ DN + BTCvol)
+- **Tab GRAFICOS**: 4 paneles (ver abajo)
+- **Tab bar**: `Paragraph` con `Span` en vez de `Tabs` widget
+
+### Frontend React (cambios secundarios)
+- `App.jsx`: destructured `bookUp`/`bookDown`
+- `DepthChart.jsx`: orderbook ladder en tiempo real desde WS (sin HTTP poll)
+
+---
+
+## Tab GRAFICOS — 4 paneles
+
+```
+┌──────────────┬──────────────┐
+│   DOM        │   TAP        │
+│ Depth of     │ Time & Sales │
+│ Market       │              │
+│ UP bids/asks │ time prc sz  │
+│ spread       │ side         │
+├──────────────┴──────────────┤
+│  Area Acumulada             │
+│  bids █ / asks █            │
+├─────────────────────────────┤
+│  Histograma                 │
+│  volumen por nivel precio   │
+└─────────────────────────────┘
+```
+
+### DOM (Depth of Market)
+- UP (verde) y DOWN (rojo) lado a lado
+- Asks orden ascendente → reverse, bids descendente
+- Spread entre best bid y best ask
+- Barras proporcionales al max size
+
+### TAP (Time & Sales)
+- Últimos 20 trades del buffer `s.trades`
+- Timestamp, precio (bold), tamaño, lado (UP=green, DOWN=red)
+
+### Area Acumulada
+- Volumen acumulado de bids (verde) y asks (rojo) por nivel de precio
+- Buckets dinámicos según altura disponible
+
+### Histograma
+- Volumen por bucket de precio (cyan)
+- Buckets dinámicos, barra proporcional
 
 ---
 
@@ -56,42 +103,67 @@ Backend worker.rs → dispatch_ws_msg()
             ▼
     TUI WebSocket (/ws)
             │
-            ├── WsMsg parse → msg.book → s.book_up / s.book_dn  [fuente primaria]
-            ├── WsMsg parse → msg.data → s.hft.depth_up/dn_*   [fallback]
-            │
-            └── draw_book_side() → sort + render bids/asks
+            ├── WsMsg.book → s.book_up/dn  [fuente primaria → DOM + Graficos]
+            ├── WsMsg.data → s.hft.depth_* [fallback]
+            └── apply_hft_state → s.trades [TAP]
 ```
+
+---
+
+## Trade tracking
+
+```rust
+// En apply_hft_state, cada tick:
+if new_hft.clob_trade_up > 0.0 && precio_cambio {
+    s.trades.push_front(TradeEntry { ts, "UP", price, size });
+}
+if new_hft.clob_trade_dn > 0.0 && precio_cambio {
+    s.trades.push_front(TradeEntry { ts, "DOWN", price, size });
+}
+// Cap 100 trades
+```
+
+---
+
+## Renderizado del tab bar
+
+Cambiado de `Tabs` widget a `Paragraph` con `Span` directos:
+```
+DINERO REAL (blanco/rojo) | PAPER MONEY (blanco/verde) | GRAFICOS (blanco/azul)
+```
+Inactivos: texto gris sin fondo.
 
 ---
 
 ## Problema pendiente
 
-**El TUI se congela al cambiar de sesión si no se reinicia el server.**
+**El TUI se congela al cambiar de sesión (requiere reiniciar el server).**
 
-- El timeout de 3s en HTTP requests mitiga el síntoma pero no la causa raíz
-- La causa está en el **backend**: durante la transición de sesión (descubrir nuevo mercado, reconectar CLOB WS, re-autenticar), algo bloquea las respuestas HTTP
-- Posibles causas en el backend:
-  - Deadlock en RwLocks de `AppState` (ej. `book_up` write lock mientras otro task hace read)
-  - `capture_combined()` haciendo `.await` sobre un lock ya tomado
-  - El worker entrando en loop de reconexión y bloqueando el runtime
-  - Canal `mpsc` lleno bloqueando al sender
-- Se necesita investigar `backend_rust/src/main.rs` y `backend_rust/src/modules/core/worker.rs` para encontrar el deadlock
-
-### Workaround actual
-Reiniciar el server resuelve temporalmente:
-```bash
-sudo systemctl restart zzignal-app
-```
+- Timeout de 3s en HTTP requests mitiga el síntoma
+- Causa raíz en el **backend**: deadlock o bloqueo durante transición de sesión
+- Posibles lugares: `backend_rust/src/main.rs` (AppState RwLocks), `backend_rust/src/modules/core/worker.rs` (reconexión CLOB)
+- Workaround: `sudo systemctl restart zzignal-app`
 
 ---
 
-## Frontend React (cambios adicionales no relacionados con el TUI)
+## Server
 
-### `frontend_react/src/App.jsx`
-- Destructura `bookUp`, `bookDown` de `useBackend()` y los pasa a `DepthChart`
+- IP Dinero Real: `ip-172-26-3-22` (Tokyo Lightsail, antes era `ip-172-26-10-114`)
+- IP Dublin (pet): `63.32.155.242` — SSH da timeout, usar consola Lightsail directa
+- Binario TUI: `~/zzignal-app/monitor/target/release/zzignal-monitor`
+- Binario backend: `~/zzignal-app/backend_rust/target/release/polymarket-backend`
 
-### `frontend_react/src/components/DepthChart.jsx`
-- Reescrito: muestra orderbook ladder en tiempo real desde WebSocket (ya no usa HTTP polling)
-- Dos paneles lado a lado: UP (verde) y DOWN (naranja)
-- Cada panel: asks (rojo), mid/best bid-ask, bids (verde)
-- Barras de profundidad proporcionales
+### Compilar TUI
+```bash
+cd ~/zzignal-app && git pull
+cd monitor && cargo build --release
+# Si se cuelga (first build lento), usar debug:
+cd monitor && cargo build
+pkill -f zzignal-monitor && ./target/release/zzignal-monitor
+```
+
+### Compilar backend
+```bash
+cd ~/zzignal-app/backend_rust && cargo build --release
+sudo systemctl restart zzignal-app
+```
