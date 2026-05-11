@@ -88,7 +88,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
         Constraint::Length(3),     // market info (BTC, open, countdown, balance)
         Constraint::Length(3),     // UP/DOWN price cards with init + diff
         Constraint::Min(6),        // orderbook depth
-        Constraint::Length(3),     // positions + events
+        Constraint::Length(4),     // positions + events
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -99,7 +99,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     draw_depth_panel(f, m[idx], s); idx += 1;
 
     let bottom = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .constraints([Constraint::Ratio(3,5), Constraint::Ratio(2,5)])
         .split(m[idx]);
     draw_positions_card(f, bottom[0], s);
     draw_events_card(f, bottom[1], s);
@@ -204,11 +204,51 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 }
 
-// ─── POSITIONS CARD ──────────────────────────────────────────────
+// ─── POSITIONS & ORDERS CARD ────────────────────────────────────
 
 fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
     let mut lines: Vec<Line> = Vec::new();
     let b = Modifier::BOLD;
+
+    // ─── OPEN ORDERS ──────────────────────────────────────────
+    if !s.open_orders.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("── ORDENES ABIERTAS ({}) ──", s.open_orders.len()),
+            Style::default().fg(Color::Cyan).add_modifier(b))));
+        for o in &s.open_orders {
+            let side_txt = if o.side == "buy" { "BUY" } else { "SELL" };
+            let outcome_txt = o.outcome.to_uppercase();
+            let outcome_c = if o.outcome == "up" { Color::Green } else { Color::Red };
+            let side_c = if o.side == "buy" { Color::Green } else { Color::Red };
+
+            let (fill_txt, fill_c, icon) = if o.is_filled() {
+                ("FILLED ✓", Color::Green, "✓")
+            } else if o.is_partial() {
+                ("FILLING...", Color::Yellow, "◐")
+            } else {
+                ("PENDING", Color::Red, "✗")
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {icon} "), Style::default().fg(fill_c).add_modifier(b)),
+                Span::styled(format!("{} ", side_txt), Style::default().fg(side_c).add_modifier(b)),
+                Span::styled(format!("{}  ", outcome_txt), Style::default().fg(outcome_c).add_modifier(b)),
+                Span::styled(format!("@{:.4}  ", o.price), Style::default().fg(Color::White)),
+                Span::styled(format!("{:.0}/{:.0}", o.size_matched, o.size_orig), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("  [{fill_txt}]"), Style::default().fg(fill_c)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // ─── POSITIONS ─────────────────────────────────────────────
+    let has_positions = s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up
+        || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn;
+
+    if has_positions {
+        lines.push(Line::from(Span::styled("── POSICIONES ──",
+            Style::default().fg(Color::Yellow).add_modifier(b))));
+    }
 
     if s.pos_sen_up {
         let entry = s.pos_sen_entry_up; let cur = s.hft.clob_trade_up;
@@ -264,7 +304,7 @@ fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
     }
 
     f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("POSICIONES")),
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("ORDENES / POSICIONES")),
         area);
 }
 

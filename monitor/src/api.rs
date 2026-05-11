@@ -168,6 +168,24 @@ pub struct TradeEntry {
     pub size: f64,
 }
 
+// ─── Order Tracking ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrderInfo {
+    #[allow(dead_code)]
+    pub id: String,
+    pub outcome: String,
+    pub side: String,
+    pub price: f64,
+    pub size_orig: f64,
+    pub size_matched: f64,
+}
+
+impl OrderInfo {
+    pub fn is_filled(&self) -> bool { self.size_matched >= self.size_orig }
+    pub fn is_partial(&self) -> bool { self.size_matched > 0.0 && self.size_matched < self.size_orig }
+}
+
 // ─── HTTP Helpers ───────────────────────────────────────────────────
 
 use std::time::Duration;

@@ -84,6 +84,7 @@ struct State {
     input_buf: String,
 
     orders: i64,
+    open_orders: Vec<api::OrderInfo>,
     log: VecDeque<api::LogEntry>,
     trades: VecDeque<api::TradeEntry>,
     warnings: VecDeque<String>,
@@ -145,6 +146,7 @@ impl State {
             input_mode: InputMode::Normal,
             input_buf: String::new(),
             orders: 0,
+            open_orders: Vec::new(),
             log: VecDeque::with_capacity(100),
             trades: VecDeque::with_capacity(100),
             warnings: VecDeque::with_capacity(20),
@@ -636,10 +638,11 @@ async fn main() -> io::Result<()> {
                 if let Some(v) = find_variant(&data.variants, "scalper") { apply_variant(v, &mut s); }
             }
 
-            if let Some(orders) = http_get::<Vec<serde_json::Value>>("/api/orders").await {
+            if let Some(orders) = http_get::<Vec<api::OrderInfo>>("/api/orders").await {
                 let nc = orders.len() as i64;
                 if nc != s.orders { s.add_log(format!("Orders: {} -> {}", s.orders, nc), Color::Cyan); }
                 s.orders = nc;
+                s.open_orders = orders;
             }
         }
 
