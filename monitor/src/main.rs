@@ -85,6 +85,7 @@ struct State {
 
     orders: i64,
     log: VecDeque<api::LogEntry>,
+    trades: VecDeque<api::TradeEntry>,
     warnings: VecDeque<String>,
     last_poll_odiseo: Instant,
     last_poll_btc: Instant,
@@ -142,6 +143,7 @@ impl State {
             input_buf: String::new(),
             orders: 0,
             log: VecDeque::with_capacity(100),
+            trades: VecDeque::with_capacity(100),
             warnings: VecDeque::with_capacity(20),
             last_poll_odiseo: Instant::now(),
             last_poll_btc: Instant::now(),
@@ -372,6 +374,27 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     s.prev_od83_dn = new_hft.od83_dn;
     s.prev_sen_up = new_hft.sen_up;
     s.prev_sen_dn = new_hft.sen_dn;
+
+    // ─── Track trades for TAP display ────────────────────────────
+    if new_hft.clob_trade_up > 0.0 && (s.trades.is_empty() || (new_hft.clob_trade_up - s.trades.front().map(|t| t.price).unwrap_or(0.0)).abs() > 0.0001) {
+        s.trades.push_front(api::TradeEntry {
+            ts: new_hft.time.clone(),
+            side: "UP".into(),
+            price: new_hft.clob_trade_up,
+            size: new_hft.clob_trade_up_vol,
+        });
+        if s.trades.len() > 100 { s.trades.pop_back(); }
+    }
+    if new_hft.clob_trade_dn > 0.0 && (s.trades.is_empty() || s.trades.len() < 2 || (new_hft.clob_trade_dn - s.trades.iter().filter(|t| t.side == "DOWN").next().map(|t| t.price).unwrap_or(0.0)).abs() > 0.0001) {
+        s.trades.push_front(api::TradeEntry {
+            ts: new_hft.time.clone(),
+            side: "DOWN".into(),
+            price: new_hft.clob_trade_dn,
+            size: new_hft.clob_trade_dn_vol,
+        });
+        if s.trades.len() > 100 { s.trades.pop_back(); }
+    }
+
     s.hft = new_hft.clone();
     s.odi_filters = s.hft.od83_filters;
 
@@ -662,7 +685,7 @@ async fn main() -> io::Result<()> {
                     terminal.show_cursor()?;
                     return Ok(());
                 }
-                KeyCode::Tab => { s.tab = if s.tab == 0 { 1 } else { 0 }; }
+                KeyCode::Tab => { s.tab = (s.tab + 1) % 3; }
                 KeyCode::Char('/') => {
                     s.input_mode = InputMode::Command; s.input_buf.clear();
                 }

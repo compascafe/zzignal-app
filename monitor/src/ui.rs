@@ -7,7 +7,7 @@ use ratatui::Frame;
 use crate::InputMode;
 use crate::State;
 
-const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY"];
+const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY", "GRAFICOS"];
 
 pub fn draw(f: &mut Frame, s: &State) {
     let area = f.area();
@@ -39,8 +39,11 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── TAB BAR ──────────────────────────────────────────────────────
     let tab_titles: Vec<Line> = TAB_NAMES.iter().enumerate().map(|(i, name)| {
         let style = if i == s.tab {
-            if i == 0 { Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD) }
-            else { Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD) }
+            match i {
+                0 => Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD),
+                1 => Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD),
+                _ => Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD),
+            }
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -53,7 +56,11 @@ pub fn draw(f: &mut Frame, s: &State) {
     draw_position_bar(f, chunks[ci], s); ci += 1;
 
     // ─── MAIN ─────────────────────────────────────────────────────────
-    draw_dashboard(f, chunks[ci], s);
+    if s.tab == 2 {
+        draw_graficos(f, chunks[ci], s);
+    } else {
+        draw_dashboard(f, chunks[ci], s);
+    }
     ci += 1;
 
     // ─── COMMAND BAR (modal) ────────────────────────────────────
@@ -212,6 +219,184 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
         ),
         area,
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB GRAFICOS — DOM + TAP + Area Acumulada + Histograma
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_graficos(f: &mut Frame, area: Rect, s: &State) {
+    let vert = Layout::default().direction(Direction::Vertical)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(area);
+
+    // Top: DOM (UP+DOWN) | TAP
+    let top = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(vert[0]);
+    draw_dom(f, top[0], s);
+    draw_tap(f, top[1], s);
+
+    // Bottom: Area Acumulada | Histograma
+    let bot = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(vert[1]);
+    draw_area_acumulada(f, bot[0], s);
+    draw_histograma(f, bot[1], s);
+}
+
+// ─── DOM — Depth of Market: bids/asks ladder compacto para UP y DOWN ──
+
+fn draw_dom(f: &mut Frame, area: Rect, s: &State) {
+    let cols = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(area);
+
+    draw_dom_side(f, cols[0], "UP", Color::Green, &s.book_up);
+    draw_dom_side(f, cols[1], "DOWN", Color::Red, &s.book_dn);
+}
+
+fn draw_dom_side(f: &mut Frame, area: Rect, label: &str, c: Color, book: &crate::api::BookDepth) {
+    let max_n = (area.height as usize).saturating_sub(4) / 2;
+    let n = max_n.min(10).max(3);
+
+    let mut bids: Vec<(f64,f64)> = book.bids.iter().map(|l| (l.price, l.size)).collect();
+    let mut asks: Vec<(f64,f64)> = book.asks.iter().map(|l| (l.price, l.size)).collect();
+    bids.sort_unstable_by(|a,b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    asks.sort_unstable_by(|a,b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let best_bid = bids.first().map(|&(p,_)| p).unwrap_or(0.0);
+    let best_ask = asks.first().map(|&(p,_)| p).unwrap_or(0.0);
+    let max_size = bids.iter().chain(asks.iter()).map(|&(_,s)| s).fold(0.0f64, f64::max).max(1.0);
+
+    let bar_w = area.width.saturating_sub(18) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    let bid_bg = if label == "UP" { Color::Green } else { Color::Red };
+
+    for &(price, size) in asks.iter().take(n).rev() {
+        let w = ((size / max_size) * bar_w as f64) as usize;
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4}", price), Style::default().fg(Color::Red)),
+            Span::styled(format!("{:>7.0}", size), Style::default().fg(Color::DarkGray)),
+            Span::styled("█".repeat(w.min(bar_w)), Style::default().fg(Color::Red)),
+        ]));
+    }
+    if best_ask > 0.0 && best_bid > 0.0 {
+        lines.push(Line::from(Span::styled(
+            format!("── {:.4} ──", best_ask - best_bid),
+            Style::default().fg(Color::Yellow))));
+    }
+    for &(price, size) in bids.iter().take(n) {
+        let w = ((size / max_size) * bar_w as f64) as usize;
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<8.4}", price), Style::default().fg(bid_bg)),
+            Span::styled(format!("{:>7.0}", size), Style::default().fg(Color::DarkGray)),
+            Span::styled("█".repeat(w.min(bar_w)), Style::default().fg(bid_bg)),
+        ]));
+    }
+    let title = if best_bid > 0.0 && best_ask > 0.0 {
+        format!("{label} {:.4}/{:.4}", best_bid, best_ask)
+    } else { format!("{label} DOM") };
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(c))), area);
+}
+
+// ─── TAP — Time & Sales: últimos trades ──────────────────────────────
+
+fn draw_tap(f: &mut Frame, area: Rect, s: &State) {
+    let max_n = (area.height as usize).saturating_sub(3).min(20);
+    let mut lines: Vec<Line> = Vec::new();
+    for t in s.trades.iter().take(max_n) {
+        let col = if t.side == "UP" { Color::Green } else { Color::Red };
+        let ts = if t.ts.len() > 12 { &t.ts[t.ts.len()-12..] } else { &t.ts };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", ts), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{:>6.4} ", t.price), Style::default().fg(col).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{:>6.0} ", t.size), Style::default().fg(Color::DarkGray)),
+            Span::styled(&t.side, Style::default().fg(col)),
+        ]));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled("  esperando trades...", Color::DarkGray)));
+    }
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("TAP — Time & Sales")), area);
+}
+
+// ─── AREA ACUMULADA — cumulative bid/ask volume curve ────────────────
+
+fn draw_area_acumulada(f: &mut Frame, area: Rect, s: &State) {
+    let avail_h = (area.height as usize).saturating_sub(3).max(1);
+    let avail_w = (area.width as usize).saturating_sub(16).max(1);
+
+    let bids: Vec<(f64,f64)> = s.book_up.bids.iter().map(|l| (l.price, l.size)).collect();
+    let asks: Vec<(f64,f64)> = s.book_up.asks.iter().map(|l| (l.price, l.size)).collect();
+
+    let all: Vec<(f64,f64)> = bids.iter().copied().chain(asks.iter().copied()).collect();
+    let max_cum = bids.iter().map(|&(_,s)| s).sum::<f64>().max(asks.iter().map(|&(_,s)| s).sum::<f64>()).max(1.0);
+    let min_p = all.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min).max(0.0);
+    let max_p = all.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max).min(1.0);
+    let p_range = (max_p - min_p).max(0.01);
+
+    // Build cumulative curves as rows (one per price bucket)
+    let buckets = avail_h.min(20);
+    let mut rows: Vec<(f64, f64, f64)> = Vec::new(); // (price_mid, bid_cum, ask_cum)
+    for i in 0..buckets {
+        let p = min_p + (p_range * (buckets - 1 - i) as f64 / (buckets - 1).max(1) as f64);
+        let bid_cum: f64 = bids.iter().filter(|&&(bp,_)| bp >= p).map(|&(_,s)| s).sum();
+        let ask_cum: f64 = asks.iter().filter(|&&(ap,_)| ap <= p).map(|&(_,s)| s).sum();
+        rows.push((p, bid_cum, ask_cum));
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (p, bid_cum, ask_cum) in &rows {
+        let bw = ((bid_cum / max_cum) * avail_w as f64) as usize;
+        let aw = ((ask_cum / max_cum) * avail_w as f64) as usize;
+        let mid_w = avail_w.saturating_sub(bw + aw);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<7.4}", p), Style::default().fg(Color::DarkGray)),
+            Span::styled("█".repeat(bw.min(avail_w)), Style::default().fg(Color::Green)),
+            Span::styled("░".repeat(mid_w), Style::default().fg(Color::DarkGray)),
+            Span::styled("█".repeat(aw.min(avail_w)), Style::default().fg(Color::Red)),
+            Span::styled(format!(" {:.0}", bid_cum + ask_cum), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("Area Acumulada — bids █ / asks █")), area);
+}
+
+// ─── HISTOGRAMA — volume bars per price level ────────────────────────
+
+fn draw_histograma(f: &mut Frame, area: Rect, s: &State) {
+    let avail_h = (area.height as usize).saturating_sub(3).max(1);
+    let avail_w = (area.width as usize).saturating_sub(14).max(1);
+
+    let bids: Vec<(f64,f64)> = s.book_up.bids.iter().map(|l| (l.price, l.size)).collect();
+    let asks: Vec<(f64,f64)> = s.book_up.asks.iter().map(|l| (l.price, l.size)).collect();
+
+    let max_vol = bids.iter().map(|&(_,s)| s).chain(asks.iter().map(|&(_,s)| s)).fold(0.0f64, f64::max).max(1.0);
+    let all: Vec<(f64,f64)> = bids.iter().copied().chain(asks.iter().copied()).collect();
+    let min_p = all.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min).max(0.0);
+    let max_p = all.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max).min(1.0);
+    let p_range = (max_p - min_p).max(0.01);
+
+    let buckets = avail_h.min(30);
+    let mut lines: Vec<Line> = Vec::new();
+    for i in 0..buckets {
+        let p_lo = min_p + (p_range * i as f64 / buckets as f64);
+        let p_hi = min_p + (p_range * (i + 1) as f64 / buckets as f64);
+        let vol: f64 = bids.iter().filter(|&&(bp,_)| bp >= p_lo && bp < p_hi).map(|&(_,s)| s).sum::<f64>()
+            + asks.iter().filter(|&&(ap,_)| ap >= p_lo && ap < p_hi).map(|&(_,s)| s).sum::<f64>();
+        let w = ((vol / max_vol) * avail_w as f64) as usize;
+        let c = if vol > 0.0 { Color::Cyan } else { Color::DarkGray };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<7.4}", p_lo), Style::default().fg(Color::DarkGray)),
+            Span::styled("█".repeat(w.min(avail_w)), Style::default().fg(c)),
+            Span::styled(format!(" {:.0}", vol), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("Histograma — volumen por nivel de precio")), area);
 }
 
 // ═══════════════════════════════════════════════════════════════════

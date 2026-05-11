@@ -158,6 +158,16 @@ impl LogEntry {
     }
 }
 
+// ─── Trade Entry (for TAP / Time & Sales) ───────────────────────────
+
+#[derive(Clone)]
+pub struct TradeEntry {
+    pub ts: String,
+    pub side: String,   // "UP" or "DOWN"
+    pub price: f64,
+    pub size: f64,
+}
+
 // ─── HTTP Helpers ───────────────────────────────────────────────────
 
 use std::time::Duration;
