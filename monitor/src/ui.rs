@@ -628,7 +628,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
 
     let avail = (area.height as usize).saturating_sub(3);
-    let half = 8; // fixed: 8 asks + 1 spread + 8 bids = 17 lines
+    let half = avail.min(10).max(4); // dynamic: more levels if space allows
 
     asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let top_asks: Vec<_> = asks.into_iter().take(half).rev().collect();
@@ -639,6 +639,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let max_size = top_asks.iter().map(|&(_,s)| s)
         .chain(top_bids.iter().map(|&(_,s)| s))
         .fold(0.0f64, f64::max).max(1.0);
+    let log_max = (max_size + 1.0).ln();
 
     let spread = if best_bid > 0.0 && best_ask > 0.0 { best_ask - best_bid } else { 0.0 };
     let mid = if best_bid > 0.0 && best_ask > 0.0 { (best_bid + best_ask) / 2.0 } else { 0.0 };
@@ -646,7 +647,8 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let mut lines: Vec<Line> = Vec::new();
 
     for &(price, size) in top_asks.iter() {
-        let w = ((size / max_size) * bar_w as f64) as usize;
+        let log_sz = (size + 1.0).ln();
+        let w = if log_max > 0.0 { (log_sz / log_max * bar_w as f64) as usize } else { 0 };
         let bar = "█".repeat(w.min(bar_w));
         let is_ceiling = (price - best_ask).abs() < 0.0001;
         let c = if is_ceiling { Color::Yellow } else { Color::Red };
@@ -667,7 +669,8 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     }
 
     for &(price, size) in top_bids.iter() {
-        let w = ((size / max_size) * bar_w as f64) as usize;
+        let log_sz = (size + 1.0).ln();
+        let w = if log_max > 0.0 { (log_sz / log_max * bar_w as f64) as usize } else { 0 };
         let bar = "█".repeat(w.min(bar_w));
         let is_floor = (price - best_bid).abs() < 0.0001;
         let c = if is_floor { Color::Yellow } else { Color::Green };
@@ -736,13 +739,15 @@ fn draw_dom_side(f: &mut Frame, area: Rect, label: &str, c: Color, book: &crate:
     let best_bid = bids.first().map(|&(p,_)| p).unwrap_or(0.0);
     let best_ask = asks.first().map(|&(p,_)| p).unwrap_or(0.0);
     let max_size = bids.iter().chain(asks.iter()).map(|&(_,s)| s).fold(0.0f64, f64::max).max(1.0);
+    let log_max = (max_size + 1.0).ln();
 
     let bar_w = area.width.saturating_sub(18) as usize;
     let mut lines: Vec<Line> = Vec::new();
     let bid_bg = if label == "UP" { Color::Green } else { Color::Red };
 
     for &(price, size) in asks.iter().take(n).rev() {
-        let w = ((size / max_size) * bar_w as f64) as usize;
+        let log_sz = (size + 1.0).ln();
+        let w = if log_max > 0.0 { (log_sz / log_max * bar_w as f64) as usize } else { 0 };
         lines.push(Line::from(vec![
             Span::styled(format!("{:<8.4}", price), Style::default().fg(Color::Red)),
             Span::styled(format!("{:>7.0}", size), Style::default().fg(Color::DarkGray)),
@@ -755,7 +760,8 @@ fn draw_dom_side(f: &mut Frame, area: Rect, label: &str, c: Color, book: &crate:
             Style::default().fg(Color::Yellow))));
     }
     for &(price, size) in bids.iter().take(n) {
-        let w = ((size / max_size) * bar_w as f64) as usize;
+        let log_sz = (size + 1.0).ln();
+        let w = if log_max > 0.0 { (log_sz / log_max * bar_w as f64) as usize } else { 0 };
         lines.push(Line::from(vec![
             Span::styled(format!("{:<8.4}", price), Style::default().fg(bid_bg)),
             Span::styled(format!("{:>7.0}", size), Style::default().fg(Color::DarkGray)),
