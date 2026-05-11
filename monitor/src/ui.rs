@@ -12,17 +12,24 @@ const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY", "GRAFICOS"];
 pub fn draw(f: &mut Frame, s: &State) {
     let area = f.area();
 
+    if s.show_man {
+        draw_man_page(f, area, s);
+        return;
+    }
+
     let pos_h = 1;
     let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
+    let trade_h = if s.mt_state > 0 || !s.trade_log.is_empty() { 6 } else { 0 };
 
     let mut constraints = vec![
         Constraint::Length(1),     // commit bar
         Constraint::Length(1),     // tab bar
         Constraint::Length(pos_h), // position bar
-        Constraint::Min(1),        // dashboard
+        Constraint::Min(4),        // dashboard
     ];
+    if trade_h > 0 { constraints.push(Constraint::Length(trade_h)); }
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
-    constraints.push(Constraint::Length(2)); // footer
+    constraints.push(Constraint::Length(10)); // footer: ayuda memoria
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut ci = 0;
@@ -69,7 +76,13 @@ pub fn draw(f: &mut Frame, s: &State) {
     }
     ci += 1;
 
-    // ─── COMMAND BAR (modal) ────────────────────────────────────
+    // ─── TRADE LOG PANEL ──────────────────────────────────────────────
+    if trade_h > 0 {
+        draw_trade_log(f, chunks[ci], s);
+        ci += 1;
+    }
+
+    // ─── COMMAND BAR (modal) ──────────────────────────────────────────
     if cmd_h > 0 {
         draw_command_bar(f, chunks[ci], s);
         ci += 1;
@@ -80,15 +93,16 @@ pub fn draw(f: &mut Frame, s: &State) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// TAB 0/1: DASHBOARD — Polymarket style
+// TAB 0/1: DASHBOARD
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
-        Constraint::Length(3),     // market info (BTC, open, countdown, balance)
-        Constraint::Length(3),     // UP/DOWN price cards with init + diff
-        Constraint::Min(6),        // orderbook depth
-        Constraint::Length(4),     // positions + events
+        Constraint::Length(3),     // market info
+        Constraint::Length(3),     // UP/DOWN price cards
+        Constraint::Length(2),     // manual trading status
+        Constraint::Min(4),        // orderbook depth
+        Constraint::Length(5),     // positions + events
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -96,6 +110,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
 
     draw_market_info(f, m[idx], s); idx += 1;
     draw_price_cards(f, m[idx], s); idx += 1;
+    draw_manual_status(f, m[idx], s); idx += 1;
     draw_depth_panel(f, m[idx], s); idx += 1;
 
     let bottom = Layout::default().direction(Direction::Horizontal)
@@ -105,7 +120,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     draw_events_card(f, bottom[1], s);
 }
 
-// ─── MARKET INFO BAR: 4 cards — BTC | Open | Countdown | Balance ───
+// ─── MARKET INFO BAR ──────────────────────────────────────────────
 
 fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
     let cols = Layout::default().direction(Direction::Horizontal)
@@ -155,7 +170,7 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
         cols[3]);
 }
 
-// ─── PRICE CARDS: UP / DOWN — big numbers, init, diff ─────────────
+// ─── PRICE CARDS ──────────────────────────────────────────────────
 
 fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
     let cols = Layout::default().direction(Direction::Horizontal)
@@ -204,7 +219,122 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 }
 
-// ─── POSITIONS & ORDERS CARD ────────────────────────────────────
+// ─── MANUAL TRADING STATUS BAR ────────────────────────────────────
+
+fn draw_manual_status(f: &mut Frame, area: Rect, s: &State) {
+    let b = Modifier::BOLD;
+    let mut spans: Vec<Span> = Vec::new();
+
+    spans.push(Span::styled("MANUAL: ", Style::default().fg(Color::DarkGray).add_modifier(b)));
+
+    match s.mt_state {
+        0 => {
+            spans.push(Span::styled("IDLE  ", Style::default().fg(Color::DarkGray)));
+            if s.mt_pnl_cum != 0.0 {
+                let c = if s.mt_pnl_cum >= 0.0 { Color::Green } else { Color::Red };
+                spans.push(Span::styled(format!("ΣP&L {:+.2}  ", s.mt_pnl_cum), Style::default().fg(c).add_modifier(b)));
+                spans.push(Span::styled(format!("{}T/{}/{}W", s.mt_trades, s.mt_trades - s.mt_wins, s.mt_wins),
+                    Style::default().fg(Color::DarkGray)));
+            }
+        }
+        1 => {
+            spans.push(Span::styled("PENDING ", Style::default().fg(Color::Yellow).add_modifier(b)));
+            let outcome_c = if s.mt_outcome == "up" { Color::Green } else { Color::Red };
+            spans.push(Span::styled(format!("{} ", s.mt_outcome.to_uppercase()), Style::default().fg(outcome_c).add_modifier(b)));
+            spans.push(Span::styled(format!("BUY @{:.4} sz={:.0} ${:.2}",
+                s.mt_entry, s.mt_size, s.mt_budget), Style::default().fg(Color::White)));
+            if s.mt_last_fill_pct > 0.0 {
+                spans.push(Span::styled(format!("  [{:.0}% filled]", s.mt_last_fill_pct),
+                    Style::default().fg(Color::Yellow)));
+            }
+            if s.mt_exit_price > 0.0 {
+                spans.push(Span::styled(format!("  TP@{:.4}", s.mt_exit_price),
+                    Style::default().fg(Color::Cyan)));
+            }
+            spans.push(Span::styled("  /c=CANCELAR", Style::default().fg(Color::DarkGray)));
+        }
+        2 => {
+            spans.push(Span::styled("ACTIVE ", Style::default().fg(Color::Green).add_modifier(b)));
+            let outcome_c = if s.mt_outcome == "up" { Color::Green } else { Color::Red };
+            spans.push(Span::styled(format!("{} ", s.mt_outcome.to_uppercase()), Style::default().fg(outcome_c).add_modifier(b)));
+
+            let current_px = if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+            let upnl = s.mt_size * (current_px - s.mt_entry);
+            let upnl_pct = if s.mt_entry > 0.0 { (current_px / s.mt_entry - 1.0) * 100.0 } else { 0.0 };
+            let pnl_c = if upnl >= 0.0 { Color::Green } else { Color::Red };
+
+            spans.push(Span::styled(format!("entry:{:.4}→{:.4} ", s.mt_entry, current_px),
+                Style::default().fg(Color::White)));
+            spans.push(Span::styled(format!("uP&L {:+.2} ({:+.1}%) ", upnl, upnl_pct),
+                Style::default().fg(pnl_c).add_modifier(b)));
+
+            let liq_cmd = if s.mt_outcome == "up" { "/lupXX" } else { "/ldXX" };
+            spans.push(Span::styled(format!("| {} /lm /c", liq_cmd), Style::default().fg(Color::DarkGray)));
+        }
+        3 => {
+            spans.push(Span::styled("EXITING ", Style::default().fg(Color::Cyan).add_modifier(b)));
+            let outcome_c = if s.mt_outcome == "up" { Color::Green } else { Color::Red };
+            spans.push(Span::styled(format!("{} ", s.mt_outcome.to_uppercase()), Style::default().fg(outcome_c).add_modifier(b)));
+
+            let exit_px = if s.mt_exit_price > 0.0 { s.mt_exit_price } else {
+                if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn }
+            };
+            let expected = s.mt_size * (exit_px - s.mt_entry);
+            let pnl_c = if expected >= 0.0 { Color::Green } else { Color::Red };
+            spans.push(Span::styled(format!("exit @{:.4}  exp.P&L {:+.2}",
+                exit_px, expected), Style::default().fg(pnl_c).add_modifier(b)));
+            spans.push(Span::styled("  /c=CANCELAR EXIT", Style::default().fg(Color::DarkGray)));
+        }
+        _ => {}
+    }
+
+    if s.mt_pnl_cum != 0.0 {
+        let c = if s.mt_pnl_cum >= 0.0 { Color::Green } else { Color::Red };
+        spans.push(Span::styled(format!("  Σ{:+.2}", s.mt_pnl_cum), Style::default().fg(c).add_modifier(b)));
+    }
+
+    // ─── SL INDICATOR ───
+    let sl_span = if s.sl_pct > 0.0 {
+        let sl_price = s.mt_entry * (1.0 - s.sl_pct / 100.0);
+        let sl_type = if s.sl_market { "MKT" } else { "LMT" };
+        let has_sl_order = !s.mt_sl_order_id.is_empty();
+        let sl_c = if s.mt_state == 2 && has_sl_order { Color::Green }
+            else if s.mt_state == 2 { Color::Yellow }
+            else if s.sl_pct > 0.0 { Color::DarkGray }
+            else { Color::Red };
+        if s.mt_state == 2 {
+            Span::styled(
+                format!("  🛡 SL:{:.0}%{} @{:.4} {}", s.sl_pct, sl_type, sl_price,
+                    if has_sl_order {"✓"}else{"..."}),
+                Style::default().fg(sl_c).add_modifier(b))
+        } else {
+            Span::styled(
+                format!("  SL:{:.0}%{}", s.sl_pct, sl_type),
+                Style::default().fg(Color::DarkGray))
+        }
+    } else {
+        Span::styled("  SL:OFF", Style::default().fg(Color::Red).add_modifier(b))
+    };
+    spans.push(sl_span);
+
+    let (border_c, title) = match s.mt_state {
+        1 => (Color::Yellow, "TRADING — PENDING"),
+        2 => (Color::Green, "TRADING — ACTIVE"),
+        3 => (Color::Cyan, "TRADING — EXIT"),
+        _ if s.mt_pnl_cum != 0.0 => {
+            let c = if s.mt_pnl_cum >= 0.0 { Color::Green } else { Color::Red };
+            (c, "TRADING — RESULTS")
+        }
+        _ => (Color::DarkGray, "TRADING"),
+    };
+
+    f.render_widget(
+        Paragraph::new(Line::from(spans))
+            .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(border_c))),
+        area);
+}
+
+// ─── POSITIONS & ORDERS CARD ──────────────────────────────────────
 
 fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
     let mut lines: Vec<Line> = Vec::new();
@@ -213,7 +343,7 @@ fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
     // ─── OPEN ORDERS ──────────────────────────────────────────
     if !s.open_orders.is_empty() {
         lines.push(Line::from(Span::styled(
-            format!("── ORDENES ABIERTAS ({}) ──", s.open_orders.len()),
+            format!("── ORDENES ({}) ──", s.open_orders.len()),
             Style::default().fg(Color::Cyan).add_modifier(b))));
         for o in &s.open_orders {
             let side_txt = if o.side == "buy" { "BUY" } else { "SELL" };
@@ -222,31 +352,37 @@ fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
             let side_c = if o.side == "buy" { Color::Green } else { Color::Red };
 
             let (fill_txt, fill_c, icon) = if o.is_filled() {
-                ("FILLED ✓", Color::Green, "✓")
+                ("FILLED", Color::Green, "✓")
             } else if o.is_partial() {
-                ("FILLING...", Color::Yellow, "◐")
+                ("FILLING", Color::Yellow, "◐")
             } else {
                 ("PENDING", Color::Red, "✗")
             };
 
+            let pct = if o.size_orig > 0.0 { (o.size_matched / o.size_orig * 100.0) as i64 } else { 0 };
+
             lines.push(Line::from(vec![
-                Span::styled(format!(" {icon} "), Style::default().fg(fill_c).add_modifier(b)),
+                Span::styled(format!("{icon} "), Style::default().fg(fill_c).add_modifier(b)),
                 Span::styled(format!("{} ", side_txt), Style::default().fg(side_c).add_modifier(b)),
                 Span::styled(format!("{}  ", outcome_txt), Style::default().fg(outcome_c).add_modifier(b)),
                 Span::styled(format!("@{:.4}  ", o.price), Style::default().fg(Color::White)),
-                Span::styled(format!("{:.0}/{:.0}", o.size_matched, o.size_orig), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("  [{fill_txt}]"), Style::default().fg(fill_c)),
+                Span::styled(format!("{:.0}/{:.0} [{pct}%]", o.size_matched, o.size_orig), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("  {fill_txt}"), Style::default().fg(fill_c)),
             ]));
+            // Show order ID for manual cancel
+            lines.push(Line::from(Span::styled(
+                format!("  id:{}", &o.id[..o.id.len().min(20)]),
+                Style::default().fg(Color::Rgb(30, 40, 55)))));
         }
         lines.push(Line::from(""));
     }
 
-    // ─── POSITIONS ─────────────────────────────────────────────
+    // ─── STRATEGY POSITIONS ──────────────────────────────────────
     let has_positions = s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up
         || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn;
 
     if has_positions {
-        lines.push(Line::from(Span::styled("── POSICIONES ──",
+        lines.push(Line::from(Span::styled("── POSICIONES STRATEGY ──",
             Style::default().fg(Color::Yellow).add_modifier(b))));
     }
 
@@ -308,18 +444,31 @@ fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
         area);
 }
 
-// ─── EVENTS CARD — last log entries ──────────────────────────────
+// ─── EVENTS CARD ──────────────────────────────────────────────────
 
 fn draw_events_card(f: &mut Frame, area: Rect, s: &State) {
-    let event_lines: Vec<Line> = s.log.iter().take(3).map(|e| Line::from(vec![
-        Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
-        Span::styled(&e.text, Style::default().fg(e.color)),
-    ])).collect();
-    let lines = if event_lines.is_empty() {
-        vec![Line::from(Span::styled("  esperando eventos...", Style::default().fg(Color::DarkGray)))]
-    } else { event_lines };
+    let mut lines: Vec<Line> = Vec::new();
 
-    // Health + connection mini-indicator in event area
+    // Show trade log first (clean trading events)
+    for e in s.trade_log.iter().take(2) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
+            Span::styled(&e.text, Style::default().fg(e.color)),
+        ]));
+    }
+
+    // Fill remaining with critical log entries
+    for e in s.log.iter().filter(|e| e.text.contains("FAIL") || e.text.contains("PANIC")).take(2) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
+            Span::styled(&e.text, Style::default().fg(e.color)),
+        ]));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled("  esperando eventos...", Style::default().fg(Color::DarkGray))));
+    }
+
     let latency_ms = s.last_api_ok.elapsed().as_millis() as u64;
     let (health_txt, health_c) = if !s.connected {
         ("NO CONEXION", Color::Red)
@@ -338,8 +487,41 @@ fn draw_events_card(f: &mut Frame, area: Rect, s: &State) {
         area);
 }
 
+// ─── TRADE LOG PANEL ──────────────────────────────────────────────
+
+fn draw_trade_log(f: &mut Frame, area: Rect, s: &State) {
+    let max_n = (area.height as usize).saturating_sub(2).min(5);
+    let lines: Vec<Line> = s.trade_log.iter().take(max_n).map(|e| {
+        Line::from(vec![
+            Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
+            Span::styled(&e.text, Style::default().fg(e.color)),
+        ])
+    }).collect();
+
+    let title = if s.mt_pnl_cum != 0.0 {
+        let c = if s.mt_pnl_cum >= 0.0 { "▲" } else { "▼" };
+        format!("TRADE LOG {c} Σ{:+.2}  {}/{}W",
+            s.mt_pnl_cum, s.mt_trades, s.mt_wins)
+    } else {
+        "TRADE LOG".into()
+    };
+
+    let border_c = if s.mt_state == 1 { Color::Yellow }
+        else if s.mt_state == 2 { Color::Green }
+        else if s.mt_state == 3 { Color::Cyan }
+        else if s.mt_pnl_cum > 0.0 { Color::Green }
+        else if s.mt_pnl_cum < 0.0 { Color::Red }
+        else { Color::DarkGray };
+
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(border_c))
+        ),
+        area);
+}
+
 // ═══════════════════════════════════════════════════════════════════
-// ORDERBOOK DEPTH — 20 levels bids/asks
+// ORDERBOOK DEPTH
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
@@ -349,16 +531,12 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
 
     let bar_w = chunks[0].width.saturating_sub(14) as usize;
 
-    // ─── UP depth ───
     draw_book_side(f, chunks[0], bar_w, "UP", Color::Green, &s.book_up, &s.hft.depth_up_bids, &s.hft.depth_up_asks);
-
-    // ─── DOWN depth ───
     draw_book_side(f, chunks[1], bar_w, "DOWN", Color::Red, &s.book_dn, &s.hft.depth_dn_bids, &s.hft.depth_dn_asks);
 }
 
 fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c: Color,
                    book: &crate::api::BookDepth, bids_fb: &[(f64,f64)], asks_fb: &[(f64,f64)]) {
-    // Prevent excessive CPU on large books (session transitions could flood)
     let mut bids: Vec<(f64,f64)> = if !book.bids.is_empty() {
         book.bids.iter().take(200).map(|l| (l.price, l.size)).collect()
     } else {
@@ -373,9 +551,8 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let best_bid = bids.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max);
     let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
 
-    // Available content lines = area height - 2 (borders) - 1 (spread)
     let avail = (area.height as usize).saturating_sub(3);
-    let half = (avail / 2).max(4).min(8);  // 4-8 per side, both sides fit
+    let half = (avail / 2).max(4).min(8);
 
     asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let top_asks: Vec<_> = asks.into_iter().take(half).rev().collect();
@@ -392,7 +569,6 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Asks (venta) — rojo, descienden hacia el ceiling
     for &(price, size) in &top_asks {
         let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
@@ -405,7 +581,6 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
         ]));
     }
 
-    // ─── SPREAD ZONE ─── ceiling / floor
     if best_bid > 0.0 && best_ask > 0.0 {
         let spread_str = format!("{:.4}", spread);
         let mid_str = format!("{:.4}", mid);
@@ -415,7 +590,6 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
         ]));
     }
 
-    // Bids (compra) — verde, ascienden desde el floor
     for &(price, size) in &top_bids {
         let w = ((size / max_size) * bar_w as f64) as usize;
         let bar = "█".repeat(w.min(bar_w));
@@ -455,21 +629,15 @@ fn draw_graficos(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(2,5), Constraint::Ratio(2,5), Constraint::Ratio(1,5)])
         .split(area);
 
-    // Top: DOM full width
     draw_dom(f, vert[0], s);
-
-    // Middle: TAP full width
     draw_tap(f, vert[1], s);
 
-    // Bottom: Area Acumulada | Histograma
     let bot = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
         .split(vert[2]);
     draw_area_acumulada(f, bot[0], s);
     draw_histograma(f, bot[1], s);
 }
-
-// ─── DOM — Depth of Market: bids/asks ladder compacto para UP y DOWN ──
 
 fn draw_dom(f: &mut Frame, area: Rect, s: &State) {
     let cols = Layout::default().direction(Direction::Horizontal)
@@ -525,8 +693,6 @@ fn draw_dom_side(f: &mut Frame, area: Rect, label: &str, c: Color, book: &crate:
         Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(c))), area);
 }
 
-// ─── TAP — Time & Sales: últimos trades ──────────────────────────────
-
 fn draw_tap(f: &mut Frame, area: Rect, s: &State) {
     let max_n = (area.height as usize).saturating_sub(3).min(20);
     let mut lines: Vec<Line> = Vec::new();
@@ -547,8 +713,6 @@ fn draw_tap(f: &mut Frame, area: Rect, s: &State) {
         Block::default().borders(Borders::ALL).title("TAP — Time & Sales")), area);
 }
 
-// ─── AREA ACUMULADA — cumulative bid/ask volume curve ────────────────
-
 fn draw_area_acumulada(f: &mut Frame, area: Rect, s: &State) {
     let avail_h = (area.height as usize).saturating_sub(3).max(1);
     let avail_w = (area.width as usize).saturating_sub(16).max(1);
@@ -562,9 +726,8 @@ fn draw_area_acumulada(f: &mut Frame, area: Rect, s: &State) {
     let max_p = all.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max).min(1.0);
     let p_range = (max_p - min_p).max(0.01);
 
-    // Build cumulative curves as rows (one per price bucket)
     let buckets = avail_h.min(20);
-    let mut rows: Vec<(f64, f64, f64)> = Vec::new(); // (price_mid, bid_cum, ask_cum)
+    let mut rows: Vec<(f64, f64, f64)> = Vec::new();
     for i in 0..buckets {
         let p = min_p + (p_range * (buckets - 1 - i) as f64 / (buckets - 1).max(1) as f64);
         let bid_cum: f64 = bids.iter().filter(|&&(bp,_)| bp >= p).map(|&(_,s)| s).sum();
@@ -586,10 +749,8 @@ fn draw_area_acumulada(f: &mut Frame, area: Rect, s: &State) {
         ]));
     }
     f.render_widget(Paragraph::new(lines).block(
-        Block::default().borders(Borders::ALL).title("Area Acumulada — bids █ / asks █")), area);
+        Block::default().borders(Borders::ALL).title("Area Acumulada")), area);
 }
-
-// ─── HISTOGRAMA — volume bars per price level ────────────────────────
 
 fn draw_histograma(f: &mut Frame, area: Rect, s: &State) {
     let avail_h = (area.height as usize).saturating_sub(3).max(1);
@@ -648,59 +809,88 @@ fn draw_histograma(f: &mut Frame, area: Rect, s: &State) {
         }
     }
     f.render_widget(Paragraph::new(lines).block(
-        Block::default().borders(Borders::ALL).title("Histograma — vol x nivel (log)")), area);
+        Block::default().borders(Borders::ALL).title("Histograma")), area);
 }
 
 
 // ═══════════════════════════════════════════════════════════════════
-// POSITION BAR — visible in ALL tabs
+// POSITION BAR
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
-    let (sen_pos, sen_style) = if s.pos_sen_up {
-        let entry = s.pos_sen_entry_up;
-        let current = s.hft.clob_trade_up;
-        let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
-        let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
+    let b = Modifier::BOLD;
+
+    // ─── Manual position ALWAYS shown ───
+    let (pos_text, pos_style) = if s.mt_state >= 2 {
+        let current_px = if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+        let entry = if s.mt_fill_avg > 0.0 { s.mt_fill_avg } else { s.mt_entry };
+        let pnl = s.mt_size * (current_px - entry);
+        let pnl_pct = if entry > 0.0 { (current_px / entry - 1.0) * 100.0 } else { 0.0 };
         let gain = pnl >= 0.0;
         let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!("▲ SENNA UP  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            sz, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
-        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
+        let side_sym = if s.mt_outcome == "up" { "▲" } else { "▼" };
+        let tsl = if s.mt_tsl_pct > 0.0 { format!(" TSL:{:.0}%", s.mt_tsl_pct) } else { String::new() };
+        let sl = if s.sl_pct > 0.0 { format!(" SL:{:.0}%", s.sl_pct) } else { String::new() };
+        let exit_info = if s.mt_exit_price > 0.0 { format!(" TP:{:.4}", s.mt_exit_price) } else { String::new() };
+        let txt = format!("{side_sym} POS {} sz={:.0} entry={:.4}→{:.4} PnL:{:+.2} ({:+.1}%) Σ{:+.2}{tsl}{sl}{exit_info}",
+            s.mt_outcome.to_uppercase(), s.mt_size, entry, current_px, pnl, pnl_pct, s.mt_pnl_cum);
+        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(b))
+    } else if s.mt_state == 1 {
+        let side_sym = if s.mt_outcome == "up" { "▲" } else { "▼" };
+        let txt = format!("{side_sym} PENDING {} sz={:.0} @{:.4} ${:.2}  [{:.0}% filled]  /c=CANCELAR",
+            s.mt_outcome.to_uppercase(), s.mt_size, s.mt_entry, s.mt_budget, s.mt_last_fill_pct);
+        (txt, Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(b))
+    } else if s.pos_sen_up {
+        let entry = s.pos_sen_entry_up; let cur = s.hft.clob_trade_up;
+        let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
+        let pnl = if entry > 0.0 && cur > 0.0 { s.sen_budget * (cur / entry - 1.0) } else { 0.0 };
+        let gain = pnl >= 0.0;
+        let bg = if gain { Color::Green } else { Color::Red };
+        (format!("▲ SENNA UP  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            sz, cur, pnl, if entry>0.0{(cur/entry-1.0)*100.0}else{0.0}),
+         Style::default().fg(Color::Black).bg(bg).add_modifier(b))
     } else if s.pos_sen_dn {
-        let entry = s.pos_sen_entry_dn;
-        let current = s.hft.clob_trade_dn;
+        let entry = s.pos_sen_entry_dn; let cur = s.hft.clob_trade_dn;
         let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
-        let pnl = if entry > 0.0 && current > 0.0 { s.sen_budget * (current / entry - 1.0) } else { 0.0 };
+        let pnl = if entry > 0.0 && cur > 0.0 { s.sen_budget * (cur / entry - 1.0) } else { 0.0 };
         let gain = pnl >= 0.0;
         let bg = if gain { Color::Green } else { Color::Red };
-        let txt = format!("▼ SENNA DN  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            sz, current, pnl, if entry>0.0{(current/entry-1.0)*100.0}else{0.0});
-        (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD))
+        (format!("▼ SENNA DN  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
+            sz, cur, pnl, if entry>0.0{(cur/entry-1.0)*100.0}else{0.0}),
+         Style::default().fg(Color::Black).bg(bg).add_modifier(b))
     } else if s.sen_enabled && s.sen_budget > 0.0 {
         (format!("⚡ SENNA activo  ${:.0}  esperando momentum...", s.sen_budget),
-         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-    } else if s.sen_enabled {
-        (format!("⚡ SENNA activo  sin presupuesto"),
-         Style::default().fg(Color::Cyan))
+         Style::default().fg(Color::Cyan).add_modifier(b))
     } else {
-        (format!("○ SENNA OFF  /s5..s100 para activar"),
+        (format!("POS: 0  —  /l10up65 para abrir  |  /man = ayuda"),
          Style::default().fg(Color::DarkGray))
     };
 
+    // Alert indicators
+    let alert_info = if !s.alerts.is_empty() {
+        let alert_list: Vec<String> = s.alerts.iter().map(|a|
+            format!("{}@{:.4}", a.outcome.to_uppercase(), a.price)
+        ).collect();
+        format!(" | 🔔 {}", alert_list.join(", "))
+    } else { String::new() };
+
+    let combined = format!("{pos_text}{alert_info}");
+
     f.render_widget(
-        Paragraph::new(sen_pos).style(sen_style)
-            .block(Block::default().borders(Borders::ALL).title("Senna")),
+        Paragraph::new(combined).style(pos_style)
+            .block(Block::default().borders(Borders::ALL).title("POSICION")),
         area);
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// BUDGET INPUT MODAL
+// COMMAND BAR MODAL
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
+    let help = "/l10up65e70  BUY+EXIT  |  /clup65  cancel+liq  |  /lup70 /ld70  liq limit";
+    let help2 = "/c  cancel  |  /lm  liq mercado  |  /clm  cancel+mkt  |  /p  PANIC";
     let text = format!(
-        "▶ /{}_\n/h5..h100 /o5..o100 /p /h /o",
+        "▶ /{}_\n{help}\n{help2}",
         s.input_buf
     );
     f.render_widget(
@@ -712,18 +902,118 @@ fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// FOOTER — hotkeys permanentes
+// /man PAGE — full-screen command reference
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_man_page(f: &mut Frame, area: Rect, _s: &State) {
+    use crate::commands::REGISTRY;
+    use std::collections::BTreeMap;
+
+    // Group by category
+    let mut cats: BTreeMap<&str, Vec<&crate::commands::CmdDef>> = BTreeMap::new();
+    for cmd in REGISTRY {
+        cats.entry(cmd.category).or_default().push(cmd);
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    let b = Modifier::BOLD;
+
+    lines.push(Line::from(Span::styled(
+        "╔══════════════════════════════════════════════════════════════╗",
+        Style::default().fg(Color::Yellow).add_modifier(b))));
+    lines.push(Line::from(Span::styled(
+        "║              ZZIGNAL MONITOR — COMANDOS /man               ║",
+        Style::default().fg(Color::Yellow).add_modifier(b))));
+    lines.push(Line::from(Span::styled(
+        "╚══════════════════════════════════════════════════════════════╝",
+        Style::default().fg(Color::Yellow).add_modifier(b))));
+    lines.push(Line::from(""));
+
+    for (cat, cmds) in &cats {
+        lines.push(Line::from(Span::styled(
+            format!("── {cat} ──"),
+            Style::default().fg(Color::Cyan).add_modifier(b))));
+        for cmd in cmds {
+            lines.push(Line::from(vec![
+                Span::styled(cmd.syntax, Style::default().fg(Color::Green).add_modifier(b)),
+                Span::styled(cmd.desc, Style::default().fg(Color::Gray)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "/quit = salir    Esc/q = cerrar    [/] = nuevo comando",
+        Style::default().fg(Color::DarkGray))));
+
+    f.render_widget(
+        Paragraph::new(lines),
+        area,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FOOTER — COMMAND LEGEND
 // ═══════════════════════════════════════════════════════════════════
 
 fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     let sl_info = if s.sl_pct > 0.0 {
-        format!("{:.0}% {}", s.sl_pct, if s.sl_market {"MKT"}else{"LMT"})
+        format!("{:.0}%{}", s.sl_pct, if s.sl_market {" MKT"}else{" LMT"})
     } else { "OFF".into() };
-    let line1 = format!("TRADE: /10up65 /15d40  |  EXIT: /20up65e70  |  SL:{} /sl /sl10 /nsl  |  /p=PANIC", sl_info);
-    let line2 = "[/]abrir comandos  [Tab]DINERO REAL/PAPER  [q]salir";
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("AYUDA", Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED)),
+        ]),
+        Line::from(vec![
+            Span::styled(" /l10up65    ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("BUY $10 UP @0.65                      ", Style::default().fg(Color::Gray)),
+            Span::styled("/l10up65e70 ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("BUY $10 UP @0.65 + exit @0.70", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" /c          ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("cancelar orden manual activa          ", Style::default().fg(Color::Gray)),
+            Span::styled("/c<id>      ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("cancelar por ID especifico", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" /clup65     ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("cancela todo + liq UP @0.65           ", Style::default().fg(Color::Gray)),
+            Span::styled("/cld70      ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("cancela todo + liq DOWN @0.70", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" /lup70      ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled("liq UP limit @0.70                    ", Style::default().fg(Color::Gray)),
+            Span::styled("/ld70       ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled("liq DOWN limit @0.70", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" /lm         ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled("liq a MERCADO (UP+DOWN)               ", Style::default().fg(Color::Gray)),
+            Span::styled("/clm        ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("cancela todo + liq a MERCADO", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" /p          ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled("PANIC: liquida TODO (manual+estrategias)", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" /sl         ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("toggle SL MKT/LMT [{sl_info}]           ", sl_info = sl_info), Style::default().fg(Color::Gray)),
+            Span::styled("/sl15       ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+            Span::styled("SL 15%   /nsl = quitar SL", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(Span::styled(
+            " [/]comando  [Tab]vista  [Esc/q]salir",
+            Style::default().fg(Color::Rgb(30, 40, 55)),
+        )),
+    ];
+
     f.render_widget(
-        Paragraph::new(format!("{}\n{}", line1, line2))
-            .style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(lines),
         area,
     );
 }

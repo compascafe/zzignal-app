@@ -4,6 +4,15 @@ use serde::Deserialize;
 pub const WS_URL: &str = "ws://localhost:8080/ws";
 pub const API_URL: &str = "http://localhost:8080";
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrderPlaced {
+    pub id: String,
+    #[serde(default)]
+    pub price: f64,
+    #[serde(default)]
+    pub size: f64,
+}
+
 // ─── Orderbook Depth ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -215,6 +224,30 @@ pub async fn http_post(path: &str, body: &str) -> Result<(), String> {
         .map_err(|e| format!("POST {path}: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("POST {path} → HTTP {}", resp.status().as_u16()));
+    }
+    Ok(())
+}
+
+pub async fn http_post_json<T: for<'de> Deserialize<'de>>(path: &str, body: &str) -> Option<T> {
+    let resp = client()
+        .post(format!("{API_URL}{path}"))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .send().await.ok()?;
+    if resp.status().is_success() {
+        resp.json::<T>().await.ok()
+    } else {
+        None
+    }
+}
+
+pub async fn http_delete(path: &str) -> Result<(), String> {
+    let resp = client()
+        .delete(format!("{API_URL}{path}"))
+        .send().await
+        .map_err(|e| format!("DELETE {path}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("DELETE {path} → HTTP {}", resp.status().as_u16()));
     }
     Ok(())
 }

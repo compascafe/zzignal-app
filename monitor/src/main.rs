@@ -1,4 +1,5 @@
 mod api;
+mod commands;
 mod ui;
 
 use std::collections::VecDeque;
@@ -43,7 +44,7 @@ struct State {
     h65_accuracy: f64, h65_avg_pnl: f64, h65_best: f64, h65_worst: f64,
     last_h65_t_up: i64, last_h65_t_dn: i64,
 
-    // Senna (Scalper Momentum)
+    // Senna
     sen_pnl: f64, sen_bal: f64, sen_budget: f64,
     sen_t_up: i64, sen_t_dn: i64, sen_w_up: i64, sen_w_dn: i64,
     sen_sessions: i64, sen_enabled: bool,
@@ -54,12 +55,12 @@ struct State {
     selected_session: usize,
 
     // Trading UI
-    selected_variant: usize, // 0=Odiseo, 1=Houdini, 2=Senna
+    selected_variant: usize,
 
     // HFT live data
     hft: HftState,
 
-    // ─── Position tracking (real-time) ───
+    // Position tracking (real-time)
     pos_h65_up: bool, pos_h65_dn: bool,
     pos_h65_entry_up: f64, pos_h65_entry_dn: f64,
     pos_odi_up: bool, pos_odi_dn: bool,
@@ -70,16 +71,11 @@ struct State {
     pos_sen_entry_up: f64, pos_sen_entry_dn: f64,
     prev_sen_up: u8, prev_sen_dn: u8,
 
-    // ─── Command locks (prevent poll overwrite after slash command) ───
-    h65_lock: bool,
-    odi_lock: bool,
-    sen_lock: bool,
+    h65_lock: bool, odi_lock: bool, sen_lock: bool,
 
-    // ─── SL config ───
-    sl_pct: f64,       // default 12 (%)
-    sl_market: bool,   // true=market sell, false=limit sell
+    sl_pct: f64,
+    sl_market: bool,
 
-    // ─── Budget input mode ───
     input_mode: InputMode,
     input_buf: String,
 
@@ -94,8 +90,8 @@ struct State {
     last_poll_sessions: Instant,
     last_ws: Instant,
     last_api_ok: Instant,
-    ws_pings: VecDeque<u64>,   // last 20 WS latencies (ms)
-    api_pings: VecDeque<u64>,  // last 20 API latencies (ms)
+    ws_pings: VecDeque<u64>,
+    api_pings: VecDeque<u64>,
     book_up: api::BookDepth,
     book_dn: api::BookDepth,
     last_poll_depth: Instant,
@@ -103,6 +99,56 @@ struct State {
     session_open_up: f64,
     session_open_dn: f64,
     session_open_btc: f64,
+
+    // ─── MANUAL TRADING ─────────────────────────────────────────
+    pub mt_outcome: String,
+    pub mt_size: f64,
+    pub mt_entry: f64,
+    pub mt_budget: f64,
+    pub mt_order_id: String,
+    pub mt_exit_price: f64,
+    pub mt_exit_order_id: String,
+    pub mt_state: u8,          // 0=IDLE 1=PENDING 2=ACTIVE 3=EXITING
+    pub mt_order_seen: bool,
+    pub mt_pnl_cum: f64,
+    pub mt_trades: i64,
+    pub mt_wins: i64,
+    pub mt_last_fill_pct: f64,
+    pub mt_tsl_pct: f64,        // trailing stop % (0=off)
+    pub mt_tsl_high: f64,       // tracked high for UP trailing
+    pub mt_tsl_low: f64,        // tracked low for DOWN trailing
+    pub mt_fill_avg: f64,       // average fill price (may differ from limit)
+    pub mt_fill_count: i64,     // number of partial fills tracked
+
+    pub last_order_id: String,   // for /u undo
+    pub last_order_type: String, // "buy"/"sell"/"exit"
+    pub mt_sl_order_id: String,
+
+    // Clean trade log
+    pub trade_log: VecDeque<TradeLogEntry>,
+
+    // Command history
+    pub command_history: VecDeque<String>,
+    pub history_cursor: Option<usize>,
+
+    // Alerts
+    pub alerts: Vec<commands::Alert>,
+
+    // /man page
+    pub show_man: bool,
+}
+
+#[derive(Clone)]
+pub struct TradeLogEntry {
+    pub ts: String,
+    pub text: String,
+    pub color: Color,
+}
+
+impl TradeLogEntry {
+    fn new(text: String, color: Color) -> Self {
+        Self { ts: chrono::Local::now().format("%H:%M:%S").to_string(), text, color }
+    }
 }
 
 impl State {
@@ -142,7 +188,7 @@ impl State {
             pos_sen_entry_up: 0.0, pos_sen_entry_dn: 0.0,
             prev_sen_up: 0, prev_sen_dn: 0,
             h65_lock: false, odi_lock: false, sen_lock: false,
-            sl_pct: 12.0, sl_market: true,
+            sl_pct: 0.0, sl_market: true,
             input_mode: InputMode::Normal,
             input_buf: String::new(),
             orders: 0,
@@ -165,12 +211,33 @@ impl State {
             session_open_up: 0.0,
             session_open_dn: 0.0,
             session_open_btc: 0.0,
+            mt_outcome: String::new(),
+            mt_size: 0.0, mt_entry: 0.0, mt_budget: 0.0,
+            mt_order_id: String::new(), mt_exit_price: 0.0,
+            mt_exit_order_id: String::new(),
+            mt_state: 0, mt_order_seen: false,
+            mt_pnl_cum: 0.0, mt_trades: 0, mt_wins: 0,
+            mt_last_fill_pct: 0.0,
+            mt_sl_order_id: String::new(),
+            mt_tsl_pct: 0.0, mt_tsl_high: 0.0, mt_tsl_low: 1.0,
+            mt_fill_avg: 0.0, mt_fill_count: 0,
+            last_order_id: String::new(), last_order_type: String::new(),
+            trade_log: VecDeque::with_capacity(60),
+            command_history: VecDeque::with_capacity(50),
+            history_cursor: None,
+            alerts: Vec::new(),
+            show_man: false,
         }
     }
 
-    fn add_log(&mut self, text: impl Into<String>, color: Color) {
+    pub fn add_log(&mut self, text: impl Into<String>, color: Color) {
         self.log.push_front(api::LogEntry::new(text.into(), color));
         if self.log.len() > 100 { self.log.pop_back(); }
+    }
+
+    pub fn add_trade_log(&mut self, text: impl Into<String>, color: Color) {
+        self.trade_log.push_front(TradeLogEntry::new(text.into(), color));
+        if self.trade_log.len() > 60 { self.trade_log.pop_back(); }
     }
 
     fn add_warning(&mut self, text: impl Into<String>) {
@@ -178,134 +245,32 @@ impl State {
         self.warnings.push_front(format!("{} {}", ts, text.into()));
         if self.warnings.len() > 20 { self.warnings.pop_back(); }
     }
-}
 
-/// Slash command parser: /10up65 /15d40e35 /p — manual trading
-async fn exec_slash_command(cmd: &str, s: &mut State) {
-    let cmd = cmd.trim();
-    if cmd.is_empty() { return; }
-
-    let first = cmd.chars().next().unwrap();
-
-    match first {
-        'p' => {
-            s.add_log("PANIC — liquidando TODO", Color::Red);
-            if let Err(e) = http_post("/api/panic", "{}").await {
-                s.add_log(format!("PANIC FAIL: {}", e), Color::Red);
-            } else {
-                s.add_log("TODO LIQUIDADO", Color::Green);
-            }
-        }
-        // ─── SL config: /sl = toggle MKT/LMT, /sl10 = 10%, /nsl = OFF ───
-        's' if cmd.len() >= 2 && cmd.as_bytes()[1] == b'l' => {
-            let rest = &cmd[2..];
-            if rest.is_empty() {
-                s.sl_market = !s.sl_market;
-                s.add_log(format!("SL: {} {}", if s.sl_market {"MARKET"}else{"LIMIT"}, if s.sl_pct > 0.0 {format!("{}%", s.sl_pct)}else{"OFF".into()}), Color::Yellow);
-            } else if let Ok(pct) = rest.parse::<f64>() {
-                s.sl_pct = pct.max(1.0).min(50.0);
-                s.add_log(format!("SL: {}% {}", s.sl_pct, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
-            } else {
-                s.add_log("USO: /sl  |  /sl10  |  /nsl", Color::Red);
-            }
-        }
-        // ─── No SL: /nsl ───
-        'n' if cmd == "nsl" => {
-            s.sl_pct = 0.0;
-            s.add_log("SL: OFF — sin stop loss", Color::DarkGray);
-        }
-        _ => {
-            // Parse compact command: /10up65 or /15d40e35
-            let rest = cmd;
-            let (amount, remaining) = match parse_amount(rest) {
-                Some(v) => v,
-                None => { s.add_log(format!("?: /{}   formato: /10up65 /15d40e35 /p", rest), Color::Red); return; }
-            };
-            let (side, remaining) = match parse_side_name(remaining) {
-                Some(v) => v,
-                None => { s.add_log(format!("?: /{} — usa 'up' o 'd'", rest), Color::Red); return; }
-            };
-            let (price, remaining) = match parse_cents(remaining) {
-                Some(v) => v,
-                None => { s.add_log(format!("?: /{} — falta precio", rest), Color::Red); return; }
-            };
-            let exit_price = if remaining.starts_with('e') {
-                parse_cents(&remaining[1..]).map(|(p, _)| p)
-            } else { None };
-
-            let outcome = if side == "up" { "up" } else { "down" };
-            let size = (amount / price).floor().max(1.0);
-
-            // Place limit BUY
-            let sl_price = price * (1.0 - s.sl_pct / 100.0);
-            s.add_log(format!("▶ BUY {} ${:.0} @{:.2} sz={:.0}",
-                outcome.to_uppercase(), amount, price, size),
-                if side == "up" { Color::Green } else { Color::Red });
-            if s.sl_pct > 0.0 {
-                s.add_log(format!("  SL: {}% {}  — colocar tras ver FILL real", s.sl_pct, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
-            } else {
-                s.add_log("  SL: OFF", Color::DarkGray);
-            }
-            if let Err(e) = http_post("/api/orders/limit",
-                &format!(r#"{{"side":"buy","outcome":"{}","price":{},"size":{}}}"#, outcome, price, size)).await {
-                s.add_log(format!("BUY FAIL: {}", e), Color::Red);
-            }
-
-            // Place SL order (limit sell at SL price)
-            if !s.sl_market {
-                s.add_log(format!("▶ SL LIMIT SELL {} @{:.4}", outcome.to_uppercase(), sl_price), Color::Yellow);
-                if let Err(e) = http_post("/api/orders/limit",
-                    &format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, sl_price, size)).await {
-                    s.add_log(format!("SL FAIL: {}", e), Color::Red);
-                }
-            } else {
-                s.add_log(format!("  SL: {}% MARKET — ejecutar manual si precio baja a {:.4}", s.sl_pct, sl_price), Color::DarkGray);
-            }
-
-            // Place exit limit SELL if specified
-            if let Some(exit) = exit_price {
-                s.add_log(format!("▶ LIMIT SELL {} @{:.2} (exit)", outcome.to_uppercase(), exit), Color::Yellow);
-                if let Err(e) = http_post("/api/orders/limit",
-                    &format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, exit, size)).await {
-                    s.add_log(format!("EXIT FAIL: {}", e), Color::Red);
-                }
-            }
-        }
+    pub fn reset_manual(&mut self) {
+        self.mt_state = 0;
+        self.mt_order_id.clear();
+        self.mt_exit_order_id.clear();
+        self.mt_sl_order_id.clear();
+        self.mt_order_seen = false;
+        self.mt_last_fill_pct = 0.0;
+        self.mt_exit_price = 0.0;
+        self.mt_tsl_pct = 0.0;
+        self.mt_tsl_high = 0.0;
+        self.mt_tsl_low = 1.0;
+        self.mt_fill_avg = 0.0;
+        self.mt_fill_count = 0;
     }
 }
 
-fn parse_amount(s: &str) -> Option<(f64, &str)> {
-    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-    if end == 0 { return None; }
-    let n: f64 = s[..end].parse().ok()?;
-    if n < 1.0 || n > 200.0 { return None; }
-    Some((n, &s[end..]))
-}
-
-fn parse_side_name(s: &str) -> Option<(&str, &str)> {
-    if s.starts_with("up") { Some(("up", &s[2..])) }
-    else if s.starts_with('d') { Some(("down", &s[1..])) }
-    else { None }
-}
-
-fn parse_cents(s: &str) -> Option<(f64, &str)> {
-    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-    if end == 0 { return None; }
-    let n: f64 = s[..end].parse().ok()?;
-    let price = n / 100.0;
-    if price <= 0.0 || price >= 1.0 { return None; }
-    Some((price, &s[end..]))
-}
-
-// ─── Variant detection ──────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// HFT / VARIANT LOGIC
+// ═══════════════════════════════════════════════════════════════════
 
 fn find_variant<'a>(variants: &'a [OdiseoVariant], code: &str) -> Option<&'a OdiseoVariant> {
     variants.iter().find(|v| v.code.as_deref() == Some(code))
 }
 
 fn apply_hft_state(new_hft: &HftState, s: &mut State) {
-    // ─── Position detection: track entry/exit from HFT state ───
-    // Houdini 65 UP
     if new_hft.hd65_up == 2 && s.prev_hd65_up != 2 {
         s.pos_h65_up = true;
         s.pos_h65_entry_up = new_hft.clob_trade_up;
@@ -318,7 +283,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.add_log(format!("▲ H65 EXIT UP @ {:.4} PnL:{:+.2}", new_hft.clob_trade_up, pnl),
             if pnl >= 0.0 { Color::Green } else { Color::Red });
     }
-    // Houdini 65 DOWN
     if new_hft.hd65_dn == 2 && s.prev_hd65_dn != 2 {
         s.pos_h65_dn = true;
         s.pos_h65_entry_dn = new_hft.clob_trade_dn;
@@ -331,7 +295,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.add_log(format!("▼ H65 EXIT DN @ {:.4} PnL:{:+.2}", new_hft.clob_trade_dn, pnl),
             if pnl >= 0.0 { Color::Green } else { Color::Red });
     }
-    // Odiseo 83 UP
     if new_hft.od83_up == 2 && s.prev_od83_up != 2 {
         s.pos_odi_up = true;
         s.pos_odi_entry_up = new_hft.clob_trade_up;
@@ -340,7 +303,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.pos_odi_up = false;
         s.add_log(format!("▲ O83 EXIT UP @ {:.4}", new_hft.clob_trade_up), Color::Yellow);
     }
-    // Odiseo 83 DOWN
     if new_hft.od83_dn == 2 && s.prev_od83_dn != 2 {
         s.pos_odi_dn = true;
         s.pos_odi_entry_dn = new_hft.clob_trade_dn;
@@ -349,7 +311,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.pos_odi_dn = false;
         s.add_log(format!("▼ O83 EXIT DN @ {:.4}", new_hft.clob_trade_dn), Color::Yellow);
     }
-    // Senna UP
     if new_hft.sen_up == 2 && s.prev_sen_up != 2 {
         s.pos_sen_up = true;
         s.pos_sen_entry_up = new_hft.clob_trade_up;
@@ -362,7 +323,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.add_log(format!("⚡ SENNA EXIT UP @ {:.4} PnL:{:+.2}", new_hft.clob_trade_up, pnl),
             if pnl >= 0.0 { Color::Green } else { Color::Red });
     }
-    // Senna DOWN
     if new_hft.sen_dn == 2 && s.prev_sen_dn != 2 {
         s.pos_sen_dn = true;
         s.pos_sen_entry_dn = new_hft.clob_trade_dn;
@@ -383,7 +343,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     s.prev_sen_up = new_hft.sen_up;
     s.prev_sen_dn = new_hft.sen_dn;
 
-    // ─── Track trades for TAP display ────────────────────────────
     if new_hft.clob_trade_up > 0.0 && (s.trades.is_empty() || (new_hft.clob_trade_up - s.trades.front().map(|t| t.price).unwrap_or(0.0)).abs() > 0.0001) {
         s.trades.push_front(api::TradeEntry {
             ts: new_hft.time.clone(),
@@ -406,7 +365,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     s.hft = new_hft.clone();
     s.odi_filters = s.hft.od83_filters;
 
-    // ─── Session change detection: clear stale book data ───────────
     let secs = new_hft.secs_left;
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
         s.book_up = api::BookDepth::default();
@@ -414,9 +372,8 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
         s.session_open_btc = new_hft.btc_price;
-        s.add_log(format!("SESSION RESET — new orderbook"), Color::Yellow);
+        s.add_log("SESSION RESET — new orderbook".to_string(), Color::Yellow);
     }
-    // First HFT data — capture initial session prices
     if s.session_open_up == 0.0 && new_hft.clob_trade_up > 0.0 {
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
@@ -454,11 +411,10 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
             s.odi_sessions = v.sessions;
             s.odi_accuracy = v.accuracy; s.odi_avg_pnl = v.avg_pnl;
             s.odi_best = v.best; s.odi_worst = v.worst;
-            // Don't overwrite enabled state if user just sent a slash command
             if !s.odi_lock {
                 s.odi_enabled = v.enabled.unwrap_or(true);
             } else if v.enabled.unwrap_or(true) == s.odi_enabled {
-                s.odi_lock = false; // backend confirmed our state, unlock
+                s.odi_lock = false;
             }
             let (nu, nd) = detect_trades(v, s.last_odi_t_up, s.last_odi_t_dn, s, &s.odi_label.clone());
             s.last_odi_t_up = nu; s.last_odi_t_dn = nd;
@@ -482,11 +438,10 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
             s.h65_sessions = v.sessions;
             s.h65_accuracy = v.accuracy; s.h65_avg_pnl = v.avg_pnl;
             s.h65_best = v.best; s.h65_worst = v.worst;
-            // Don't overwrite enabled state if user just sent a slash command
             if !s.h65_lock {
                 s.h65_enabled = v.enabled.unwrap_or(true);
             } else if v.enabled.unwrap_or(true) == s.h65_enabled {
-                s.h65_lock = false; // backend confirmed our state, unlock
+                s.h65_lock = false;
             }
             let (nu, nd) = detect_trades(v, s.last_h65_t_up, s.last_h65_t_dn, s, "H65");
             s.last_h65_t_up = nu; s.last_h65_t_dn = nd;
@@ -511,6 +466,10 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
         _ => {}
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════════════════
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -548,7 +507,6 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    // Keyboard input task
     let (itx, mut irx) = mpsc::channel::<KeyCode>(16);
     tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = itx.send(k.code).await; } } });
 
@@ -556,39 +514,33 @@ async fn main() -> io::Result<()> {
     let mode_label = if s.live { "DINERO REAL" } else { "PAPER MONEY" };
     s.add_log(format!("ZZIGNAL MONITOR — {}", mode_label), Color::Magenta);
 
-    // Force backend live_mode to match our binary mode
     if s.live {
         if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
             s.add_log(format!("API LIVE FAIL: {}", e), Color::Red);
         }
-        s.add_log("DINERO REAL — esperando comandos", Color::Red);
+        s.add_log("DINERO REAL — esperando comandos".to_string(), Color::Red);
     } else {
         if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":false}").await {
             s.add_log(format!("API LIVE FAIL: {}", e), Color::Red);
         }
-        // Paper mode: auto-enable both strategies for data collection
         if let Err(e) = http_post("/api/odiseo/variant", "{\"index\":0,\"enable\":true}").await {
             s.add_log(format!("API O83 FAIL: {}", e), Color::Red);
-        } else {
-            s.odi_enabled = true;
-        }
+        } else { s.odi_enabled = true; }
         if let Err(e) = http_post("/api/odiseo/variant", "{\"index\":1,\"enable\":true}").await {
             s.add_log(format!("API H65 FAIL: {}", e), Color::Red);
-        } else {
-            s.h65_enabled = true;
-        }
-        s.add_log("PAPER MONEY — ambas estrategias ON", Color::Cyan);
+        } else { s.h65_enabled = true; }
+        s.add_log("PAPER MONEY — ambas estrategias ON".to_string(), Color::Cyan);
     }
 
     loop {
-        // ─── Drain WS ─────────────────────────────────────────────────
+        // Drain WS
         while let Ok(msg) = rx.try_recv() {
             let ws_lat = s.last_ws.elapsed().as_millis() as u64;
             s.ws_pings.push_front(ws_lat);
             if s.ws_pings.len() > 20 { s.ws_pings.pop_back(); }
             s.last_ws = Instant::now();
             match msg.msg_type.as_deref() {
-                Some("connected") => { s.connected = true; s.add_log("WS OK", Color::Green); }
+                Some("connected") => { s.connected = true; s.add_log("WS OK".to_string(), Color::Green); }
                 Some("snapshot") => { s.bal = msg.balance.unwrap_or(s.bal); s.btc = msg.btc.unwrap_or(s.btc); }
                 Some("btc_price") => s.btc = msg.price.unwrap_or(s.btc),
                 Some("balance") => {
@@ -601,9 +553,7 @@ async fn main() -> io::Result<()> {
                     s.add_log(format!("{} {}", if ok {"OK"}else{"FAIL"}, txt), if ok{Color::Green}else{Color::Red});
                 }
                 Some("hft_state") => {
-                    if let Some(ref hft) = msg.data {
-                        apply_hft_state(hft, &mut s);
-                    }
+                    if let Some(ref hft) = msg.data { apply_hft_state(hft, &mut s); }
                 }
                 Some("book") => {
                     if let Some(ref book) = msg.book {
@@ -618,7 +568,7 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // ─── Poll Odiseo Status (2s) ─────────────────────────────────
+        // Poll Odiseo + Orders (2s)
         if s.last_poll_odiseo.elapsed() > Duration::from_secs(2) {
             s.last_poll_odiseo = Instant::now();
             if let Some(data) = http_get::<OdiseoStatus>("/api/odiseo/status").await {
@@ -626,9 +576,7 @@ async fn main() -> io::Result<()> {
                 s.api_pings.push_front(api_lat);
                 if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
                 s.last_api_ok = Instant::now();
-                // Don't overwrite live from API — mode is fixed per binary
                 s.reinvest = data.reinvest.unwrap_or(false);
-
                 let odi_v = data.variants.iter().find(|v| {
                     let code = v.code.as_deref().unwrap_or("");
                     code.starts_with("odiseo") && code != "odiseo65"
@@ -643,10 +591,11 @@ async fn main() -> io::Result<()> {
                 if nc != s.orders { s.add_log(format!("Orders: {} -> {}", s.orders, nc), Color::Cyan); }
                 s.orders = nc;
                 s.open_orders = orders;
+                commands::track_manual_fills(&mut s).await;
             }
         }
 
-        // ─── Poll BTC (5s) ───────────────────────────────────────────
+        // Poll BTC (5s)
         if s.last_poll_btc.elapsed() > Duration::from_secs(5) {
             s.last_poll_btc = Instant::now();
             if let Some(data) = http_get::<BtcInfo>("/api/btc").await {
@@ -658,7 +607,7 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // ─── Poll HFT (500ms, fallback si WS hft_state no llega) ─────
+        // Poll HFT (500ms)
         if s.last_poll_hft.elapsed() > Duration::from_millis(500) {
             s.last_poll_hft = Instant::now();
             if let Some(data) = http_get::<HftState>("/api/hft/latest").await {
@@ -667,10 +616,12 @@ async fn main() -> io::Result<()> {
                 if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
                 s.last_api_ok = Instant::now();
                 apply_hft_state(&data, &mut s);
+                commands::update_trailing_stop(&mut s).await;
+                commands::check_alerts(&mut s);
             }
         }
 
-        // ─── Poll Sessions (10s) ─────────────────────────────────────
+        // Poll Sessions (10s)
         if s.last_poll_sessions.elapsed() > Duration::from_secs(10) {
             s.last_poll_sessions = Instant::now();
             if let Some(data) = http_get::<Vec<SessionInfo>>("/api/sessions").await {
@@ -678,19 +629,45 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // ─── Keyboard ────────────────────────────────────────────────
+        // Keyboard
         while let Ok(k) = irx.try_recv() {
-            // ── Command mode ──────────────────────────────────────
             if s.input_mode == InputMode::Command {
                 match k {
                     KeyCode::Esc => { s.input_mode = InputMode::Normal; s.input_buf.clear(); }
                     KeyCode::Enter => {
                         let c = s.input_buf.trim().to_string();
-                        exec_slash_command(&c, &mut s).await;
+                        if !c.is_empty() {
+                            s.command_history.push_front(c.clone());
+                            if s.command_history.len() > 50 { s.command_history.pop_back(); }
+                            s.history_cursor = None;
+                        }
+                        commands::dispatch(&c, &mut s).await;
                         s.input_mode = InputMode::Normal; s.input_buf.clear();
                     }
+                    KeyCode::Up => {
+                        let hist_len = s.command_history.len();
+                        if hist_len == 0 { continue; }
+                        let idx = match s.history_cursor {
+                            None => 0,
+                            Some(i) => (i + 1).min(hist_len - 1),
+                        };
+                        s.history_cursor = Some(idx);
+                        s.input_buf = s.command_history.get(idx).cloned().unwrap_or_default();
+                    }
+                    KeyCode::Down => {
+                        match s.history_cursor {
+                            None | Some(0) => {
+                                s.history_cursor = None;
+                                s.input_buf.clear();
+                            }
+                            Some(i) => {
+                                s.history_cursor = Some(i - 1);
+                                s.input_buf = s.command_history.get(i - 1).cloned().unwrap_or_default();
+                            }
+                        }
+                    }
                     KeyCode::Backspace => { s.input_buf.pop(); }
-                    KeyCode::Char(c) => { if s.input_buf.len() < 20 { s.input_buf.push(c); } }
+                    KeyCode::Char(c) => { if s.input_buf.len() < 25 { s.input_buf.push(c); } }
                     _ => {}
                 }
                 continue;
@@ -698,18 +675,19 @@ async fn main() -> io::Result<()> {
 
             match k {
                 KeyCode::Esc | KeyCode::Char('q') => {
+                    if s.show_man {
+                        s.show_man = false;
+                        continue;
+                    }
                     disable_raw_mode()?;
                     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
                     terminal.show_cursor()?;
                     return Ok(());
                 }
                 KeyCode::Tab => { s.tab = (s.tab + 1) % 3; }
-                KeyCode::Char('/') => {
-                    s.input_mode = InputMode::Command; s.input_buf.clear();
-                }
-                // ── Sessions ──
+                KeyCode::Char('/') => { s.input_mode = InputMode::Command; s.input_buf.clear(); }
                 KeyCode::Char('s') => {
-                    s.add_log("Starting 15-min session...", Color::Green);
+                    s.add_log("Starting 15-min session...".to_string(), Color::Green);
                     let now = chrono::Utc::now();
                     let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
                     if let Err(e) = http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await {
