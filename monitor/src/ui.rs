@@ -37,19 +37,25 @@ pub fn draw(f: &mut Frame, s: &State) {
     ci += 1;
 
     // ─── TAB BAR ──────────────────────────────────────────────────────
-    let tab_titles: Vec<Line> = TAB_NAMES.iter().enumerate().map(|(i, name)| {
-        let style = if i == s.tab {
+    let tab_spans: Vec<Span> = TAB_NAMES.iter().enumerate().flat_map(|(i, name)| {
+        let (fg, bg) = if i == s.tab {
             match i {
-                0 => Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD),
-                1 => Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD),
-                _ => Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD),
+                0 => (Color::White, Color::Red),
+                1 => (Color::White, Color::Green),
+                _ => (Color::White, Color::Blue),
             }
         } else {
-            Style::default().fg(Color::DarkGray)
+            (Color::Gray, Color::Reset)
         };
-        Line::from(Span::styled(format!(" {name} "), style))
+        vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(*name, Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)),
+        ]
     }).collect();
-    f.render_widget(Tabs::new(tab_titles).block(Block::default().borders(Borders::BOTTOM)), chunks[ci]);
+    f.render_widget(
+        Paragraph::new(Line::from(tab_spans)),
+        chunks[ci],
+    );
     ci += 1;
 
     // ─── POSITION BAR ─────────────────────────────────────────────────
