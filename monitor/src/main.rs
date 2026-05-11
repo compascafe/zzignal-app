@@ -110,6 +110,7 @@ struct State {
     pub mt_exit_order_id: String,
     pub mt_state: u8,          // 0=IDLE 1=PENDING 2=ACTIVE 3=EXITING
     pub mt_order_seen: bool,
+    pub mt_exit_order_seen: bool, // prevent false fill detection
     pub mt_pnl_cum: f64,
     pub mt_trades: i64,
     pub mt_wins: i64,
@@ -215,7 +216,7 @@ impl State {
             mt_size: 0.0, mt_entry: 0.0, mt_budget: 0.0,
             mt_order_id: String::new(), mt_exit_price: 0.0,
             mt_exit_order_id: String::new(),
-            mt_state: 0, mt_order_seen: false,
+            mt_state: 0, mt_order_seen: false, mt_exit_order_seen: false,
             mt_pnl_cum: 0.0, mt_trades: 0, mt_wins: 0,
             mt_last_fill_pct: 0.0,
             mt_sl_order_id: String::new(),
@@ -252,6 +253,7 @@ impl State {
         self.mt_exit_order_id.clear();
         self.mt_sl_order_id.clear();
         self.mt_order_seen = false;
+        self.mt_exit_order_seen = false;
         self.mt_last_fill_pct = 0.0;
         self.mt_exit_price = 0.0;
         self.mt_tsl_pct = 0.0;

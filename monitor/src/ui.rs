@@ -961,59 +961,34 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     let sl_info = if s.sl_pct > 0.0 {
         format!("{:.0}%{}", s.sl_pct, if s.sl_market {" MKT"}else{" LMT"})
     } else { "OFF".into() };
+    let tsl_info = if s.mt_tsl_pct > 0.0 { format!("{}%", s.mt_tsl_pct) } else { "OFF".into() };
 
     let lines = vec![
         Line::from(vec![
-            Span::styled("AYUDA", Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED)),
+            Span::styled(" /b10up65e70  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("BUY+exit       ", Style::default().fg(Color::Gray)),
+            Span::styled("/b10up65e70s50", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(" bracket       ", Style::default().fg(Color::Gray)),
+            Span::styled("/k", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" cancel  ", Style::default().fg(Color::Gray)),
+            Span::styled("/x", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled(" exit mkt  ", Style::default().fg(Color::Gray)),
+            Span::styled("/u", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(" undo", Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
-            Span::styled(" /l10up65    ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled("BUY $10 UP @0.65                      ", Style::default().fg(Color::Gray)),
-            Span::styled("/l10up65e70 ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled("BUY $10 UP @0.65 + exit @0.70", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(" /c          ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled("cancelar orden manual activa          ", Style::default().fg(Color::Gray)),
-            Span::styled("/c<id>      ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled("cancelar por ID especifico", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(" /clup65     ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled("cancela todo + liq UP @0.65           ", Style::default().fg(Color::Gray)),
-            Span::styled("/cld70      ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled("cancela todo + liq DOWN @0.70", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(" /lup70      ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::styled("liq UP limit @0.70                    ", Style::default().fg(Color::Gray)),
-            Span::styled("/ld70       ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::styled("liq DOWN limit @0.70", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(" /lm         ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::styled("liq a MERCADO (UP+DOWN)               ", Style::default().fg(Color::Gray)),
-            Span::styled("/clm        ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled("cancela todo + liq a MERCADO", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(" /p          ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::styled("PANIC: liquida TODO (manual+estrategias)", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(" /sl         ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("toggle SL MKT/LMT [{sl_info}]           ", sl_info = sl_info), Style::default().fg(Color::Gray)),
-            Span::styled("/sl15       ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
-            Span::styled("SL 15%   /nsl = quitar SL", Style::default().fg(Color::Gray)),
+            Span::styled(format!(" SL:{sl_info} ", sl_info = sl_info), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("TSL:{tsl_info} ", tsl_info = tsl_info), Style::default().fg(Color::DarkGray)),
+            Span::styled(" /sl /sl10 /nsl  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/tsl5 /ntsl  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/alert up 0.70  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/pos /man /quit /p", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(Span::styled(
-            " [/]comando  [Tab]vista  [Esc/q]salir",
+            " [/]comando  [↑↓]historial  [Tab]vista  [Esc/q]salir",
             Style::default().fg(Color::Rgb(30, 40, 55)),
         )),
     ];
 
-    f.render_widget(
-        Paragraph::new(lines),
-        area,
-    );
+    f.render_widget(Paragraph::new(lines), area);
 }

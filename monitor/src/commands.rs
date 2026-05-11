@@ -496,7 +496,13 @@ async fn exec_liq_limit(outcome: &str, price: f64, s: &mut State) {
     let size = if s.mt_state >= 2 && s.mt_outcome == outcome {
         s.mt_size
     } else {
-        s.add_log(format!("Sin posicion {} para liquidar", outcome.to_uppercase()), Color::Red);
+        if s.mt_state == 1 && s.mt_outcome == outcome {
+            s.add_log(format!("Orden {} aun no ha llenado. Espera fill o /c para cancelar", outcome.to_uppercase()), Color::Yellow);
+        } else if s.mt_state == 0 {
+            s.add_log(format!("Sin posicion {} activa.", outcome.to_uppercase()), Color::Red);
+        } else {
+            s.add_log(format!("Sin posicion {} para liquidar", outcome.to_uppercase()), Color::Red);
+        }
         s.add_trade_log(format!("\u{2717} Liquidar {}: sin posicion", outcome.to_uppercase()), Color::Red);
         return;
     };
@@ -756,27 +762,28 @@ pub async fn track_manual_fills(s: &mut State) {
 
     if s.mt_state == 3 && !s.mt_exit_order_id.is_empty() {
         let exit_id = s.mt_exit_order_id.clone();
-        let (found_filled, is_partial, partial_pct) = {
+        let (found_in_list, is_filled, is_partial, partial_pct) = {
             if let Some(o) = s.open_orders.iter().find(|o| o.id == exit_id) {
                 let pct = if o.size_orig > 0.0 { (o.size_matched / o.size_orig * 100.0).min(100.0) } else { 0.0 };
-                (o.is_filled(), o.is_partial(), pct)
-            } else { (false, false, 0.0) }
+                (true, o.is_filled(), o.is_partial(), pct)
+            } else { (false, false, false, 0.0) }
         };
+
+        if found_in_list { s.mt_exit_order_seen = true; }
 
         if is_partial {
             s.add_log(format!("◐ EXIT FILLING {:.0}%", partial_pct), Color::Yellow);
         }
 
-        if found_filled {
+        if is_filled {
             let exit_px = s.mt_exit_price;
             finalize_manual_trade(s, exit_px).await;
-        } else {
-            let found = s.open_orders.iter().any(|o| o.id == exit_id);
-            if !found {
-                let exit_px = s.mt_exit_price;
-                finalize_manual_trade(s, exit_px).await;
-            }
+        } else if !found_in_list && s.mt_exit_order_seen {
+            // Was seen before, now gone → filled
+            let exit_px = s.mt_exit_price;
+            finalize_manual_trade(s, exit_px).await;
         }
+        // Exit not found AND never seen → keep waiting, API may be slow
     }
 }
 
