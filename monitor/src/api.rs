@@ -6,11 +6,16 @@ pub const API_URL: &str = "http://localhost:8080";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrderPlaced {
+    #[serde(alias = "order_id", alias = "orderID", default)]
     pub id: String,
     #[serde(default)]
     pub price: f64,
     #[serde(default)]
     pub size: f64,
+} impl OrderPlaced {
+    pub fn ok_id(&self) -> Option<&str> {
+        if self.id.is_empty() { None } else { Some(&self.id) }
+    }
 }
 
 // ─── Orderbook Depth ──────────────────────────────────────────────
