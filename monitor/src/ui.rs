@@ -982,7 +982,7 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
             Span::styled(" /sl /sl10 /nsl  ", Style::default().fg(Color::DarkGray)),
             Span::styled("/tsl5 /ntsl  ", Style::default().fg(Color::DarkGray)),
             Span::styled("/alert up 0.70  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("/pos /man /quit /p", Style::default().fg(Color::DarkGray)),
+            Span::styled("/co /p /pos /man", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(Span::styled(
             " [/]comando  [↑↓]historial  [Tab]vista  [Esc/q]salir",

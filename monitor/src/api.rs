@@ -241,6 +241,27 @@ pub async fn http_post_json<T: for<'de> Deserialize<'de>>(path: &str, body: &str
     }
 }
 
+pub async fn http_post_result<T: for<'de> Deserialize<'de>>(path: &str, body: &str) -> Result<T, String> {
+    let resp = client()
+        .post(format!("{API_URL}{path}"))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .send().await
+        .map_err(|e| format!("POST {path}: {e}"))?;
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap_or_default();
+    if status.is_success() {
+        serde_json::from_str::<T>(&body_text).map_err(|e| format!("JSON parse: {e}"))
+    } else {
+        // Try to extract error message from JSON or use raw body
+        let msg = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("message").or_else(|| v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
+            .unwrap_or(body_text);
+        Err(format!("HTTP {}: {}", status.as_u16(), msg))
+    }
+}
+
 pub async fn http_delete(path: &str) -> Result<(), String> {
     let resp = client()
         .delete(format!("{API_URL}{path}"))

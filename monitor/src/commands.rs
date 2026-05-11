@@ -42,6 +42,7 @@ pub const REGISTRY: &[CmdDef] = &[
     CmdDef { syntax: "/ntsl                   ", desc: "Desactivar trailing stop", category: "SL / TSL" },
     // ── EMERGENCIA ──
     CmdDef { syntax: "/p                      ", desc: "PANIC: liquidar todo", category: "EMERGENCIA" },
+    CmdDef { syntax: "/co                     ", desc: "CASH OUT: market sell + PANIC — todo a USD", category: "EMERGENCIA" },
     // ── INFO ──
     CmdDef { syntax: "/pos                    ", desc: "Ver posición actual (tamaño, entry, P&L)", category: "INFO" },
     CmdDef { syntax: "/alert up 0.70          ", desc: "Alerta visual+sonido al tocar precio", category: "INFO" },
@@ -76,6 +77,7 @@ enum Parsed {
     AlertSet { outcome: String, price: f64 },
     AlertClear,
     Undo,
+    CashOut,
     Unknown(String),
 }
 
@@ -123,6 +125,7 @@ fn parse(input: &str) -> Parsed {
 
     match first {
         'p' if rest.is_empty() => Parsed::Panic,
+        'c' if rest == "o" => Parsed::CashOut,
         'c' => parse_c_group(rest),
         's' if input.len() >= 2 && input.as_bytes()[1] == b'l' => parse_sl(&input[2..]),
         'n' if input == "nsl" => Parsed::SlOff,
@@ -327,6 +330,7 @@ async fn execute(cmd: Parsed, s: &mut State) {
         Parsed::AlertSet { outcome, price } => exec_alert_set(outcome, price, s),
         Parsed::AlertClear => exec_alert_clear(s),
         Parsed::Undo => exec_undo(s).await,
+        Parsed::CashOut => exec_cashout(s).await,
         Parsed::Unknown(input) => {
             s.add_log(format!("?: /{} — desconocido", input), Color::Red);
         }
@@ -349,14 +353,14 @@ async fn place_manual_buy(amount: f64, side: &str, price: f64, exit_price: Optio
         if side == "up" { Color::Green } else { Color::Red });
 
     let body = format!(r#"{{"side":"buy","outcome":"{}","price":{},"size":{}}}"#, outcome, price, size);
-    let order_id = match http_post_json::<OrderPlaced>("/api/orders/limit", &body).await {
-        Some(placed) => {
+    let order_id = match http_post_result::<OrderPlaced>("/api/orders/limit", &body).await {
+        Ok(placed) => {
             s.add_log(format!("  Orden: {}", placed.id), Color::Cyan);
             placed.id
         }
-        None => {
-            s.add_log("BUY FAIL: API no respondio".to_string(), Color::Red);
-            s.add_trade_log("\u{2717} BUY FAIL".to_string(), Color::Red);
+        Err(e) => {
+            s.add_log(format!("BUY FAIL: {}", e), Color::Red);
+            s.add_trade_log(format!("\u{2717} BUY FAIL: {}", e), Color::Red);
             return;
         }
     };
@@ -386,11 +390,14 @@ async fn place_manual_buy(amount: f64, side: &str, price: f64, exit_price: Optio
         let exit_body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, exit, size);
         s.add_log(format!("▶ EXIT SELL {} @{:.4} (take-profit)", outcome.to_uppercase(), exit), Color::Yellow);
         s.add_trade_log(format!("  TP @{:.4}", exit), Color::Yellow);
-        if let Some(exit_placed) = http_post_json::<OrderPlaced>("/api/orders/limit", &exit_body).await {
-            s.mt_exit_order_id = exit_placed.id.clone();
-            s.add_log(format!("  Exit ID: {}", exit_placed.id), Color::Cyan);
-        } else {
-            s.add_log("EXIT FAIL: API no respondio".to_string(), Color::Red);
+        match http_post_result::<OrderPlaced>("/api/orders/limit", &exit_body).await {
+            Ok(exit_placed) => {
+                s.mt_exit_order_id = exit_placed.id.clone();
+                s.add_log(format!("  Exit ID: {}", exit_placed.id), Color::Cyan);
+            }
+            Err(e) => {
+                s.add_log(format!("EXIT FAIL: {}", e), Color::Red);
+            }
         }
     }
 
@@ -400,9 +407,14 @@ async fn place_manual_buy(amount: f64, side: &str, price: f64, exit_price: Optio
         let sl_body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, sl, size);
         s.add_log(format!("▶ SL BRACKET {} @{:.4}", outcome.to_uppercase(), sl), Color::Yellow);
         s.add_trade_log(format!("🛡 SL bracket @{:.4}", sl), Color::Yellow);
-        if let Some(sl_placed) = http_post_json::<OrderPlaced>("/api/orders/limit", &sl_body).await {
-            s.mt_sl_order_id = sl_placed.id.clone();
-            s.add_log(format!("  SL ID: {}", sl_placed.id), Color::Cyan);
+        match http_post_result::<OrderPlaced>("/api/orders/limit", &sl_body).await {
+            Ok(sl_placed) => {
+                s.mt_sl_order_id = sl_placed.id.clone();
+                s.add_log(format!("  SL ID: {}", sl_placed.id), Color::Cyan);
+            }
+            Err(e) => {
+                s.add_log(format!("SL bracket FAIL: {}", e), Color::Red);
+            }
         }
     } else if s.sl_pct > 0.0 {
         // SL will be placed after fill (via track_manual_fills)
@@ -513,16 +525,17 @@ async fn exec_liq_limit(outcome: &str, price: f64, s: &mut State) {
     s.add_trade_log(format!("▶ LIQ {} sz={:.0} @{:.4}", outcome.to_uppercase(), size, price), Color::Yellow);
 
     let body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, price, size);
-    if let Some(placed) = http_post_json::<OrderPlaced>("/api/orders/limit", &body).await {
-        s.add_log(format!("  Liquidacion: {}", placed.id), Color::Cyan);
-        if s.mt_state >= 2 {
+    match http_post_result::<OrderPlaced>("/api/orders/limit", &body).await {
+        Ok(placed) => {
+            s.add_log(format!("  Liquidacion: {}", placed.id), Color::Cyan);
             s.mt_exit_order_id = placed.id;
             s.mt_exit_price = price;
             s.mt_state = 3;
         }
-    } else {
-        s.add_log("LIQUIDAR FAIL".to_string(), Color::Red);
-        s.add_trade_log("\u{2717} Liquidar FAIL".to_string(), Color::Red);
+        Err(e) => {
+            s.add_log(format!("LIQUIDAR FAIL: {}", e), Color::Red);
+            s.add_trade_log(format!("\u{2717} LIQUIDAR FAIL: {}", e), Color::Red);
+        }
     }
 }
 
@@ -695,12 +708,15 @@ pub async fn place_sl_order(s: &mut State) {
     s.add_trade_log(format!("🛡 SL {:.0}% @{:.4}  {}",
         s.sl_pct, sl_price, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
 
-    if let Some(placed) = http_post_json::<OrderPlaced>("/api/orders/limit", &body).await {
-        let sl_id = placed.id;
-        s.mt_sl_order_id = sl_id.clone();
-        s.add_log(format!("  SL ID: {}", sl_id), Color::Cyan);
-    } else {
-        s.add_log("SL FAIL: API no respondio".to_string(), Color::Red);
+    match http_post_result::<OrderPlaced>("/api/orders/limit", &body).await {
+        Ok(placed) => {
+            let sl_id = placed.id;
+            s.mt_sl_order_id = sl_id.clone();
+            s.add_log(format!("  SL ID: {}", sl_id), Color::Cyan);
+        }
+        Err(e) => {
+            s.add_log(format!("SL FAIL: {}", e), Color::Red);
+        }
     }
 }
 
@@ -880,11 +896,16 @@ pub async fn update_trailing_stop(s: &mut State) {
         }
         let body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#,
             s.mt_outcome, new_sl_price, s.mt_size);
-        if let Some(placed) = http_post_json::<OrderPlaced>("/api/orders/limit", &body).await {
-            s.mt_sl_order_id = placed.id.clone();
-            s.add_log(format!("📈 TSL {}→SL @{:.4}",
-                if s.mt_outcome=="up" { format!("{:.4}", s.mt_tsl_high) } else { format!("{:.4}", s.mt_tsl_low) },
-                new_sl_price), Color::Magenta);
+        match http_post_result::<OrderPlaced>("/api/orders/limit", &body).await {
+            Ok(placed) => {
+                s.mt_sl_order_id = placed.id.clone();
+                s.add_log(format!("📈 TSL {}→SL @{:.4}",
+                    if s.mt_outcome=="up" { format!("{:.4}", s.mt_tsl_high) } else { format!("{:.4}", s.mt_tsl_low) },
+                    new_sl_price), Color::Magenta);
+            }
+            Err(e) => {
+                s.add_log(format!("TSL FAIL: {}", e), Color::Red);
+            }
         }
     }
 }
@@ -949,6 +970,45 @@ async fn exec_undo(s: &mut State) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// CASH OUT — /co
+// ═══════════════════════════════════════════════════════════════════
+
+async fn exec_cashout(s: &mut State) {
+    s.add_log("💰 CASH OUT — liquidando todo".to_string(), Color::Yellow);
+    s.add_trade_log("💰 CASH OUT — todo a USD".to_string(), Color::Yellow);
+
+    // 1) Market sell manual position
+    if s.mt_state >= 2 {
+        let outcome = s.mt_outcome.clone();
+        let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
+            outcome, s.mt_budget);
+        match http_post_result::<OrderPlaced>("/api/orders/market", &body).await {
+            Ok(_) => {
+                s.add_log(format!("Market sell {} OK", outcome.to_uppercase()), Color::Green);
+                s.add_trade_log(format!("💰 MKT {} liquidado", outcome.to_uppercase()), Color::Green);
+            }
+            Err(e) => {
+                s.add_log(format!("Market sell FAIL: {}", e), Color::Red);
+                s.add_trade_log(format!("\u{2717} CashOut FAIL: {}", e), Color::Red);
+            }
+        }
+    }
+
+    // 2) Cancel pending manual orders
+    cancel_all_manual(s).await;
+
+    // 3) PANIC strategies
+    if s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn {
+        s.add_log("PANIC estrategias...".to_string(), Color::Yellow);
+        let _ = http_post("/api/panic", "{}").await;
+    }
+
+    s.reset_manual();
+    s.add_log("💰 CASH OUT completo".to_string(), Color::Green);
+    s.add_trade_log("💰 Cash out completo".to_string(), Color::Green);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // ALERT STRUCT (re-exported for State)
 // ═══════════════════════════════════════════════════════════════════
 
@@ -991,6 +1051,7 @@ mod tests {
             Parsed::AlertSet { outcome, price } => format!("ALERT {outcome} @{price:.4}"),
             Parsed::AlertClear => "ALERT-CLEAR".into(),
             Parsed::Undo => "UNDO".into(),
+            Parsed::CashOut => "CASHOUT".into(),
             Parsed::Unknown(s) => format!("UNKNOWN:{s}"),
         }
     }
