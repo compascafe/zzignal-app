@@ -105,8 +105,8 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
         Constraint::Length(4),     // UP/DOWN price cards
         Constraint::Length(5),     // indicators (S1..S4)
         Constraint::Length(2),     // manual trading status
-        Constraint::Length(15),    // orderbook depth (fixed ~15 rows)
-        Constraint::Length(6),     // orders + positions + events
+        Constraint::Length(15),    // orderbook depth
+        Constraint::Min(8),        // orders + positions + trade log (expands)
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -242,48 +242,69 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(1,4); 4]).split(area);
     let b = Modifier::BOLD;
 
-    // ── S1: POLYMARKET MOMENTUM (CLOB direction) ──
+    // ── Aligned signal ──
     let up_ref = if s.session_open_up > 0.0 { s.session_open_up } else { s.hft.clob_trade_up };
     let dn_ref = if s.session_open_dn > 0.0 { s.session_open_dn } else { s.hft.clob_trade_dn };
     let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
     let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
     let clob_up = up_d >= 0.0;
+    let btc_o = s.session_open_btc;
+    let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
+    let btc_up = btc_d >= 0.0;
+    let aligned = clob_up == btc_up && up_d.abs() > 0.05 && btc_d.abs() > 0.01;
+    let pulse_on = aligned && (s.pulse_tick % 12) < 8; // blink: 8/12 on, 4/12 off
+
+    // ── S1: CLOB MOM ──
+    let s1_bg = if pulse_on {
+        if clob_up { Color::Green } else { Color::Red }
+    } else if aligned {
+        Color::Rgb(15, 25, 20)
+    } else {
+        Color::Reset
+    };
+    let s1_border = if aligned { if clob_up { Color::Green } else { Color::Red } } else { Color::Rgb(20, 30, 45) };
     let clob_dir = if up_d.abs() > dn_d.abs() {
         if clob_up { "▲ UP" } else { "▼ UP" }
     } else {
         if dn_d >= 0.0 { "▲ DN" } else { "▼ DN" }
     };
-    let btc_up = s.btc >= btc_ref_indic(s);
-    let aligned = clob_up == btc_up && up_d.abs() > 0.1 && dn_d.abs() > 0.1;
-    let s1_border = if aligned { Color::Green } else { Color::Rgb(20, 30, 45) };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("CLOB MOM", Style::default().fg(Color::Cyan).add_modifier(b))),
+            Line::from(Span::styled("CLOB MOM", Style::default().fg(if aligned { Color::White } else { Color::Cyan }).add_modifier(b))),
             Line::from(Span::styled(
-                format!("UP {up_d:+.1}%  DN {dn_d:+.1}%"), Style::default().fg(Color::White))),
+                format!("UP {up_d:+.1}%  DN {dn_d:+.1}%"), Style::default().fg(if aligned { Color::Black } else { Color::White }))),
             Line::from(Span::styled(
-                format!("{clob_dir}  {}", if aligned {"✓ BTC"}else{"—"}),
-                Style::default().fg(if aligned {Color::Green}else{Color::DarkGray}).add_modifier(b))),
-        ]).block(Block::default().borders(Borders::ALL).title("S1 CLOB").border_style(Style::default().fg(s1_border))),
+                format!("{clob_dir}  {}", if aligned {"✓ BTC ✓"}else{"—"}),
+                Style::default().fg(if aligned { Color::Black } else { Color::DarkGray }).add_modifier(b))),
+        ]).block(Block::default().borders(Borders::ALL).title("S1 CLOB")
+            .border_style(Style::default().fg(s1_border))
+            .style(Style::default().bg(s1_bg))),
         cols[0]);
 
-    // ── S2: BTC MOMENTUM (confirmed by CLOB) ──
-    let btc_o = s.session_open_btc;
-    let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
-    let s2_border = if aligned { Color::Green } else { Color::Rgb(20, 30, 45) };
+    // ── S2: BTC MOM ──
+    let s2_bg = if pulse_on {
+        if btc_up { Color::Green } else { Color::Red }
+    } else if aligned {
+        Color::Rgb(15, 25, 20)
+    } else {
+        Color::Reset
+    };
+    let s2_border = if aligned { if btc_up { Color::Green } else { Color::Red } } else { Color::Rgb(20, 30, 45) };
     let btc_dir = if btc_d >= 0.0 { "▲ BULL" } else { "▼ BEAR" };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("BTC MOM", Style::default().fg(Color::Yellow).add_modifier(b))),
+            Line::from(Span::styled("BTC MOM", Style::default().fg(if aligned { Color::White } else { Color::Yellow }).add_modifier(b))),
             Line::from(Span::styled(
-                format!("${:.0}  {btc_d:+.1}%", s.btc), Style::default().fg(Color::White))),
+                format!("${:.0}  {btc_d:+.1}%", s.btc), Style::default().fg(if aligned { Color::Black } else { Color::White }))),
             Line::from(Span::styled(
-                format!("{btc_dir}  {}", if aligned {"✓ CLOB"}else{"—"}),
-                Style::default().fg(if aligned {Color::Green}else{Color::DarkGray}).add_modifier(b))),
-        ]).block(Block::default().borders(Borders::ALL).title("S2 BTC").border_style(Style::default().fg(s2_border))),
+                format!("{btc_dir}  {}", if aligned {"✓ CLOB ✓"}else{"—"}),
+                Style::default().fg(if aligned { Color::Black } else { Color::DarkGray }).add_modifier(b))),
+        ]).block(Block::default().borders(Borders::ALL).title("S2 BTC")
+            .border_style(Style::default().fg(s2_border))
+            .style(Style::default().bg(s2_bg))),
         cols[1]);
 
-    // ── S3: VELOCIDAD + ACELERACION ──
+    // ── S3: VEL / ACEL ──
     let vel = s.hft.btc_vel;
     let acel = s.hft.btc_acel;
     let vel_dir = if vel >= 0.0 { "▲" } else { "▼" };
@@ -300,17 +321,18 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         ]).block(Block::default().borders(Borders::ALL).title("S3 VEL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[2]);
 
-    // ── S4: VOLUMEN ──
+    // ── S4: VOLUMEN SESION ──
     let vol24 = s.hft.btc_volume_24h;
+    let vol_ses = if s.btc_vol_session_start > 0.0 { vol24 - s.btc_vol_session_start } else { 0.0 };
     let bid_v = s.hft.bid_vol;
     let ask_v = s.hft.ask_vol;
     let ratio = if ask_v > 0.0 { bid_v / ask_v } else { 1.0 };
     let r_c = if ratio > 1.5 { Color::Green } else if ratio < 0.67 { Color::Red } else { Color::DarkGray };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("VOLUMEN", Style::default().fg(Color::Cyan).add_modifier(b))),
+            Line::from(Span::styled("VOL SESION", Style::default().fg(Color::Cyan).add_modifier(b))),
             Line::from(Span::styled(
-                format!("24h ${:.0}M", vol24 / 1_000_000.0), Style::default().fg(Color::White))),
+                format!("${:.0}M ses", vol_ses / 1_000_000.0), Style::default().fg(Color::White))),
             Line::from(Span::styled(
                 format!("B/A {ratio:.1}x  {:.0}/{:.0}", bid_v, ask_v),
                 Style::default().fg(r_c))),
@@ -552,7 +574,7 @@ fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
 // ─── TRADE LOG INLINE ─────────────────────────────────────────────
 
 fn draw_trade_log_inline(f: &mut Frame, area: Rect, s: &State) {
-    let max_n = (area.height as usize).saturating_sub(2).min(5);
+    let max_n = (area.height as usize).saturating_sub(2).min(30);
     let lines: Vec<Line> = s.trade_log.iter().take(max_n).map(|e| {
         Line::from(vec![
             Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
@@ -908,30 +930,15 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
         let txt = format!("{side_sym} PENDING {} sz={:.0} @{:.4} ${:.2}  [{:.0}% filled]  /c=CANCELAR",
             s.mt_outcome.to_uppercase(), s.mt_size, s.mt_entry, s.mt_budget, s.mt_last_fill_pct);
         (txt, Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(b))
-    } else if s.pos_sen_up {
-        let entry = s.pos_sen_entry_up; let cur = s.hft.clob_trade_up;
-        let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
-        let pnl = if entry > 0.0 && cur > 0.0 { s.sen_budget * (cur / entry - 1.0) } else { 0.0 };
-        let gain = pnl >= 0.0;
-        let bg = if gain { Color::Green } else { Color::Red };
-        (format!("▲ SENNA UP  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            sz, cur, pnl, if entry>0.0{(cur/entry-1.0)*100.0}else{0.0}),
-         Style::default().fg(Color::Black).bg(bg).add_modifier(b))
-    } else if s.pos_sen_dn {
-        let entry = s.pos_sen_entry_dn; let cur = s.hft.clob_trade_dn;
-        let sz = if entry > 0.0 { (s.sen_budget / entry).floor() as i64 } else { 0 };
-        let pnl = if entry > 0.0 && cur > 0.0 { s.sen_budget * (cur / entry - 1.0) } else { 0.0 };
-        let gain = pnl >= 0.0;
-        let bg = if gain { Color::Green } else { Color::Red };
-        (format!("▼ SENNA DN  {:.0}ct→{:.4}  PnL:{:+.2}  {:.1}%  ▶ /p EXIT",
-            sz, cur, pnl, if entry>0.0{(cur/entry-1.0)*100.0}else{0.0}),
-         Style::default().fg(Color::Black).bg(bg).add_modifier(b))
-    } else if s.sen_enabled && s.sen_budget > 0.0 {
-        (format!("⚡ SENNA activo  ${:.0}  esperando momentum...", s.sen_budget),
-         Style::default().fg(Color::Cyan).add_modifier(b))
     } else {
-        (format!("0 POSICIONES  —  /l10up65 para abrir"),
-         Style::default().fg(Color::DarkGray))
+        if s.mt_pnl_cum != 0.0 {
+            let cum_c = if s.mt_pnl_cum >= 0.0 { Color::Green } else { Color::Red };
+            (format!("0 POSICIONES  Σ{:+.2} {}T/{}W  —  /4up65 para abrir", s.mt_pnl_cum, s.mt_trades, s.mt_wins),
+             Style::default().fg(cum_c))
+        } else {
+            (format!("0 POSICIONES  —  /4up65 para abrir"),
+             Style::default().fg(Color::DarkGray))
+        }
     };
 
     // Alert indicators
@@ -1079,28 +1086,26 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" /b10up65e70  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled("BUY+exit       ", Style::default().fg(Color::Gray)),
-            Span::styled("/b10up65e70s50", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(" bracket       ", Style::default().fg(Color::Gray)),
-            Span::styled("/k", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" /4up65 /4d65  ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("BUY        ", Style::default().fg(Color::Gray)),
+            Span::styled("/lup70 /ld70  ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("SELL limit  ", Style::default().fg(Color::Gray)),
+            Span::styled("/co", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(" cash out  ", Style::default().fg(Color::Gray)),
+            Span::styled("/c", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled(" cancel  ", Style::default().fg(Color::Gray)),
             Span::styled("/x", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::styled(" exit mkt  ", Style::default().fg(Color::Gray)),
-            Span::styled("/u", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(" undo", Style::default().fg(Color::Gray)),
+            Span::styled(" mkt sell", Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
-            Span::styled(format!(" SL:{sl_info} ", sl_info = sl_info), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("TSL:{tsl_info} ", tsl_info = tsl_info), Style::default().fg(Color::DarkGray)),
-            Span::styled(" /sl /sl10 /nsl  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("/tsl5 /ntsl  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("/alert up 0.70  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("/co /p /pos /man", Style::default().fg(Color::DarkGray)),
+            Span::styled("/4up65e70 ", Style::default().fg(Color::Green)),
+            Span::styled("BUY+exit  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/5g70 ", Style::default().fg(Color::Magenta)),
+            Span::styled("Gemini  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/provider binance  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("SL:{sl_info} TSL:{tsl_info}", sl_info=sl_info, tsl_info=tsl_info), Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
-            Span::styled(" /5g70 /5g70e80  ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::styled("Gemini trigger  ", Style::default().fg(Color::DarkGray)),
             Span::styled(" [/]comando  [Tab]vista  [Esc/q]salir", Style::default().fg(Color::Rgb(30, 40, 55))),
         ]),
     ];

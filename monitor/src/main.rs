@@ -141,6 +141,8 @@ struct State {
 
     // /man page
     pub show_man: bool,
+    pub pulse_tick: u64,
+    pub btc_vol_session_start: f64,
 
     // Gemini
     pub gemini_active: bool,
@@ -245,6 +247,8 @@ impl State {
             history_cursor: None,
             alerts: Vec::new(),
             show_man: false,
+            pulse_tick: 0,
+            btc_vol_session_start: 0.0,
             gemini_active: false,
             gemini_budget: 0.0,
             gemini_target: 0.0,
@@ -663,6 +667,10 @@ async fn main() -> io::Result<()> {
             if let Some(data) = http_get::<BtcProviderInfo>("/api/btc/provider").await {
                 s.btc_provider = data.provider;
             }
+            // Track session start volume
+            if s.session_open_btc > 0.0 && s.btc_vol_session_start == 0.0 && s.hft.btc_volume_24h > 0.0 {
+                s.btc_vol_session_start = s.hft.btc_volume_24h;
+            }
         }
 
         // Poll HFT (500ms)
@@ -775,6 +783,7 @@ async fn main() -> io::Result<()> {
             commands::trigger_gemini_buy(&mut s).await;
         }
 
+        s.pulse_tick = s.pulse_tick.wrapping_add(1);
         terminal.draw(|f| ui::draw(f, &s))?;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
