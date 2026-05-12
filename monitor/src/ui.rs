@@ -138,8 +138,8 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
                 Span::styled(format!(" {arrow} {:+.0}", btc_delta), Style::default().fg(btc_c)),
             ]),
             Line::from(Span::styled(format!("abrio ${:.0}", btc_ref), Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled(format!("{:+.1}%", btc_delta_pct), Style::default().fg(btc_c))),
-        ]).block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(btc_c))),
+            Line::from(Span::styled(format!("{:+.1}%  {}", btc_delta_pct, s.btc_provider.to_uppercase()), Style::default().fg(btc_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("BTC").border_style(Style::default().fg(btc_c))),
         cols[0]);
 
     let open_c = if s.session_open_btc > 0.0 { Color::Cyan } else { Color::DarkGray };

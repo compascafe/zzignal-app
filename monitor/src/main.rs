@@ -24,6 +24,7 @@ struct State {
     tab: usize,
     btc: f64, btc_open: f64, btc_entry: f64,
     bal: f64,
+    btc_provider: String,
     live: bool, reinvest: bool, _paper_mode: bool,
 
     // Odiseo
@@ -168,6 +169,7 @@ impl State {
         Self {
             connected: false, tab: 0,
             btc: 0.0, btc_open: 0.0, btc_entry: 0.0, bal: 0.0,
+            btc_provider: "binance".into(),
             live: !paper_mode, reinvest: false, _paper_mode: paper_mode,
             odi_label: "Odiseo 83".into(), odi_code: String::new(),
             odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 0.0,
@@ -604,7 +606,13 @@ async fn main() -> io::Result<()> {
                         match msg.side.as_deref() {
                             Some("up") => s.book_up = book.clone(),
                             Some("down") => s.book_dn = book.clone(),
-                            _ => {}
+                Some("btc_provider") => {
+                    if let Some(ref p) = msg.provider {
+                        s.btc_provider = p.clone();
+                        s.add_log(format!("BTC provider: {}", p), Color::Cyan);
+                    }
+                }
+                _ => {}
                         }
                     }
                     if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
@@ -648,6 +656,9 @@ async fn main() -> io::Result<()> {
             }
             if let Some(data) = http_get::<HealthInfo>("/api/health").await {
                 s.bal = data.balance;
+            }
+            if let Some(data) = http_get::<BtcProviderInfo>("/api/btc/provider").await {
+                s.btc_provider = data.provider;
             }
         }
 

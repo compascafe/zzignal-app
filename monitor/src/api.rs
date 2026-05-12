@@ -53,6 +53,8 @@ pub struct WsMsg {
     pub side: Option<String>,
     #[serde(default)]
     pub book: Option<BookDepth>,
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 
 // ─── REST Response Types ────────────────────────────────────────────
@@ -86,6 +88,11 @@ pub struct OdiseoVariant {
 pub struct BtcInfo {
     pub price: f64,
     pub open: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BtcProviderInfo {
+    pub provider: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
