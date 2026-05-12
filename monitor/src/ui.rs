@@ -103,9 +103,9 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
         Constraint::Length(4),     // market info
         Constraint::Length(4),     // UP/DOWN price cards
-        Constraint::Length(3),     // indicators (S1..S4)
-        Constraint::Length(3),     // manual trading status
-        Constraint::Length(17),    // orderbook depth (fixed ~15 rows)
+        Constraint::Length(5),     // indicators (S1..S4)
+        Constraint::Length(2),     // manual trading status
+        Constraint::Length(15),    // orderbook depth (fixed ~15 rows)
         Constraint::Length(6),     // orders + positions + events
     ];
 
