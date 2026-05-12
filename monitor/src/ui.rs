@@ -141,6 +141,7 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
     let btc_up = btc_delta >= 0.0;
     let btc_c = if btc_up { Color::Green } else { Color::Red };
     let arrow = if btc_up { "▲" } else { "▼" };
+    // ── Card 1: BTC price ──
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -149,23 +150,35 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
             ]),
             Line::from(vec![
                 Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big)),
-                Span::styled(format!(" {arrow}"), Style::default().fg(btc_c).add_modifier(big)),
             ]),
             Line::from(Span::styled(
-                format!("{:+.0}  {:+.1}%  {}", btc_delta, btc_delta_pct, s.btc_provider.to_uppercase()),
-                Style::default().fg(btc_c))),
+                s.btc_provider.to_uppercase(),
+                Style::default().fg(Color::DarkGray))),
         ]).block(Block::default().borders(Borders::ALL).title("BTC").border_style(Style::default().fg(btc_c))),
         cols[0]);
 
-    let open_c = if s.session_open_btc > 0.0 { Color::Cyan } else { Color::DarkGray };
+    // ── Card 2: BTC delta (pulsing) ──
+    let delta_pulse = s.pulse_tick % 10 < 7; // 7/10 on, 3/10 off
+    let delta_bg = if delta_pulse {
+        if btc_up { Color::Green } else { Color::Red }
+    } else {
+        Color::Reset
+    };
+    let delta_fg = if delta_pulse { Color::Black } else { btc_c };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(format!("${:.0}", s.session_open_btc), Style::default().fg(Color::White).add_modifier(big))),
-            Line::from(Span::styled(if s.btc_open > 0.0 && s.session_open_btc == 0.0 {
-                format!("ref ${:.0}", s.btc_open) } else { "".into() },
-                Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("INICIAL", Style::default().fg(open_c))),
-        ]).block(Block::default().borders(Borders::ALL)),
+            Line::from(vec![
+                Span::styled(format!("{arrow} "), Style::default().fg(delta_fg).add_modifier(big)),
+                Span::styled(format!("${:+.0}", btc_delta), Style::default().fg(delta_fg).add_modifier(big)),
+            ]),
+            Line::from(Span::styled(
+                format!("{:+.1}%", btc_delta_pct),
+                Style::default().fg(delta_fg).add_modifier(big))),
+            Line::from(Span::styled(
+                if btc_up {"▲ UP"} else {"▼ DN"}, Style::default().fg(delta_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("BTC Δ")
+            .border_style(Style::default().fg(btc_c))
+            .style(Style::default().bg(delta_bg))),
         cols[1]);
 
     let sl = s.hft.secs_left;
