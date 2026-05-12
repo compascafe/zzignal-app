@@ -8,11 +8,11 @@
     "auto_widened": false,
     "confidence_level": 0.95,
     "feedback_count": 0,
-    "quantile_macd": 0.05,
-    "quantile_price": 0.005,
-    "quantile_rsi": 0.05
+    "quantile_macd": 15.162278578893165,
+    "quantile_price": 0.0018161424456673277,
+    "quantile_rsi": 9.371020817941151
   },
-  "exported_at": "2026-05-05T03:23:30.847480+00:00",
+  "exported_at": "2026-05-11T01:40:57.080452+00:00",
   "hunting": {
     "volatility": 0.0,
     "z_score": 0.0

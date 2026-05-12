@@ -141,23 +141,20 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
     let btc_up = btc_delta >= 0.0;
     let btc_c = if btc_up { Color::Green } else { Color::Red };
     let arrow = if btc_up { "▲" } else { "▼" };
-    // ── Card 1: BTC price ──
+    // ── Card 1: BTC price NOW ──
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(format!("${:.0}", btc_ref), Style::default().fg(Color::Gray).add_modifier(big)),
-                Span::styled("  BEAT", Style::default().fg(Color::DarkGray)),
-            ]),
             Line::from(vec![
                 Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big)),
             ]),
             Line::from(Span::styled(
-                s.btc_provider.to_uppercase(),
-                Style::default().fg(Color::DarkGray))),
+                format!("abrio ${:.0}", btc_ref), Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                s.btc_provider.to_uppercase(), Style::default().fg(Color::DarkGray))),
         ]).block(Block::default().borders(Borders::ALL).title("BTC").border_style(Style::default().fg(btc_c))),
         cols[0]);
 
-    // ── Card 2: BTC delta (pulsing) ──
+    // ── Card 2: BTC delta vs open (pulsing) ──
     let delta_pulse = s.pulse_tick % 10 < 7; // 7/10 on, 3/10 off
     let delta_bg = if delta_pulse {
         if btc_up { Color::Green } else { Color::Red }
