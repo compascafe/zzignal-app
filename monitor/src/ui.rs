@@ -304,26 +304,25 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
             .style(Style::default().bg(s2_bg))),
         cols[1]);
 
-    // ── S3: VEL / ACEL ──
-    let vel = s.hft.btc_vel;
-    let acel = s.hft.btc_acel;
+    // ── S3: VELOCIDAD + ACELERACION (computed locally) ──
+    let vel = s.btc_velocity;
+    let acel = s.btc_acceleration;
     let vel_dir = if vel >= 0.0 { "▲" } else { "▼" };
     let acel_dir = if acel >= 0.0 { "▲" } else { "▼" };
-    let vel_c = if vel.abs() > 50.0 { Color::Yellow } else { Color::DarkGray };
-    let acel_c = if acel.abs() > 10.0 { Color::Cyan } else { Color::DarkGray };
+    let vel_c = if vel.abs() > 0.5 { Color::Yellow } else { Color::DarkGray };
+    let acel_c = if acel.abs() > 0.1 { Color::Cyan } else { Color::DarkGray };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled("VEL / ACEL", Style::default().fg(Color::Magenta).add_modifier(b))),
             Line::from(Span::styled(
-                format!("{vel_dir} {vel:+.0} $/s"), Style::default().fg(vel_c))),
+                format!("{vel_dir} ${vel:+.1}/s"), Style::default().fg(vel_c))),
             Line::from(Span::styled(
-                format!("{acel_dir} {acel:+.1} $/s²"), Style::default().fg(acel_c))),
+                format!("{acel_dir} ${acel:+.2}/s²"), Style::default().fg(acel_c))),
         ]).block(Block::default().borders(Borders::ALL).title("S3 VEL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[2]);
 
-    // ── S4: VOLUMEN SESION ──
-    let vol24 = s.hft.btc_volume_24h;
-    let vol_ses = if s.btc_vol_session_start > 0.0 { vol24 - s.btc_vol_session_start } else { 0.0 };
+    // ── S4: VOLUMEN SESION (accumulated CLOB) ──
+    let vol_ses = s.session_vol_cum;
     let bid_v = s.hft.bid_vol;
     let ask_v = s.hft.ask_vol;
     let ratio = if ask_v > 0.0 { bid_v / ask_v } else { 1.0 };
@@ -332,18 +331,12 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(vec![
             Line::from(Span::styled("VOL SESION", Style::default().fg(Color::Cyan).add_modifier(b))),
             Line::from(Span::styled(
-                format!("${:.0}M ses", vol_ses / 1_000_000.0), Style::default().fg(Color::White))),
+                format!("${:.0} ses", vol_ses), Style::default().fg(Color::White))),
             Line::from(Span::styled(
                 format!("B/A {ratio:.1}x  {:.0}/{:.0}", bid_v, ask_v),
                 Style::default().fg(r_c))),
         ]).block(Block::default().borders(Borders::ALL).title("S4 VOL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[3]);
-}
-
-fn btc_ref_indic(s: &State) -> f64 {
-    if s.session_open_btc > 0.0 { s.session_open_btc }
-    else if s.btc_open > 0.0 { s.btc_open }
-    else { s.btc }
 }
 
 // ─── MANUAL TRADING STATUS BAR ────────────────────────────────────
@@ -1111,4 +1104,136 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
     ];
 
     f.render_widget(Paragraph::new(lines), area);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INDICATOR CALCS — pure functions for testing
+// ═══════════════════════════════════════════════════════════════════
+
+pub fn calc_clob_mom(up_px: f64, dn_px: f64, up_ref: f64, dn_ref: f64) -> (f64, f64, bool, bool, &'static str) {
+    let up_d = if up_ref > 0.0 { (up_px / up_ref - 1.0) * 100.0 } else { 0.0 };
+    let dn_d = if dn_ref > 0.0 { (dn_px / dn_ref - 1.0) * 100.0 } else { 0.0 };
+    let clob_up = up_d >= 0.0;
+    let dominant_up = up_d.abs() > dn_d.abs();
+    let clob_dir = if dominant_up {
+        if clob_up { "▲ UP" } else { "▼ UP" }
+    } else {
+        if dn_d >= 0.0 { "▲ DN" } else { "▼ DN" }
+    };
+    (up_d, dn_d, clob_up, dominant_up, clob_dir)
+}
+
+pub fn calc_btc_mom(btc: f64, btc_open: f64) -> (f64, bool, &'static str) {
+    let btc_d = if btc_open > 0.0 { (btc / btc_open - 1.0) * 100.0 } else { 0.0 };
+    let btc_up = btc_d >= 0.0;
+    let btc_dir = if btc_up { "▲ BULL" } else { "▼ BEAR" };
+    (btc_d, btc_up, btc_dir)
+}
+
+pub fn calc_aligned(clob_up: bool, btc_up: bool, up_d: f64, btc_d: f64) -> bool {
+    clob_up == btc_up && up_d.abs() > 0.05 && btc_d.abs() > 0.01
+}
+
+pub fn calc_vol_ratio(bid_vol: f64, ask_vol: f64) -> (f64, &'static str) {
+    let ratio = if ask_vol > 0.0 { bid_vol / ask_vol } else { 1.0 };
+    let label = if ratio > 1.5 { "▲BUY" } else if ratio < 0.67 { "▼SELL" } else { "⚖NEUT" };
+    (ratio, label)
+}
+
+#[cfg(test)]
+mod indicator_tests {
+    use super::*;
+
+    #[test]
+    fn clob_up_strong() {
+        let (up_d, dn_d, clob_up, _dom, dir) = calc_clob_mom(0.55, 0.45, 0.50, 0.50);
+        assert!((up_d - 10.0).abs() < 0.01);   // (0.55/0.50-1)*100 = +10%
+        assert!((dn_d + 10.0).abs() < 0.01);   // (0.45/0.50-1)*100 = -10%
+        assert!(clob_up);
+        assert_eq!(dir, "▲ UP");
+    }
+
+    #[test]
+    fn clob_dn_strong() {
+        let (up_d, dn_d, clob_up, _dom, dir) = calc_clob_mom(0.45, 0.55, 0.50, 0.50);
+        assert!((up_d + 10.0).abs() < 0.01);
+        assert!((dn_d - 10.0).abs() < 0.01);
+        assert!(!clob_up);
+        assert_eq!(dir, "▲ DN"); // DN sube, clob_up sigue
+    }
+
+    #[test]
+    fn clob_flat() {
+        let (up_d, dn_d, clob_up, _dom, dir) = calc_clob_mom(0.50, 0.50, 0.50, 0.50);
+        assert!((up_d - 0.0).abs() < 0.01);
+        assert!((dn_d - 0.0).abs() < 0.01);
+        assert!(clob_up);
+        assert_eq!(dir, "▲ DN");  // flat: DN 0%, dominant_up=false → DN branch
+    }
+
+    #[test]
+    fn btc_bull() {
+        let (btc_d, btc_up, dir) = calc_btc_mom(88000.0, 85000.0);
+        assert!((btc_d - 3.53).abs() < 0.1);
+        assert!(btc_up);
+        assert_eq!(dir, "▲ BULL");
+    }
+
+    #[test]
+    fn btc_bear() {
+        let (btc_d, btc_up, dir) = calc_btc_mom(82000.0, 85000.0);
+        assert!((btc_d + 3.53).abs() < 0.1);
+        assert!(!btc_up);
+        assert_eq!(dir, "▼ BEAR");
+    }
+
+    #[test]
+    fn btc_no_open() {
+        let (btc_d, btc_up, dir) = calc_btc_mom(87000.0, 0.0);
+        assert!((btc_d - 0.0).abs() < 0.01);
+        assert!(btc_up);
+        assert_eq!(dir, "▲ BULL");
+    }
+
+    #[test]
+    fn aligned_true() {
+        assert!(calc_aligned(true, true, 5.0, 2.0));
+        assert!(calc_aligned(false, false, -5.0, -2.0));
+    }
+
+    #[test]
+    fn aligned_false() {
+        assert!(!calc_aligned(true, false, 5.0, 2.0));       // opposite direction
+        assert!(!calc_aligned(true, true, 0.01, 2.0));        // CLOB too flat
+        assert!(!calc_aligned(true, true, 5.0, 0.005));       // BTC too flat
+        assert!(!calc_aligned(true, true, 0.0, 0.0));         // all zeros
+    }
+
+    #[test]
+    fn volume_ratio_buy() {
+        let (r, label) = calc_vol_ratio(2000.0, 1000.0);
+        assert!((r - 2.0).abs() < 0.01);
+        assert_eq!(label, "▲BUY");
+    }
+
+    #[test]
+    fn volume_ratio_sell() {
+        let (r, label) = calc_vol_ratio(500.0, 1000.0);
+        assert!((r - 0.5).abs() < 0.01);
+        assert_eq!(label, "▼SELL");
+    }
+
+    #[test]
+    fn volume_ratio_neutral() {
+        let (r, label) = calc_vol_ratio(1000.0, 1000.0);
+        assert!((r - 1.0).abs() < 0.01);
+        assert_eq!(label, "⚖NEUT");
+    }
+
+    #[test]
+    fn volume_ratio_zero_ask() {
+        let (r, label) = calc_vol_ratio(500.0, 0.0);
+        assert!((r - 1.0).abs() < 0.01);
+        assert_eq!(label, "⚖NEUT");
+    }
 }

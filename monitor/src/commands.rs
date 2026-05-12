@@ -471,7 +471,6 @@ async fn cancel_active(s: &mut State) {
     if s.mt_state >= 2 {
         let has_pending = !s.mt_exit_order_id.is_empty() || !s.mt_sl_order_id.is_empty();
         if !has_pending {
-            s.trade_log.clear();
             s.add_log(format!("{} ACTIVO — usa /x o /lm para salir", s.mt_outcome.to_uppercase()), Color::Yellow);
             s.add_trade_log(format!("\u{2717} {} ACTIVO — sal con /lm", s.mt_outcome.to_uppercase()), Color::Yellow);
             return;
@@ -1127,24 +1126,35 @@ async fn exec_cashout(s: &mut State) {
     s.gemini_triggered = false;
 
     // 1) Market sell manual position
+    let mut cashout_ok = false;
     if s.mt_state >= 2 {
         let outcome = s.mt_outcome.clone();
+        let current_px = if outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+        let pnl = s.mt_size * (current_px - s.mt_entry);
         let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
             outcome, s.mt_budget);
-        match http_post_result::<OrderPlaced>("/api/orders/market", &body).await {
-            Ok(_) => {
-                s.add_log(format!("Market sell {} OK", outcome.to_uppercase()), Color::Green);
-                s.add_trade_log(format!("💰 MKT {} liquidado", outcome.to_uppercase()), Color::Green);
+        s.add_log(format!("▶ MARKET SELL {} amount=${:.2}", outcome.to_uppercase(), s.mt_budget), Color::Yellow);
+        match http_post("/api/orders/market", &body).await {
+            Ok(()) => {
+                s.mt_pnl_cum += pnl;
+                s.mt_trades += 1;
+                if pnl >= 0.0 { s.mt_wins += 1; }
+                let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
+                s.add_log(format!("💰 MKT {}  PnL:{:+.2} Σ{:+.2}", outcome.to_uppercase(), pnl, s.mt_pnl_cum), pnl_c);
+                s.add_trade_log(format!("💰 CASH OUT {} sz={:.0} PnL:{:+.2}", outcome.to_uppercase(), s.mt_size, pnl), pnl_c);
+                cashout_ok = true;
             }
             Err(e) => {
-                s.add_log(format!("Market sell FAIL: {}", e), Color::Red);
-                s.add_trade_log(format!("\u{2717} CashOut FAIL: {}", e), Color::Red);
+                s.add_log(format!("❌ CashOut MKT FAIL: {}", e), Color::Red);
+                s.add_trade_log(format!("✗ CASH OUT FAIL: {} — posicion intacta", e), Color::Red);
             }
         }
     }
 
-    // 2) Cancel pending manual orders
-    cancel_all_manual(s).await;
+    // 2) Cancel pending manual orders (only if market sell went through)
+    if cashout_ok || s.mt_state < 2 {
+        cancel_all_manual(s).await;
+    }
 
     // 3) PANIC strategies
     if s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn {
@@ -1152,9 +1162,11 @@ async fn exec_cashout(s: &mut State) {
         let _ = http_post("/api/panic", "{}").await;
     }
 
-    s.reset_manual();
-    s.add_log("💰 CASH OUT completo".to_string(), Color::Green);
-    s.add_trade_log("💰 Cash out completo".to_string(), Color::Green);
+    if cashout_ok || s.mt_state == 0 {
+        s.reset_manual();
+        s.add_log("💰 CASH OUT completo".to_string(), Color::Green);
+        s.add_trade_log("💰 Cash out completo".to_string(), Color::Green);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════

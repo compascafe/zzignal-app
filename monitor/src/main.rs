@@ -143,6 +143,11 @@ struct State {
     pub show_man: bool,
     pub pulse_tick: u64,
     pub btc_vol_session_start: f64,
+    pub btc_history: VecDeque<(f64, std::time::Instant)>,
+    pub btc_velocity: f64,
+    pub btc_acceleration: f64,
+    pub session_vol_cum: f64,
+    pub last_btc_vel: f64,
 
     // Gemini
     pub gemini_active: bool,
@@ -249,6 +254,11 @@ impl State {
             show_man: false,
             pulse_tick: 0,
             btc_vol_session_start: 0.0,
+            btc_history: VecDeque::with_capacity(10),
+            btc_velocity: 0.0,
+            btc_acceleration: 0.0,
+            session_vol_cum: 0.0,
+            last_btc_vel: 0.0,
             gemini_active: false,
             gemini_budget: 0.0,
             gemini_target: 0.0,
@@ -290,7 +300,6 @@ impl State {
         self.mt_tsl_low = 1.0;
         self.mt_fill_avg = 0.0;
         self.mt_fill_count = 0;
-        self.trade_log.clear();
     }
 }
 
@@ -396,6 +405,8 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
 
     s.hft = new_hft.clone();
     s.odi_filters = s.hft.od83_filters;
+
+    s.session_vol_cum += new_hft.clob_trade_up_vol + new_hft.clob_trade_dn_vol;
 
     let secs = new_hft.secs_left;
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
@@ -660,6 +671,18 @@ async fn main() -> io::Result<()> {
             if let Some(data) = http_get::<BtcInfo>("/api/btc").await {
                 s.btc = data.price;
                 if s.btc_open == 0.0 { s.btc_open = data.open; }
+                // Track BTC price history for velocity/acceleration
+                s.btc_history.push_back((data.price, Instant::now()));
+                if s.btc_history.len() > 5 { s.btc_history.pop_front(); }
+                if s.btc_history.len() >= 2 {
+                    let (p0, t0) = s.btc_history.front().unwrap();
+                    let (p1, t1) = s.btc_history.back().unwrap();
+                    let dt = t1.duration_since(*t0).as_secs_f64().max(0.1);
+                    let new_vel = (p1 - p0) / dt;
+                    s.btc_acceleration = (new_vel - s.last_btc_vel) / dt;
+                    s.last_btc_vel = new_vel;
+                    s.btc_velocity = new_vel;
+                }
             }
             if let Some(data) = http_get::<HealthInfo>("/api/health").await {
                 s.bal = data.balance;
