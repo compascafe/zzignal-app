@@ -104,8 +104,8 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
         Constraint::Length(4),     // market info
         Constraint::Length(4),     // UP/DOWN price cards
         Constraint::Length(5),     // indicators (S1..S4)
-        Constraint::Length(2),     // manual trading status
-        Constraint::Length(15),    // orderbook depth
+        Constraint::Length(3),     // manual trading status
+        Constraint::Length(13),    // orderbook depth
         Constraint::Min(8),        // orders + positions + trade log (expands)
     ];
 
