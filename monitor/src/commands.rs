@@ -478,48 +478,15 @@ async fn cancel_active(s: &mut State) {
     }
 
     if s.mt_state == 0 && s.open_orders.is_empty() {
-        s.trade_log.clear();
         s.add_log("0 posiciones".to_string(), Color::DarkGray);
         s.add_trade_log("\u{2717} 0 posiciones".to_string(), Color::DarkGray);
         return;
     }
 
-    let cancel_id = if !s.mt_order_id.is_empty() {
-        s.mt_order_id.clone()
-    } else if let Some(o) = s.open_orders.first() {
-        o.id.clone()
-    } else {
-        s.add_log("Nada que cancelar", Color::DarkGray);
-        return;
-    };
-
-    s.add_log("Cancelando orden...".to_string(), Color::Yellow);
-    let mut cancelled = false;
-    if let Err(e) = http_delete(&format!("/api/orders/{}", cancel_id)).await {
-        s.add_log(format!("Cancel FAIL: {}", e), Color::Red);
-        s.add_trade_log(format!("\u{2717} Cancel FAIL: {}", e), Color::Red);
-    } else {
-        s.add_log(format!("Orden {} cancelada", cancel_id), Color::Green);
-        s.add_trade_log("\u{2717} Orden cancelada".to_string(), Color::Yellow);
-        cancelled = true;
-    }
-
-    if !s.mt_exit_order_id.is_empty() {
-        if let Err(e) = http_delete(&format!("/api/orders/{}", s.mt_exit_order_id)).await {
-            s.add_log(format!("Cancel EXIT FAIL: {}", e), Color::Red);
-        } else {
-            s.add_log("Exit cancelado".to_string(), Color::Green);
-        }
-        s.mt_exit_order_id.clear();
-    }
-
-    if !s.mt_sl_order_id.is_empty() {
-        if let Err(e) = http_delete(&format!("/api/orders/{}", s.mt_sl_order_id)).await {
-            s.add_log(format!("Cancel SL FAIL: {}", e), Color::Red);
-        } else {
-            s.add_log("SL cancelado".to_string(), Color::Green);
-        }
-        s.mt_sl_order_id.clear();
+    s.add_log("Cancelando todo...".to_string(), Color::Yellow);
+    let cancelled = cancel_all_manual(s).await;
+    if cancelled {
+        let _ = http_delete("/api/orders").await;
     }
 
     if cancelled {
@@ -728,8 +695,7 @@ async fn exec_sl_off(s: &mut State) {
 // SHARED HELPERS
 // ═══════════════════════════════════════════════════════════════════
 
-async fn cancel_all_manual(s: &mut State) {
-    s.add_log("Cancelando todo lo manual...".to_string(), Color::Yellow);
+async fn cancel_all_manual(s: &mut State) -> bool {
     let ids: Vec<String> = {
         let mut v = Vec::new();
         if !s.mt_order_id.is_empty() { v.push(s.mt_order_id.clone()); }
@@ -737,6 +703,28 @@ async fn cancel_all_manual(s: &mut State) {
         if !s.mt_sl_order_id.is_empty() { v.push(s.mt_sl_order_id.clone()); }
         v
     };
+    if ids.is_empty() && !s.open_orders.is_empty() {
+        s.add_log("Cancelando todas las ordenes...".to_string(), Color::Yellow);
+        match http_delete("/api/orders").await {
+            Ok(()) => {
+                s.add_log("Todas las ordenes canceladas".to_string(), Color::Green);
+                s.add_trade_log("\u{2717} Canceladas todas".to_string(), Color::Yellow);
+                s.reset_manual();
+                return true;
+            }
+            Err(e) => {
+                s.add_log(format!("Cancel ALL FAIL: {}", e), Color::Red);
+                s.add_trade_log(format!("\u{2717} Cancel ALL FAIL: {}", e), Color::Red);
+                return false;
+            }
+        }
+    }
+    if ids.is_empty() {
+        s.add_log("Nada que cancelar".to_string(), Color::DarkGray);
+        return false;
+    }
+
+    s.add_log("Cancelando todo lo manual...".to_string(), Color::Yellow);
     for id in &ids {
         if let Err(e) = http_delete(&format!("/api/orders/{}", id)).await {
             s.add_log(format!("Cancel {} FAIL: {}", id, e), Color::Red);
@@ -744,7 +732,9 @@ async fn cancel_all_manual(s: &mut State) {
             s.add_log(format!("Orden {} cancelada", id), Color::Green);
         }
     }
+    let _ = http_delete("/api/orders").await;
     s.reset_manual();
+    true
 }
 
 async fn exec_gemini(budget: f64, target: f64, exit: Option<f64>, s: &mut State) {
@@ -1338,6 +1328,7 @@ mod tests {
         assert_eq!(parsed("man"),  "MAN");
         assert_eq!(parsed("quit"), "QUIT");
         assert_eq!(parsed("p"),    "PANIC");
+        assert_eq!(parsed("co"),   "CASHOUT");
     }
 
     #[test]
@@ -1347,6 +1338,7 @@ mod tests {
         assert!(parsed("xyz").starts_with("UNKNOWN"));
         assert!(parsed("l").starts_with("UNKNOWN"));
         assert_eq!(parsed("c123"), "CANCEL");
+        assert_eq!(parsed("co"), "CASHOUT");
     }
 
     #[test]
@@ -1501,6 +1493,7 @@ mod tests {
             ("pos",         "POS"),
             ("u",           "UNDO"),
             ("p",           "PANIC"),
+            ("co",          "CASHOUT"),
             ("man",         "MAN"),
             ("quit",        "QUIT"),
             ("5g70",        "GEMINI $5 @0.7000 exit=None"),

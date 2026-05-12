@@ -624,16 +624,15 @@ async fn main() -> io::Result<()> {
                         match msg.side.as_deref() {
                             Some("up") => s.book_up = book.clone(),
                             Some("down") => s.book_dn = book.clone(),
-                Some("btc_provider") => {
-                    if let Some(ref p) = msg.provider {
-                        s.btc_provider = p.clone();
-                        s.add_log(format!("BTC provider: {}", p), Color::Cyan);
-                    }
-                }
-                _ => {}
+                            _ => {}
                         }
                     }
                     if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
+                }
+                Some("btc_provider") => {
+                    if let Some(ref p) = msg.provider {
+                        s.btc_provider = p.clone();
+                    }
                 }
                 _ => {}
             }

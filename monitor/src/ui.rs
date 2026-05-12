@@ -360,12 +360,7 @@ fn draw_manual_status(f: &mut Frame, area: Rect, s: &State) {
     match s.mt_state {
         0 => {
             spans.push(Span::styled("IDLE", Style::default().fg(Color::DarkGray)));
-            if s.mt_pnl_cum != 0.0 {
-                spans.push(Span::styled(format!("  Σ{:+.2} {}T", s.mt_pnl_cum, s.mt_trades),
-                    Style::default().fg(Color::DarkGray)));
-            } else {
-                spans.push(Span::styled("  0 posiciones", Style::default().fg(Color::DarkGray)));
-            }
+            spans.push(Span::styled("  0 posiciones", Style::default().fg(Color::DarkGray)));
         }
         1 => {
             spans.push(Span::styled("PENDING ", Style::default().fg(Color::Yellow).add_modifier(b)));
@@ -389,14 +384,8 @@ fn draw_manual_status(f: &mut Frame, area: Rect, s: &State) {
             spans.push(Span::styled(format!("{} ", s.mt_outcome.to_uppercase()), Style::default().fg(outcome_c).add_modifier(b)));
 
             let current_px = if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
-            let upnl = s.mt_size * (current_px - s.mt_entry);
-            let upnl_pct = if s.mt_entry > 0.0 { (current_px / s.mt_entry - 1.0) * 100.0 } else { 0.0 };
-            let pnl_c = if upnl >= 0.0 { Color::Green } else { Color::Red };
-
             spans.push(Span::styled(format!("entry:{:.4}→{:.4} ", s.mt_entry, current_px),
                 Style::default().fg(Color::White)));
-            spans.push(Span::styled(format!("uP&L {:+.2} ({:+.1}%) ", upnl, upnl_pct),
-                Style::default().fg(pnl_c).add_modifier(b)));
 
             let liq_cmd = if s.mt_outcome == "up" { "/lupXX" } else { "/ldXX" };
             spans.push(Span::styled(format!("| {} /lm /c", liq_cmd), Style::default().fg(Color::DarkGray)));
@@ -409,18 +398,11 @@ fn draw_manual_status(f: &mut Frame, area: Rect, s: &State) {
             let exit_px = if s.mt_exit_price > 0.0 { s.mt_exit_price } else {
                 if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn }
             };
-            let expected = s.mt_size * (exit_px - s.mt_entry);
-            let pnl_c = if expected >= 0.0 { Color::Green } else { Color::Red };
-            spans.push(Span::styled(format!("exit @{:.4}  exp.P&L {:+.2}",
-                exit_px, expected), Style::default().fg(pnl_c).add_modifier(b)));
+            spans.push(Span::styled(format!("exit @{:.4}  sz={:.0}",
+                exit_px, s.mt_size), Style::default().fg(Color::White)));
             spans.push(Span::styled("  /c=CANCELAR EXIT", Style::default().fg(Color::DarkGray)));
         }
         _ => {}
-    }
-
-    if s.mt_pnl_cum != 0.0 {
-        let c = if s.mt_pnl_cum >= 0.0 { Color::Green } else { Color::Red };
-        spans.push(Span::styled(format!("  Σ{:+.2}", s.mt_pnl_cum), Style::default().fg(c).add_modifier(b)));
     }
 
     // ─── SL INDICATOR ───
@@ -616,13 +598,11 @@ fn draw_depth_panel(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
         .split(area);
 
-    let bar_w = chunks[0].width.saturating_sub(14) as usize;
-
-    draw_book_side(f, chunks[0], bar_w, "UP", Color::Green, &s.book_up, &s.hft.depth_up_bids, &s.hft.depth_up_asks);
-    draw_book_side(f, chunks[1], bar_w, "DOWN", Color::Red, &s.book_dn, &s.hft.depth_dn_bids, &s.hft.depth_dn_asks);
+    draw_book_side(f, chunks[0], "UP", Color::Green, &s.book_up, &s.hft.depth_up_bids, &s.hft.depth_up_asks);
+    draw_book_side(f, chunks[1], "DOWN", Color::Red, &s.book_dn, &s.hft.depth_dn_bids, &s.hft.depth_dn_asks);
 }
 
-fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c: Color,
+fn draw_book_side(f: &mut Frame, area: Rect, label: &str, border_c: Color,
                    book: &crate::api::BookDepth, bids_fb: &[(f64,f64)], asks_fb: &[(f64,f64)]) {
     let mut bids: Vec<(f64,f64)> = if !book.bids.is_empty() {
         book.bids.iter().take(200).map(|l| (l.price, l.size)).collect()
@@ -638,8 +618,8 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let best_bid = bids.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max);
     let best_ask = asks.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min);
 
-    let avail = (area.height as usize).saturating_sub(3);
-    let half = (avail.saturating_sub(1) / 2).min(9).max(3); // fit: half asks + spread + half bids ≤ avail
+    let avail = (area.height as usize).saturating_sub(2);
+    let half = (avail.saturating_sub(1) / 2).min(9).max(3);
 
     asks.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let top_asks: Vec<_> = asks.into_iter().take(half).rev().collect();
@@ -655,6 +635,8 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
     let spread = if best_bid > 0.0 && best_ask > 0.0 { best_ask - best_bid } else { 0.0 };
     let mid = if best_bid > 0.0 && best_ask > 0.0 { (best_bid + best_ask) / 2.0 } else { 0.0 };
 
+    let bar_w = area.width.saturating_sub(14) as usize;
+
     let mut lines: Vec<Line> = Vec::new();
 
     for &(price, size) in top_asks.iter() {
@@ -664,16 +646,14 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
         let is_ceiling = (price - best_ask).abs() < 0.0001;
         let c = if is_ceiling { Color::Yellow } else { Color::Red };
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", price), Style::default().fg(c)),
+            Span::styled(format!("{:.4} ", price), Style::default().fg(c)),
             Span::styled(bar, Style::default().fg(Color::Red)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
     }
 
     if best_bid > 0.0 && best_ask > 0.0 {
-        let spread_str = format!("{:.4}", spread);
-        let mid_str = format!("{:.4}", mid);
-        let s_label = format!("── SPREAD {spread_str} ── MID {mid_str} ──");
+        let s_label = format!("── SPREAD {spread:.4} ── MID {mid:.4} ──");
         lines.push(Line::from(vec![
             Span::styled(s_label, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ]));
@@ -686,7 +666,7 @@ fn draw_book_side(f: &mut Frame, area: Rect, bar_w: usize, label: &str, border_c
         let is_floor = (price - best_bid).abs() < 0.0001;
         let c = if is_floor { Color::Yellow } else { Color::Green };
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4} ", price), Style::default().fg(c)),
+            Span::styled(format!("{:.4} ", price), Style::default().fg(c)),
             Span::styled(bar, Style::default().fg(Color::Green)),
             Span::styled(format!(" {:.0}", size), Style::default().fg(Color::DarkGray)),
         ]));
@@ -913,20 +893,17 @@ fn draw_histograma(f: &mut Frame, area: Rect, s: &State) {
 fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
     let b = Modifier::BOLD;
 
-    // ─── Manual position ALWAYS shown ───
     let (pos_text, pos_style) = if s.mt_state >= 2 {
         let current_px = if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
         let entry = if s.mt_fill_avg > 0.0 { s.mt_fill_avg } else { s.mt_entry };
-        let pnl = s.mt_size * (current_px - entry);
-        let pnl_pct = if entry > 0.0 { (current_px / entry - 1.0) * 100.0 } else { 0.0 };
-        let gain = pnl >= 0.0;
+        let gain = (current_px - entry) >= 0.0;
         let bg = if gain { Color::Green } else { Color::Red };
         let side_sym = if s.mt_outcome == "up" { "▲" } else { "▼" };
         let tsl = if s.mt_tsl_pct > 0.0 { format!(" TSL:{:.0}%", s.mt_tsl_pct) } else { String::new() };
         let sl = if s.sl_pct > 0.0 { format!(" SL:{:.0}%", s.sl_pct) } else { String::new() };
         let exit_info = if s.mt_exit_price > 0.0 { format!(" TP:{:.4}", s.mt_exit_price) } else { String::new() };
-        let txt = format!("{side_sym} POS {} sz={:.0} entry={:.4}→{:.4} PnL:{:+.2} ({:+.1}%) Σ{:+.2}{tsl}{sl}{exit_info}",
-            s.mt_outcome.to_uppercase(), s.mt_size, entry, current_px, pnl, pnl_pct, s.mt_pnl_cum);
+        let txt = format!("{side_sym} POS {} sz={:.0} entry={:.4}→{:.4}{tsl}{sl}{exit_info}",
+            s.mt_outcome.to_uppercase(), s.mt_size, entry, current_px);
         (txt, Style::default().fg(Color::Black).bg(bg).add_modifier(b))
     } else if s.mt_state == 1 {
         let side_sym = if s.mt_outcome == "up" { "▲" } else { "▼" };
@@ -934,14 +911,8 @@ fn draw_position_bar(f: &mut Frame, area: Rect, s: &State) {
             s.mt_outcome.to_uppercase(), s.mt_size, s.mt_entry, s.mt_budget, s.mt_last_fill_pct);
         (txt, Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(b))
     } else {
-        if s.mt_pnl_cum != 0.0 {
-            let cum_c = if s.mt_pnl_cum >= 0.0 { Color::Green } else { Color::Red };
-            (format!("0 POSICIONES  Σ{:+.2} {}T/{}W  —  /4up65 para abrir", s.mt_pnl_cum, s.mt_trades, s.mt_wins),
-             Style::default().fg(cum_c))
-        } else {
-            (format!("0 POSICIONES  —  /4up65 para abrir"),
-             Style::default().fg(Color::DarkGray))
-        }
+        (format!("0 POSICIONES  —  /4up65 para abrir"),
+         Style::default().fg(Color::DarkGray))
     };
 
     // Alert indicators
