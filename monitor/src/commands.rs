@@ -423,20 +423,9 @@ async fn place_manual_buy(amount: f64, side: &str, price: f64, exit_price: Optio
     s.mt_tsl_high = price;
     s.mt_tsl_low = price;
 
-    if let Some(exit) = exit_price {
-        let exit_body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, exit, size);
-        s.add_log(format!("▶ EXIT SELL {} @{:.4} (take-profit)", outcome.to_uppercase(), exit), Color::Yellow);
-        s.add_trade_log(format!("  TP @{:.4}", exit), Color::Yellow);
-        match http_post_result::<OrderPlaced>("/api/orders/limit", &exit_body).await {
-            Ok(exit_placed) => {
-                s.mt_exit_order_id = exit_placed.id.clone();
-                s.mt_exit_placed_at = std::time::Instant::now();
-                s.add_log(format!("  Exit ID: {}", exit_placed.id), Color::Cyan);
-            }
-            Err(e) => {
-                s.add_log(format!("EXIT FAIL: {}", e), Color::Red);
-            }
-        }
+    if exit_price.is_some() {
+        s.add_log(format!("▶ EXIT pendiente — se colocara tras fill @{:.4}", exit_price.unwrap()), Color::Yellow);
+        s.add_trade_log(format!("  TP @{:.4} (post-fill)", exit_price.unwrap()), Color::Yellow);
     }
 
     // Bracket SL override or default SL
@@ -865,7 +854,8 @@ pub async fn track_manual_fills(s: &mut State) {
                     outcome_up.to_uppercase(), entry, sz, budget), Color::Green);
                 s.add_trade_log(format!("✓ BUY {} sz={:.0} @{:.4} — ACTIVO",
                     outcome_up.to_uppercase(), sz, entry), Color::Green);
-                if !s.mt_exit_order_id.is_empty() { s.mt_state = 3; }
+                if s.mt_exit_price > 0.0 { place_exit_after_fill(s).await; }
+                else if !s.mt_exit_order_id.is_empty() { s.mt_state = 3; }
             } else if partial {
                 s.add_log(format!("◐ FILLING {} {:.0}%", s.mt_outcome.to_uppercase(), pct), Color::Yellow);
             }
@@ -880,7 +870,8 @@ pub async fn track_manual_fills(s: &mut State) {
                 outcome.to_uppercase(), entry, sz, budget), Color::Green);
             s.add_trade_log(format!("✓ BUY {} sz={:.0} @{:.4} — ACTIVO",
                 outcome.to_uppercase(), sz, entry), Color::Green);
-            if !s.mt_exit_order_id.is_empty() { s.mt_state = 3; }
+            if s.mt_exit_price > 0.0 { place_exit_after_fill(s).await; }
+            else if !s.mt_exit_order_id.is_empty() { s.mt_state = 3; }
         } else if s.mt_order_placed_at.elapsed() < std::time::Duration::from_secs(3) {
             // Recently placed, not yet visible. Wait.
         } else {
@@ -894,7 +885,8 @@ pub async fn track_manual_fills(s: &mut State) {
                 outcome.to_uppercase(), entry, sz, budget), Color::Green);
             s.add_trade_log(format!("✓ BUY {} sz={:.0} @{:.4} — ACTIVO",
                 outcome.to_uppercase(), sz, entry), Color::Green);
-            if !s.mt_exit_order_id.is_empty() { s.mt_state = 3; }
+            if s.mt_exit_price > 0.0 { place_exit_after_fill(s).await; }
+            else if !s.mt_exit_order_id.is_empty() { s.mt_state = 3; }
         }
     }
 
@@ -929,6 +921,27 @@ pub async fn track_manual_fills(s: &mut State) {
             finalize_manual_trade(s, fill_px).await;
         }
         // Exit not found AND never seen → keep waiting, API may be slow
+    }
+}
+
+async fn place_exit_after_fill(s: &mut State) {
+    if s.mt_exit_price <= 0.0 || !s.mt_exit_order_id.is_empty() { return; }
+    let exit = s.mt_exit_price;
+    let outcome = s.mt_outcome.clone();
+    let size = s.mt_size;
+    let exit_body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, exit, size);
+    s.add_log(format!("▶ EXIT SELL {} @{:.4} sz={:.0}", outcome.to_uppercase(), exit, size), Color::Yellow);
+    s.add_trade_log(format!("  EXIT @{:.4} sz={:.0}", exit, size), Color::Yellow);
+    match http_post_result::<OrderPlaced>("/api/orders/limit", &exit_body).await {
+        Ok(exit_placed) => {
+            s.mt_exit_order_id = exit_placed.id.clone();
+            s.mt_exit_placed_at = std::time::Instant::now();
+            s.mt_state = 3;
+            s.add_log(format!("  Exit colocado: {}", exit_placed.id), Color::Cyan);
+        }
+        Err(e) => {
+            s.add_log(format!("EXIT FAIL: {}", e), Color::Red);
+        }
     }
 }
 
