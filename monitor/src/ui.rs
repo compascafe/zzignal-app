@@ -19,6 +19,7 @@ pub fn draw(f: &mut Frame, s: &State) {
 
     let pos_h = 3;
     let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
+    let gem_h = if s.gemini_active || s.gemini_triggered || s.mt_state >= 1 { 2 } else { 0 };
 
     let mut constraints = vec![
         Constraint::Length(1),     // commit bar
@@ -26,6 +27,7 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Length(pos_h), // position bar
         Constraint::Min(4),        // dashboard
     ];
+    if gem_h > 0 { constraints.push(Constraint::Length(gem_h)); }
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
     constraints.push(Constraint::Length(10)); // footer: ayuda
 
@@ -77,6 +79,12 @@ pub fn draw(f: &mut Frame, s: &State) {
     }
     ci += 1;
 
+    // ─── GEMINI CARD ───────────────────────────────────────────────────
+    if gem_h > 0 {
+        draw_gemini_card(f, chunks[ci], s);
+        ci += 1;
+    }
+
     // ─── COMMAND BAR (modal) ──────────────────────────────────────────
     if cmd_h > 0 {
         draw_command_bar(f, chunks[ci], s);
@@ -124,21 +132,28 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(1,4); 4]).split(area);
     let big = Modifier::BOLD;
 
+    // ── BTC CARD: Price to beat + Current + Delta ──
     let btc_ref = if s.session_open_btc > 0.0 { s.session_open_btc }
         else if s.btc_open > 0.0 { s.btc_open }
         else { s.btc };
     let btc_delta = s.btc - btc_ref;
     let btc_delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
-    let btc_c = if btc_delta > 0.0 { Color::Green } else if btc_delta < 0.0 { Color::Red } else { Color::Yellow };
-    let arrow = if btc_delta > 0.0 { "↑" } else if btc_delta < 0.0 { "↓" } else { "→" };
+    let btc_up = btc_delta >= 0.0;
+    let btc_c = if btc_up { Color::Green } else { Color::Red };
+    let arrow = if btc_up { "▲" } else { "▼" };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big)),
-                Span::styled(format!(" {arrow} {:+.0}", btc_delta), Style::default().fg(btc_c)),
+                Span::styled(format!("${:.0}", btc_ref), Style::default().fg(Color::Gray).add_modifier(big)),
+                Span::styled("  BEAT", Style::default().fg(Color::DarkGray)),
             ]),
-            Line::from(Span::styled(format!("abrio ${:.0}", btc_ref), Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled(format!("{:+.1}%  {}", btc_delta_pct, s.btc_provider.to_uppercase()), Style::default().fg(btc_c))),
+            Line::from(vec![
+                Span::styled(format!("${:.0}", s.btc), Style::default().fg(Color::White).add_modifier(big)),
+                Span::styled(format!(" {arrow}"), Style::default().fg(btc_c).add_modifier(big)),
+            ]),
+            Line::from(Span::styled(
+                format!("{:+.0}  {:+.1}%  {}", btc_delta, btc_delta_pct, s.btc_provider.to_uppercase()),
+                Style::default().fg(btc_c))),
         ]).block(Block::default().borders(Borders::ALL).title("BTC").border_style(Style::default().fg(btc_c))),
         cols[0]);
 
@@ -225,66 +240,88 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
 fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let cols = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1,4); 4]).split(area);
-
     let b = Modifier::BOLD;
 
-    // S1 = GEMINI
-    {
-        let gemini_lines: Vec<Line> = if s.gemini_active && !s.gemini_triggered {
-            let mut lines = vec![
-                Line::from(Span::styled("GEMINI", Style::default().fg(Color::Magenta).add_modifier(b))),
-                Line::from(Span::styled(
-                    format!("@{:.2}\u{2192}{:.2} ${:.0}", s.gemini_trigger, s.gemini_target, s.gemini_budget),
-                    Style::default().fg(Color::White))),
-            ];
-            if s.gemini_exit > 0.0 {
-                lines.push(Line::from(Span::styled(
-                    format!("EXIT @{:.2}", s.gemini_exit),
-                    Style::default().fg(Color::Cyan))));
-            }
-            lines
-        } else if s.gemini_triggered || s.mt_state >= 1 {
-            let mut lines = vec![
-                Line::from(Span::styled("GEMINI", Style::default().fg(Color::Magenta).add_modifier(b))),
-            ];
-            if !s.gemini_outcome.is_empty() {
-                let out_c = if s.gemini_outcome == "up" { Color::Green } else { Color::Red };
-                let sz = if s.mt_size > 0.0 { format!("sz={:.0}", s.mt_size) } else { String::new() };
-                lines.push(Line::from(Span::styled(
-                    format!("{} @{:.4} {}", s.gemini_outcome.to_uppercase(), s.gemini_target, sz),
-                    Style::default().fg(out_c))));
-            }
-            match s.mt_state {
-                1 => lines.push(Line::from(Span::styled("TRIGGERED", Style::default().fg(Color::Yellow).add_modifier(b)))),
-                2 => lines.push(Line::from(Span::styled("ACTIVE", Style::default().fg(Color::Green).add_modifier(b)))),
-                3 => lines.push(Line::from(Span::styled("EXITING", Style::default().fg(Color::Cyan).add_modifier(b)))),
-                _ => {}
-            }
-            lines
-        } else {
-            vec![
-                Line::from(Span::styled("S1", Style::default().fg(Color::DarkGray))),
-                Line::from(Span::styled("\u{2014}", Style::default().fg(Color::Rgb(20, 28, 40)))),
-            ]
-        };
-        let border_c = if s.gemini_active || s.gemini_triggered { Color::Magenta } else { Color::Rgb(20, 30, 45) };
-        let title = if s.gemini_active || s.gemini_triggered { "GEMINI" } else { "S1" };
-        f.render_widget(
-            Paragraph::new(gemini_lines)
-                .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(border_c))),
-            cols[0]);
-    }
+    // ── S1: POLYMARKET MOMENTUM (CLOB direction) ──
+    let up_ref = if s.session_open_up > 0.0 { s.session_open_up } else { s.hft.clob_trade_up };
+    let dn_ref = if s.session_open_dn > 0.0 { s.session_open_dn } else { s.hft.clob_trade_dn };
+    let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
+    let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
+    let clob_up = up_d >= 0.0;
+    let clob_dir = if up_d.abs() > dn_d.abs() {
+        if clob_up { "▲ UP" } else { "▼ UP" }
+    } else {
+        if dn_d >= 0.0 { "▲ DN" } else { "▼ DN" }
+    };
+    let btc_up = s.btc >= btc_ref_indic(s);
+    let aligned = clob_up == btc_up && up_d.abs() > 0.1 && dn_d.abs() > 0.1;
+    let s1_border = if aligned { Color::Green } else { Color::Rgb(20, 30, 45) };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("CLOB MOM", Style::default().fg(Color::Cyan).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("UP {up_d:+.1}%  DN {dn_d:+.1}%"), Style::default().fg(Color::White))),
+            Line::from(Span::styled(
+                format!("{clob_dir}  {}", if aligned {"✓ BTC"}else{"—"}),
+                Style::default().fg(if aligned {Color::Green}else{Color::DarkGray}).add_modifier(b))),
+        ]).block(Block::default().borders(Borders::ALL).title("S1 CLOB").border_style(Style::default().fg(s1_border))),
+        cols[0]);
 
-    let labels = ["S2", "S3", "S4"];
-    for (i, label) in labels.iter().enumerate() {
-        f.render_widget(
-            Paragraph::new(vec![
-                Line::from(Span::styled(*label, Style::default().fg(Color::DarkGray))),
-                Line::from(Span::styled("\u{2014}", Style::default().fg(Color::Rgb(20, 28, 40)))),
-            ]).block(Block::default().borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
-            cols[i + 1]);
-    }
+    // ── S2: BTC MOMENTUM (confirmed by CLOB) ──
+    let btc_o = s.session_open_btc;
+    let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
+    let s2_border = if aligned { Color::Green } else { Color::Rgb(20, 30, 45) };
+    let btc_dir = if btc_d >= 0.0 { "▲ BULL" } else { "▼ BEAR" };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("BTC MOM", Style::default().fg(Color::Yellow).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("${:.0}  {btc_d:+.1}%", s.btc), Style::default().fg(Color::White))),
+            Line::from(Span::styled(
+                format!("{btc_dir}  {}", if aligned {"✓ CLOB"}else{"—"}),
+                Style::default().fg(if aligned {Color::Green}else{Color::DarkGray}).add_modifier(b))),
+        ]).block(Block::default().borders(Borders::ALL).title("S2 BTC").border_style(Style::default().fg(s2_border))),
+        cols[1]);
+
+    // ── S3: VELOCIDAD + ACELERACION ──
+    let vel = s.hft.btc_vel;
+    let acel = s.hft.btc_acel;
+    let vel_dir = if vel >= 0.0 { "▲" } else { "▼" };
+    let acel_dir = if acel >= 0.0 { "▲" } else { "▼" };
+    let vel_c = if vel.abs() > 50.0 { Color::Yellow } else { Color::DarkGray };
+    let acel_c = if acel.abs() > 10.0 { Color::Cyan } else { Color::DarkGray };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("VEL / ACEL", Style::default().fg(Color::Magenta).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("{vel_dir} {vel:+.0} $/s"), Style::default().fg(vel_c))),
+            Line::from(Span::styled(
+                format!("{acel_dir} {acel:+.1} $/s²"), Style::default().fg(acel_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("S3 VEL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
+        cols[2]);
+
+    // ── S4: VOLUMEN ──
+    let vol24 = s.hft.btc_volume_24h;
+    let bid_v = s.hft.bid_vol;
+    let ask_v = s.hft.ask_vol;
+    let ratio = if ask_v > 0.0 { bid_v / ask_v } else { 1.0 };
+    let r_c = if ratio > 1.5 { Color::Green } else if ratio < 0.67 { Color::Red } else { Color::DarkGray };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("VOLUMEN", Style::default().fg(Color::Cyan).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("24h ${:.0}M", vol24 / 1_000_000.0), Style::default().fg(Color::White))),
+            Line::from(Span::styled(
+                format!("B/A {ratio:.1}x  {:.0}/{:.0}", bid_v, ask_v),
+                Style::default().fg(r_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("S4 VOL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
+        cols[3]);
+}
+
+fn btc_ref_indic(s: &State) -> f64 {
+    if s.session_open_btc > 0.0 { s.session_open_btc }
+    else if s.btc_open > 0.0 { s.btc_open }
+    else { s.btc }
 }
 
 // ─── MANUAL TRADING STATUS BAR ────────────────────────────────────
@@ -982,6 +1019,52 @@ fn draw_man_page(f: &mut Frame, area: Rect, _s: &State) {
         Paragraph::new(lines),
         area,
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GEMINI CARD — footer inline
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_gemini_card(f: &mut Frame, area: Rect, s: &State) {
+    let b = Modifier::BOLD;
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled("⚡ GEMINI: ", Style::default().fg(Color::Magenta).add_modifier(b)));
+
+    if s.gemini_active && !s.gemini_triggered {
+        spans.push(Span::styled(
+            format!("@{:.2}→{:.2} ${:.0}", s.gemini_trigger, s.gemini_target, s.gemini_budget),
+            Style::default().fg(Color::White).add_modifier(b)));
+        if s.gemini_exit > 0.0 {
+            spans.push(Span::styled(format!("  EXIT @{:.2}", s.gemini_exit), Style::default().fg(Color::Cyan)));
+        }
+        spans.push(Span::styled("  /c=cancelar", Style::default().fg(Color::DarkGray)));
+    } else if s.gemini_triggered || s.mt_state >= 1 {
+        let out_s = if s.gemini_outcome.is_empty() { &s.mt_outcome } else { &s.gemini_outcome };
+        let out_c = if out_s == "up" { Color::Green } else { Color::Red };
+        spans.push(Span::styled(format!("{} ", out_s.to_uppercase()), Style::default().fg(out_c).add_modifier(b)));
+        spans.push(Span::styled(
+            format!("@{:.4} sz={:.0} ${:.0}", s.mt_entry, s.mt_size, s.mt_budget),
+            Style::default().fg(Color::White)));
+        match s.mt_state {
+            1 => spans.push(Span::styled("  PENDING...", Style::default().fg(Color::Yellow).add_modifier(b))),
+            2 => {
+                let cur = if out_s == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+                let upnl = s.mt_size * (cur - s.mt_entry);
+                let pc = if upnl >= 0.0 { Color::Green } else { Color::Red };
+                spans.push(Span::styled(format!("  PnL:{:+.2}", upnl), Style::default().fg(pc).add_modifier(b)));
+            }
+            3 => spans.push(Span::styled("  EXITING...", Style::default().fg(Color::Cyan).add_modifier(b))),
+            _ => {}
+        }
+    }
+
+    let border_c = if s.mt_state == 2 { Color::Green }
+        else if s.mt_state == 1 || s.mt_state == 3 { Color::Yellow }
+        else { Color::Magenta };
+    f.render_widget(
+        Paragraph::new(Line::from(spans))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(border_c))),
+        area);
 }
 
 // ═══════════════════════════════════════════════════════════════════

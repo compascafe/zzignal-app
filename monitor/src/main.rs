@@ -114,6 +114,7 @@ struct State {
     pub mt_order_seen: bool,
     pub mt_exit_order_seen: bool,
     pub mt_order_placed_at: Instant, // to detect fast fills
+    pub mt_exit_placed_at: Instant,  // exit fast-fill detection
     pub mt_pnl_cum: f64,
     pub mt_trades: i64,
     pub mt_wins: i64,
@@ -232,6 +233,7 @@ impl State {
             mt_exit_order_id: String::new(),
             mt_state: 0, mt_order_seen: false, mt_exit_order_seen: false,
             mt_order_placed_at: Instant::now(),
+            mt_exit_placed_at: Instant::now(),
             mt_pnl_cum: 0.0, mt_trades: 0, mt_wins: 0,
             mt_last_fill_pct: 0.0,
             mt_sl_order_id: String::new(),
@@ -278,6 +280,7 @@ impl State {
         self.mt_exit_order_seen = false;
         self.mt_last_fill_pct = 0.0;
         self.mt_exit_price = 0.0;
+        self.mt_exit_placed_at = Instant::now();
         self.mt_tsl_pct = 0.0;
         self.mt_tsl_high = 0.0;
         self.mt_tsl_low = 1.0;

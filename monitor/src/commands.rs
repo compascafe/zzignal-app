@@ -430,6 +430,7 @@ async fn place_manual_buy(amount: f64, side: &str, price: f64, exit_price: Optio
         match http_post_result::<OrderPlaced>("/api/orders/limit", &exit_body).await {
             Ok(exit_placed) => {
                 s.mt_exit_order_id = exit_placed.id.clone();
+                s.mt_exit_placed_at = std::time::Instant::now();
                 s.add_log(format!("  Exit ID: {}", exit_placed.id), Color::Cyan);
             }
             Err(e) => {
@@ -593,6 +594,7 @@ async fn exec_liq_limit(outcome: &str, price: f64, s: &mut State) {
             s.mt_exit_order_id = placed.id;
             s.mt_exit_price = price;
             s.mt_state = 3;
+            s.mt_exit_placed_at = std::time::Instant::now();
         }
         Err(e) => {
             s.add_log(format!("LIQUIDAR FAIL: {}", e), Color::Red);
@@ -607,7 +609,9 @@ async fn exec_liq_market(s: &mut State) {
     if s.mt_state >= 2 {
         let outcome = s.mt_outcome.clone();
         let size = s.mt_size;
-        s.add_log(format!("▶ MARKET SELL {} sz={:.0}", outcome.to_uppercase(), size), Color::Yellow);
+        let current_px = if outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+        let pnl = size * (current_px - s.mt_entry);
+        s.add_log(format!("▶ MARKET SELL {} sz={:.0}  PnL est:{:+.2}", outcome.to_uppercase(), size, pnl), Color::Yellow);
         s.add_trade_log(format!("▶ MKT SELL {} sz={:.0} @mercado", outcome.to_uppercase(), size), Color::Yellow);
         let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
             outcome, s.mt_budget);
@@ -615,6 +619,11 @@ async fn exec_liq_market(s: &mut State) {
             s.add_log(format!("MARKET SELL FAIL: {}", e), Color::Red);
             s.add_trade_log(format!("\u{2717} MKT SELL FAIL: {}", e), Color::Red);
         } else {
+            s.mt_pnl_cum += pnl;
+            s.mt_trades += 1;
+            if pnl >= 0.0 { s.mt_wins += 1; }
+            let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
+            s.add_trade_log(format!("▼ MKT {} PnL:{:+.2} Σ{:+.2}", outcome.to_uppercase(), pnl, s.mt_pnl_cum), pnl_c);
             liquidated = true;
         }
     }
@@ -911,6 +920,13 @@ pub async fn track_manual_fills(s: &mut State) {
             // Was seen before, now gone → filled
             let exit_px = s.mt_exit_price;
             finalize_manual_trade(s, exit_px).await;
+        } else if !found_in_list && s.mt_exit_placed_at.elapsed() > std::time::Duration::from_secs(4) {
+            // Fast fill — never seen, >4s elapsed
+            let exit_px = s.mt_exit_price;
+            let current_px = if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+            let fill_px = if exit_px > 0.0 { exit_px } else { current_px };
+            s.add_log(format!("▲ EXIT fast-fill {} @{:.4}", s.mt_outcome.to_uppercase(), fill_px), Color::Green);
+            finalize_manual_trade(s, fill_px).await;
         }
         // Exit not found AND never seen → keep waiting, API may be slow
     }
