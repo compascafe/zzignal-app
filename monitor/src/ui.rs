@@ -420,13 +420,20 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         ]).block(Block::default().borders(Borders::ALL).title("S4 VEL+VOL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[3]);
 
-    // ── S5: ORDER BOOK IMBALANCE (B/A ratio) ──
-    let bid_v = s.hft.bid_vol;
-    let ask_v = s.hft.ask_vol;
-    let imb = if ask_v > 0.0 { bid_v / ask_v } else { 1.0 };
-    let (imb_bg, imb_fg, imb_border, imb_label) = if imb > 1.2 {
+    // ── S5: ORDER BOOK IMBALANCE (per-side B/A from depth) ──
+    let up_bid_v: f64 = s.hft.depth_up_bids.iter().map(|(_,s)| s).sum();
+    let up_ask_v: f64 = s.hft.depth_up_asks.iter().map(|(_,s)| s).sum();
+    let dn_bid_v: f64 = s.hft.depth_dn_bids.iter().map(|(_,s)| s).sum();
+    let dn_ask_v: f64 = s.hft.depth_dn_asks.iter().map(|(_,s)| s).sum();
+    let up_imb = if up_ask_v > 0.0 { up_bid_v / up_ask_v } else { 1.0 };
+    let dn_imb = if dn_ask_v > 0.0 { dn_bid_v / dn_ask_v } else { 1.0 };
+    // Combined: more UP bids + DN asks = bullish, more UP asks + DN bids = bearish
+    let total_bull = up_bid_v + dn_ask_v;  // bids on UP + asks on DN = bullish pressure
+    let total_bear = up_ask_v + dn_bid_v;  // asks on UP + bids on DN = bearish pressure
+    let comb_imb = if total_bear > 0.0 { total_bull / total_bear } else { 1.0 };
+    let (imb_bg, imb_fg, imb_border, imb_label) = if comb_imb > 1.15 {
         (Color::Rgb(10, 40, 15), Color::Green, Color::Green, "▲ UP")
-    } else if imb < 0.8 {
+    } else if comb_imb < 0.85 {
         (Color::Rgb(40, 10, 10), Color::Red, Color::Red, "▼ DN")
     } else {
         (Color::Reset, Color::Yellow, Color::Rgb(20, 30, 45), "—")
@@ -435,9 +442,9 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(vec![
             Line::from(Span::styled("IMBALANCE", Style::default().fg(imb_fg).add_modifier(b))),
             Line::from(Span::styled(
-                format!("B/A {imb:.2}x"), Style::default().fg(Color::White).add_modifier(b))),
+                format!("UP {up_imb:.2}x"), Style::default().fg(if up_imb > 1.1 { Color::Green } else if up_imb < 0.9 { Color::Red } else { Color::Yellow }))),
             Line::from(Span::styled(
-                format!("{imb_label} {:.0}/{:.0}", bid_v, ask_v),
+                format!("{imb_label} DN {dn_imb:.2}x"),
                 Style::default().fg(imb_fg))),
         ]).block(Block::default().borders(Borders::ALL).title("S5 IMB")
             .border_style(Style::default().fg(imb_border))
