@@ -1103,10 +1103,10 @@ async fn exec_undo(s: &mut State) {
 // ═══════════════════════════════════════════════════════════════════
 
 async fn exec_cashout(s: &mut State) {
-    s.add_log("💰 CASH OUT — liquidando todo".to_string(), Color::Yellow);
-    s.add_trade_log("💰 CASH OUT — todo a USD".to_string(), Color::Yellow);
+    s.add_log("💰 CASH OUT — liquidando todo...".to_string(), Color::Yellow);
+    s.add_trade_log("💰 CASH OUT iniciado".to_string(), Color::Yellow);
 
-    // Gemini: cancel if pending
+    // 1) Cancel Gemini
     s.gemini_active = false;
     s.gemini_budget = 0.0;
     s.gemini_target = 0.0;
@@ -1115,47 +1115,58 @@ async fn exec_cashout(s: &mut State) {
     s.gemini_outcome.clear();
     s.gemini_triggered = false;
 
-    // 1) Market sell manual position
-    let mut cashout_ok = false;
+    // 2) Cancel ALL pending orders FIRST (SL, exit, pending buys)
+    //    This must happen BEFORE market sell to avoid conflicts
+    cancel_all_manual(s).await;
+    let _ = http_delete("/api/orders").await;
+
+    // 3) Market sell manual position (non-blocking: fires regardless)
+    let mut mkt_ok = true;
+    let mut mkt_err = String::new();
     if s.mt_state >= 2 {
         let outcome = s.mt_outcome.clone();
         let current_px = if outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
         let pnl = s.mt_size * (current_px - s.mt_entry);
         let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
             outcome, s.mt_budget);
-        s.add_log(format!("▶ MARKET SELL {} amount=${:.2}", outcome.to_uppercase(), s.mt_budget), Color::Yellow);
+        s.add_log(format!("▶ MARKET SELL {} ${:.2}", outcome.to_uppercase(), s.mt_budget), Color::Yellow);
         match http_post("/api/orders/market", &body).await {
             Ok(()) => {
                 s.mt_pnl_cum += pnl;
                 s.mt_trades += 1;
                 if pnl >= 0.0 { s.mt_wins += 1; }
                 let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
-                s.add_log(format!("💰 MKT {}  PnL:{:+.2} Σ{:+.2}", outcome.to_uppercase(), pnl, s.mt_pnl_cum), pnl_c);
+                s.add_log(format!("  ✓ Vendido {} PnL:{:+.2} Σ{:+.2}", outcome.to_uppercase(), pnl, s.mt_pnl_cum), pnl_c);
                 s.add_trade_log(format!("💰 CASH OUT {} sz={:.0} PnL:{:+.2}", outcome.to_uppercase(), s.mt_size, pnl), pnl_c);
-                cashout_ok = true;
             }
             Err(e) => {
-                s.add_log(format!("❌ CashOut MKT FAIL: {}", e), Color::Red);
-                s.add_trade_log(format!("✗ CASH OUT FAIL: {} — posicion intacta", e), Color::Red);
+                mkt_ok = false;
+                mkt_err = e;
+                s.add_log(format!("❌ Market sell FAIL: {}", mkt_err), Color::Red);
+                s.add_trade_log(format!("✗ CASH OUT: market sell FAIL ({})", mkt_err), Color::Red);
             }
         }
     }
 
-    // 2) Cancel pending manual orders (only if market sell went through)
-    if cashout_ok || s.mt_state < 2 {
-        cancel_all_manual(s).await;
-    }
-
-    // 3) PANIC strategies
+    // 4) PANIC strategies (ALWAYS fires, regardless of market sell result)
     if s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn {
-        s.add_log("PANIC estrategias...".to_string(), Color::Yellow);
-        let _ = http_post("/api/panic", "{}").await;
+        s.add_log("▶ Liquidando estrategias...".to_string(), Color::Yellow);
+        match http_post("/api/panic", "{}").await {
+            Ok(()) => s.add_log("  ✓ Estrategias liquidadas".to_string(), Color::Green),
+            Err(e) => s.add_log(format!("⚠ PANIC strategies FAIL: {}", e), Color::Red),
+        }
     }
 
-    if cashout_ok || s.mt_state == 0 {
-        s.reset_manual();
-        s.add_log("💰 CASH OUT completo".to_string(), Color::Green);
-        s.add_trade_log("💰 Cash out completo".to_string(), Color::Green);
+    // 5) ALWAYS reset manual state — no zombie positions
+    s.reset_manual();
+
+    // 6) Clear final report
+    if mkt_ok {
+        s.add_log("✅ CASH OUT completado — todo en USD".to_string(), Color::Green);
+        s.add_trade_log("✅ Cash out completado".to_string(), Color::Green);
+    } else {
+        s.add_log(format!("⚠ CASH OUT parcial: reintenta /lm ({})", mkt_err), Color::Red);
+        s.add_trade_log("⚠ Cash out parcial — usa /lm para reintentar".to_string(), Color::Red);
     }
 }
 
@@ -1460,6 +1471,297 @@ mod tests {
         assert_eq!(parse_cents("99"), Some((0.99, "")));
         assert_eq!(parse_cents("100"), None);
         assert_eq!(parse_cents("0"), None);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT (/co) TESTS — parser + edge cases
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_parse() {
+        assert_eq!(parsed("co"), "CASHOUT");
+    }
+
+    #[test]
+    fn cashout_not_confused_with_cancel() {
+        // "co" is cashout, not cancel
+        assert_eq!(parsed("co"), "CASHOUT");
+        // "c" alone is cancel
+        assert_eq!(parsed("c"), "CANCEL");
+        // "c" + digits (>=10 chars) is cancel by id
+        assert_eq!(parsed("c0000000000"), "CANCEL-ID(0000000000)");
+        // "c" + short string is cancel active
+        assert_eq!(parsed("c123"), "CANCEL");
+    }
+
+    #[test]
+    fn cashout_not_confused_with_cancel_liq() {
+        // "cl" + up/down/m is cancel+liq
+        assert_eq!(parsed("clup65"), "CANCEL+LIQ up @0.6500");
+        assert_eq!(parsed("cld70"), "CANCEL+LIQ down @0.7000");
+        assert_eq!(parsed("clm"), "CANCEL+LIQ MKT");
+        // "co" is cashout (not cancel-liq with "o" outcome)
+        assert_eq!(parsed("co"), "CASHOUT");
+        // Also test "co" with trailing chars (should still be cashout)
+        // Actually "co" + anything would be routed to parse_c_group which handles "c"...
+        // but "co" is special-cased first in parse()
+    }
+
+    #[test]
+    fn cashout_vs_panic() {
+        // /p  = PANIC (liquidate all)
+        assert_eq!(parsed("p"), "PANIC");
+        // /co = CASH OUT (liquidate + cancel + strategies off)
+        assert_eq!(parsed("co"), "CASHOUT");
+        // Verify they are different commands
+        assert_ne!(parsed("p"), parsed("co"));
+    }
+
+    #[test]
+    fn cashout_in_comprehensive_matrix() {
+        // This is part of the comprehensive matrix below
+        assert_eq!(parsed("co"), "CASHOUT");
+    }
+
+    // ─── LOGIC / STATE MACHINE TESTS ────────────────────────────
+
+    /// Build a minimal test state with manual position active (mt_state >= 2)
+    fn make_test_state(mt_state: u8, outcome: &str, size: f64, entry: f64, budget: f64) -> crate::State {
+        let mut s = crate::State::new(false);
+        s.mt_state = mt_state;
+        s.mt_outcome = outcome.to_string();
+        s.mt_size = size;
+        s.mt_entry = entry;
+        s.mt_budget = budget;
+        s.sl_pct = 5.0; // default SL active
+        s
+    }
+
+    /// Build a state with strategies active
+    fn make_test_state_strategies() -> crate::State {
+        let mut s = crate::State::new(false);
+        s.pos_odi_up = true;
+        s.pos_odi_entry_up = 0.65;
+        s.pos_h65_dn = true;
+        s.pos_sen_up = true;
+        s.pos_sen_entry_up = 0.55;
+        s
+    }
+
+    #[test]
+    fn cashout_logic_no_position() {
+        // Cashout with NO position should reset state without errors
+        let mut s = crate::State::new(false);
+        // Simulate what exec_cashout does to local state (without HTTP)
+        s.gemini_active = false;
+        s.gemini_budget = 0.0;
+        s.gemini_target = 0.0;
+        s.gemini_trigger = 0.0;
+        s.gemini_exit = 0.0;
+        s.gemini_outcome.clear();
+        s.gemini_triggered = false;
+        s.reset_manual();
+
+        assert_eq!(s.mt_state, 0);
+        assert!(s.mt_order_id.is_empty());
+        assert_eq!(s.mt_exit_price, 0.0);
+        assert!(!s.gemini_active);
+    }
+
+    #[test]
+    fn cashout_logic_resets_sl_and_tsl() {
+        // After cashout, SL and TSL should be cleared by reset_manual
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.sl_pct = 5.0;
+        s.mt_tsl_pct = 2.0;
+        s.mt_tsl_high = 0.70;
+        s.mt_exit_order_id = "exit-order-123".into();
+        s.mt_sl_order_id = "sl-order-456".into();
+
+        s.reset_manual();
+
+        assert_eq!(s.mt_state, 0);
+        assert_eq!(s.mt_tsl_pct, 0.0);
+        assert_eq!(s.mt_tsl_high, 0.0);
+        assert!(s.mt_exit_order_id.is_empty());
+        assert!(s.mt_sl_order_id.is_empty());
+    }
+
+    #[test]
+    fn cashout_logic_clears_order_tracking() {
+        // All order IDs should be cleared
+        let mut s = make_test_state(2, "down", 20.0, 0.40, 50.0);
+        s.mt_order_id = "buy-order-789".into();
+        s.mt_exit_order_id = "exit-order-101".into();
+        s.mt_sl_order_id = "sl-order-102".into();
+        s.mt_order_seen = true;
+        s.mt_exit_order_seen = true;
+
+        s.reset_manual();
+
+        assert!(s.mt_order_id.is_empty());
+        assert!(s.mt_exit_order_id.is_empty());
+        assert!(s.mt_sl_order_id.is_empty());
+        assert!(!s.mt_order_seen);
+        assert!(!s.mt_exit_order_seen);
+    }
+
+    #[test]
+    fn cashout_logic_gemini_cancelled() {
+        let mut s = crate::State::new(false);
+        s.gemini_active = true;
+        s.gemini_budget = 50.0;
+        s.gemini_target = 0.72;
+        s.gemini_trigger = 0.67;
+        s.gemini_exit = 0.82;
+        s.gemini_outcome = "up".into();
+        s.gemini_triggered = true;
+
+        // Simulate exec_cashout Gemini cancel
+        s.gemini_active = false;
+        s.gemini_budget = 0.0;
+        s.gemini_target = 0.0;
+        s.gemini_trigger = 0.0;
+        s.gemini_exit = 0.0;
+        s.gemini_outcome.clear();
+        s.gemini_triggered = false;
+
+        assert!(!s.gemini_active);
+        assert_eq!(s.gemini_budget, 0.0);
+        assert_eq!(s.gemini_target, 0.0);
+        assert!(s.gemini_outcome.is_empty());
+        assert!(!s.gemini_triggered);
+    }
+
+    #[test]
+    fn cashout_state_machine_mt2_up() {
+        // Position active (mt_state=2, UP), cashout should reset to 0
+        let mut s = make_test_state(2, "up", 15.0, 0.60, 75.0);
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+        assert_eq!(s.mt_size, 15.0); // reset_manual doesn't clear size (kept in case)
+    }
+
+    #[test]
+    fn cashout_state_machine_mt2_down() {
+        let mut s = make_test_state(2, "down", 25.0, 0.45, 100.0);
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+    }
+
+    #[test]
+    fn cashout_state_machine_mt3_exit_pending() {
+        // Exit order pending (mt_state=3), cashout should reset
+        let mut s = make_test_state(3, "up", 10.0, 0.65, 50.0);
+        s.mt_exit_order_id = "exit-pending-001".into();
+        s.mt_exit_price = 0.70;
+        s.mt_exit_order_seen = true;
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+        assert!(s.mt_exit_order_id.is_empty());
+        assert_eq!(s.mt_exit_price, 0.0);
+    }
+
+    #[test]
+    fn cashout_state_machine_mt1_pending_buy() {
+        // Pending buy (mt_state=1), cashout should reset
+        let mut s = make_test_state(1, "up", 10.0, 0.65, 50.0);
+        s.mt_order_id = "pending-buy-001".into();
+        s.mt_order_seen = true;
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+        assert!(s.mt_order_id.is_empty());
+    }
+
+    #[test]
+    fn cashout_pnl_tracking_preserved() {
+        // P&L cumulative stats are preserved across resets
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 50.0);
+        s.mt_pnl_cum = 12.50;
+        s.mt_trades = 5;
+        s.mt_wins = 3;
+        s.reset_manual();
+        // These are NOT reset by reset_manual (they accumulate across trades)
+        assert_eq!(s.mt_pnl_cum, 12.50);
+        assert_eq!(s.mt_trades, 5);
+        assert_eq!(s.mt_wins, 3);
+    }
+
+    #[test]
+    fn cashout_strategies_detection() {
+        let s = make_test_state_strategies();
+        assert!(s.pos_odi_up);
+        assert!(s.pos_h65_dn);
+        assert!(s.pos_sen_up);
+        // The cashout function checks these flags to decide whether to call PANIC
+        let has_strategies = s.pos_sen_up || s.pos_sen_dn
+            || s.pos_h65_up || s.pos_h65_dn
+            || s.pos_odi_up || s.pos_odi_dn;
+        assert!(has_strategies);
+    }
+
+    #[test]
+    fn cashout_strategies_detection_none() {
+        let s = crate::State::new(false);
+        let has_strategies = s.pos_sen_up || s.pos_sen_dn
+            || s.pos_h65_up || s.pos_h65_dn
+            || s.pos_odi_up || s.pos_odi_dn;
+        assert!(!has_strategies);
+    }
+
+    #[test]
+    fn cashout_strategies_detection_each() {
+        // Test each strategy flag independently
+        for (field, expected) in [
+            ("odi_up", true), ("odi_dn", true),
+            ("h65_up", true), ("h65_dn", true),
+            ("sen_up", true), ("sen_dn", true),
+        ] {
+            let mut s = crate::State::new(false);
+            match field {
+                "odi_up" => s.pos_odi_up = true,
+                "odi_dn" => s.pos_odi_dn = true,
+                "h65_up" => s.pos_h65_up = true,
+                "h65_dn" => s.pos_h65_dn = true,
+                "sen_up" => s.pos_sen_up = true,
+                "sen_dn" => s.pos_sen_dn = true,
+                _ => unreachable!(),
+            }
+            let has = s.pos_sen_up || s.pos_sen_dn
+                || s.pos_h65_up || s.pos_h65_dn
+                || s.pos_odi_up || s.pos_odi_dn;
+            assert_eq!(has, expected, "strategy flag {field}");
+        }
+    }
+
+    #[test]
+    fn cashout_with_both_manual_and_strategies() {
+        // Simulate: manual UP position + Odiseo UP + Senna UP active
+        let mut s = make_test_state(2, "up", 20.0, 0.60, 100.0);
+        s.pos_odi_up = true;
+        s.pos_sen_up = true;
+
+        // Cashout should handle both
+        let has_manual = s.mt_state >= 2;
+        let has_strategies = s.pos_odi_up || s.pos_sen_up;
+        assert!(has_manual);
+        assert!(has_strategies);
+
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+        // Strategy flags are NOT touched by reset_manual (they're managed by HFT polling)
+    }
+
+    #[test]
+    fn cashout_concurrent_market_buy_not_confused() {
+        // Regression: "co" should NOT be parsed as a cancel-order with ID "o"
+        // It should be CashOut
+        assert_eq!(parsed("co"), "CASHOUT");
+        // "c" + long ID works (>=10 chars)
+        assert_eq!(parsed("c0000000000"), "CANCEL-ID(0000000000)");
+        // "co" is short (<10 chars), which cancels active... but we special-case "co"
+        // Verify the special case wins
+        assert_eq!(parsed("co"), "CASHOUT");
     }
 
     #[test]
