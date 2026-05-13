@@ -317,7 +317,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 
     // ── S3: BTC Δ vs SESSION OPEN (Binance) ──
-    // Reglas: [0,3] min → amarillo | (3,14] min → verde si >+25, amarillo [-25,+25], rojo si <-25
+    // Reglas: [0,3] min → amarillo | (3,14] min → verde si >+50, amarillo [-50,+50], rojo si <-50
     let btc_ref = if s.btc_open > 0.0 { s.btc_open }
         else if s.session_open_btc > 0.0 { s.session_open_btc }
         else { s.btc };
@@ -331,9 +331,9 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let (s3_bg, s3_fg, s3_border) = if elapsed_min <= 3.0 {
         (Color::Yellow, Color::Black, Color::Yellow)
     } else {
-        if delta > 25.0 {
+        if delta > 50.0 {
             (Color::Green, Color::Black, Color::Green)
-        } else if delta >= -25.0 {
+        } else if delta >= -50.0 {
             (Color::Yellow, Color::Black, Color::Yellow)
         } else {
             (Color::Red, Color::Black, Color::Red)
