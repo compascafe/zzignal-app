@@ -155,6 +155,10 @@ struct State {
     pub clob_up_30s: f64,   // UP price ~30s ago (or earliest sample)
     pub clob_dn_30s: f64,   // DN price ~30s ago
     pub btc_price_30s: f64, // BTC price ~30s ago
+    // Depth absorption tracking
+    pub prev_bid_up: f64, pub prev_ask_up: f64,
+    pub prev_bid_dn: f64, pub prev_ask_dn: f64,
+    pub abs_up: f64, pub abs_dn: f64,  // net absorption %
     pub last_btc_vel: f64,
 
     // Gemini
@@ -273,6 +277,9 @@ impl State {
             clob_up_30s: 0.0,
             clob_dn_30s: 0.0,
             btc_price_30s: 0.0,
+            prev_bid_up: 0.0, prev_ask_up: 0.0,
+            prev_bid_dn: 0.0, prev_ask_dn: 0.0,
+            abs_up: 0.0, abs_dn: 0.0,
             last_btc_vel: 0.0,
             gemini_active: false,
             gemini_budget: 0.0,
@@ -750,6 +757,21 @@ async fn main() -> io::Result<()> {
                     .find(|(_, t)| *t <= cutoff_30s)
                     .or_else(|| s.btc_history.front())
                     .map(|(p,_)| *p).unwrap_or(data.btc_price);
+                // Depth absorption: net bid - ask size change at best levels
+                let best_bid_up = data.depth_up_bids.first().map(|(_,s)| *s).unwrap_or(0.0);
+                let best_ask_up = data.depth_up_asks.first().map(|(_,s)| *s).unwrap_or(0.0);
+                let best_bid_dn = data.depth_dn_bids.first().map(|(_,s)| *s).unwrap_or(0.0);
+                let best_ask_dn = data.depth_dn_asks.first().map(|(_,s)| *s).unwrap_or(0.0);
+                if s.prev_bid_up > 0.0 {
+                    let b_up = (best_bid_up / s.prev_bid_up - 1.0) * 100.0;
+                    let a_up = (best_ask_up / s.prev_ask_up - 1.0) * 100.0;
+                    s.abs_up = b_up - a_up;  // + = bids growing vs asks = bullish
+                    let b_dn = (best_bid_dn / s.prev_bid_dn - 1.0) * 100.0;
+                    let a_dn = (best_ask_dn / s.prev_ask_dn - 1.0) * 100.0;
+                    s.abs_dn = b_dn - a_dn;
+                }
+                s.prev_bid_up = best_bid_up; s.prev_ask_up = best_ask_up;
+                s.prev_bid_dn = best_bid_dn; s.prev_ask_dn = best_ask_dn;
                 commands::update_trailing_stop(&mut s).await;
                 commands::check_alerts(&mut s);
             }

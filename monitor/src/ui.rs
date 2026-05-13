@@ -247,11 +247,11 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 }
 
-// ─── INDICATORS — 4 blank cards ───────────────────────────────
+// ─── INDICATORS — 6 cards ────────────────────────────────────
 
 fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let cols = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,4); 4]).split(area);
+        .constraints([Constraint::Ratio(1,6); 6]).split(area);
     let b = Modifier::BOLD;
 
     // ── Aligned signal ──
@@ -272,15 +272,15 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let aligned = (clob_up == btc_up) && clob_moved && btc_d.abs() > 0.01;
     let pulse_on = aligned && (s.pulse_tick % 12) < 8; // blink: 8/12 on, 4/12 off
 
-    // ── S1: CLOB MOM (session + 30s) ──
+    // ── S1: CLOB MOM (aligned to BTC direction) ──
     let s1_bg = if pulse_on {
-        if clob_up { Color::Green } else { Color::Red }
+        if btc_up { Color::Green } else { Color::Red }
     } else if aligned {
         Color::Rgb(15, 25, 20)
     } else {
         Color::Reset
     };
-    let s1_border = if aligned { if clob_up { Color::Green } else { Color::Red } } else { Color::Rgb(20, 30, 45) };
+    let s1_border = if aligned { if btc_up { Color::Green } else { Color::Red } } else { Color::Rgb(20, 30, 45) };
     let s1_fg = if aligned { Color::Black } else { Color::White };
     let clob_dir = if up_d.abs() > dn_d.abs() {
         if clob_up { "▲UP" } else { "▼UP" }
@@ -419,6 +419,43 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
                 Style::default().fg(if vol_ses > 200.0 { Color::Green } else if vol_ses > 50.0 { Color::Cyan } else { Color::DarkGray }))),
         ]).block(Block::default().borders(Borders::ALL).title("S4 VEL+VOL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[3]);
+
+    // ── S5: ORDER BOOK IMBALANCE (B/A ratio) ──
+    let bid_v = s.hft.bid_vol;
+    let ask_v = s.hft.ask_vol;
+    let imb = if ask_v > 0.0 { bid_v / ask_v } else { 1.0 };
+    let (imb_bg, imb_fg, imb_border, imb_label) = if imb > 1.2 {
+        (Color::Rgb(10, 40, 15), Color::Green, Color::Green, "▲ UP")
+    } else if imb < 0.8 {
+        (Color::Rgb(40, 10, 10), Color::Red, Color::Red, "▼ DN")
+    } else {
+        (Color::Reset, Color::Yellow, Color::Rgb(20, 30, 45), "—")
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("IMBALANCE", Style::default().fg(imb_fg).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("B/A {imb:.2}x"), Style::default().fg(Color::White).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("{imb_label} {:.0}/{:.0}", bid_v, ask_v),
+                Style::default().fg(imb_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("S5 IMB")
+            .border_style(Style::default().fg(imb_border))
+            .style(Style::default().bg(imb_bg))),
+        cols[4]);
+
+    // ── S6: DEPTH ABSORPTION (bid/ask size delta %) ──
+    let abs_up_c = if s.abs_up > 5.0 { Color::Green } else if s.abs_up < -5.0 { Color::Red } else { Color::Yellow };
+    let abs_dn_c = if s.abs_dn > 5.0 { Color::Green } else if s.abs_dn < -5.0 { Color::Red } else { Color::Yellow };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("ABSORPTION", Style::default().fg(Color::Cyan).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("UP {:+.0}%", s.abs_up), Style::default().fg(abs_up_c).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("DN {:+.0}%", s.abs_dn), Style::default().fg(abs_dn_c).add_modifier(b))),
+        ]).block(Block::default().borders(Borders::ALL).title("S6 ABS").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
+        cols[5]);
 }
 
 // ─── MANUAL TRADING STATUS BAR ────────────────────────────────────
