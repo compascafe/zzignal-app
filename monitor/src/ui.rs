@@ -408,7 +408,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(format!("{vel_dir} "), Style::default().fg(vel_color).add_modifier(b)),
-                Span::styled(format!("${vel:+.1}/s  "), Style::default().fg(vel_color)),
+                Span::styled(format!("${vel:+.2}/s  "), Style::default().fg(vel_color)),
                 Span::styled(format!("{acel_dir} ${acel:+.2}/s²"), Style::default().fg(Color::Magenta)),
             ]),
             Line::from(Span::styled(
@@ -452,15 +452,15 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         cols[4]);
 
     // ── S6: DEPTH ABSORPTION (bid/ask size delta %) ──
-    let abs_up_c = if s.abs_up > 5.0 { Color::Green } else if s.abs_up < -5.0 { Color::Red } else { Color::Yellow };
-    let abs_dn_c = if s.abs_dn > 5.0 { Color::Green } else if s.abs_dn < -5.0 { Color::Red } else { Color::Yellow };
+    let abs_up_c = if s.abs_up > 2.0 { Color::Green } else if s.abs_up < -2.0 { Color::Red } else { Color::Yellow };
+    let abs_dn_c = if s.abs_dn > 2.0 { Color::Green } else if s.abs_dn < -2.0 { Color::Red } else { Color::Yellow };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled("ABSORPTION", Style::default().fg(Color::Cyan).add_modifier(b))),
             Line::from(Span::styled(
-                format!("UP {:+.0}%", s.abs_up), Style::default().fg(abs_up_c).add_modifier(b))),
+                format!("UP {:+.1}%", s.abs_up), Style::default().fg(abs_up_c).add_modifier(b))),
             Line::from(Span::styled(
-                format!("DN {:+.0}%", s.abs_dn), Style::default().fg(abs_dn_c).add_modifier(b))),
+                format!("DN {:+.1}%", s.abs_dn), Style::default().fg(abs_dn_c).add_modifier(b))),
         ]).block(Block::default().borders(Borders::ALL).title("S6 ABS").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[5]);
 }
