@@ -143,6 +143,8 @@ struct State {
     pub show_man: bool,
     pub pulse_tick: u64,
     pub btc_vol_session_start: f64,
+    pub btc_vol_history: VecDeque<(std::time::Instant, f64)>,
+    pub btc_vol_1m: f64,  // BTC volume in last 60s
     pub btc_history: VecDeque<(f64, std::time::Instant)>,
     pub btc_velocity: f64,
     pub btc_acceleration: f64,
@@ -254,6 +256,8 @@ impl State {
             show_man: false,
             pulse_tick: 0,
             btc_vol_session_start: 0.0,
+            btc_vol_history: VecDeque::with_capacity(150),
+            btc_vol_1m: 0.0,
             btc_history: VecDeque::with_capacity(10),
             btc_velocity: 0.0,
             btc_acceleration: 0.0,
@@ -704,6 +708,15 @@ async fn main() -> io::Result<()> {
                 if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
                 s.last_api_ok = Instant::now();
                 apply_hft_state(&data, &mut s);
+                // Track 24h volume for 1-min delta
+                s.btc_vol_history.push_back((Instant::now(), data.btc_volume_24h));
+                if s.btc_vol_history.len() > 150 { s.btc_vol_history.pop_front(); }
+                let cutoff = Instant::now() - Duration::from_secs(60);
+                if let Some((_, v_old)) = s.btc_vol_history.iter().find(|(t,_)| *t <= cutoff)
+                    .or_else(|| s.btc_vol_history.front())
+                {
+                    s.btc_vol_1m = (data.btc_volume_24h - v_old).max(0.0);
+                }
                 commands::update_trailing_stop(&mut s).await;
                 commands::check_alerts(&mut s);
             }

@@ -316,38 +316,73 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
             .style(Style::default().bg(s2_bg))),
         cols[1]);
 
-    // ── S3: VELOCIDAD + ACELERACION (computed locally) ──
+    // ── S3: BTC Δ vs SESSION OPEN (Binance) ──
+    // Reglas: [0,3] min → amarillo | (3,14] min → verde si >+25, amarillo [-25,+25], rojo si <-25
+    let btc_ref = if s.btc_open > 0.0 { s.btc_open }
+        else if s.session_open_btc > 0.0 { s.session_open_btc }
+        else { s.btc };
+    let delta = s.btc - btc_ref;
+    let delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
+
+    let total_secs = 900; // 15-min session
+    let elapsed = if s.hft.secs_left >= 0 { (total_secs - s.hft.secs_left).max(0) } else { 0 };
+    let elapsed_min = elapsed as f64 / 60.0;
+
+    let (s3_bg, s3_fg, s3_border) = if elapsed_min <= 3.0 {
+        (Color::Yellow, Color::Black, Color::Yellow)
+    } else {
+        if delta > 25.0 {
+            (Color::Green, Color::Black, Color::Green)
+        } else if delta >= -25.0 {
+            (Color::Yellow, Color::Black, Color::Yellow)
+        } else {
+            (Color::Red, Color::Black, Color::Red)
+        }
+    };
+
+    let s3_title = if elapsed_min <= 3.0 {
+        format!("S3 BTC Δ  [{:.0}m]", elapsed_min)
+    } else {
+        format!("S3 BTC Δ")
+    };
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("BTC Δ OPEN", Style::default().fg(s3_fg).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("${:+.0}  {:+.1}%", delta, delta_pct),
+                Style::default().fg(s3_fg).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("min {:.0}/15  ref ${:.0}", elapsed_min, btc_ref),
+                Style::default().fg(s3_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title(s3_title)
+            .border_style(Style::default().fg(s3_border))
+            .style(Style::default().bg(s3_bg))),
+        cols[2]);
+
+    // ── S4: VELOCIDAD + VOLUMEN BTC (Binance) ──
     let vel = s.btc_velocity;
     let acel = s.btc_acceleration;
     let vel_dir = if vel >= 0.0 { "▲" } else { "▼" };
     let acel_dir = if acel >= 0.0 { "▲" } else { "▼" };
-    let vel_c = if vel.abs() > 0.5 { Color::Yellow } else { Color::DarkGray };
-    let acel_c = if acel.abs() > 0.1 { Color::Cyan } else { Color::DarkGray };
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled("VEL / ACEL", Style::default().fg(Color::Magenta).add_modifier(b))),
-            Line::from(Span::styled(
-                format!("{vel_dir} ${vel:+.1}/s"), Style::default().fg(vel_c))),
-            Line::from(Span::styled(
-                format!("{acel_dir} ${acel:+.2}/s²"), Style::default().fg(acel_c))),
-        ]).block(Block::default().borders(Borders::ALL).title("S3 VEL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
-        cols[2]);
 
-    // ── S4: VOLUMEN SESION (accumulated CLOB) ──
-    let vol_ses = s.session_vol_cum;
-    let bid_v = s.hft.bid_vol;
-    let ask_v = s.hft.ask_vol;
-    let ratio = if ask_v > 0.0 { bid_v / ask_v } else { 1.0 };
-    let r_c = if ratio > 1.5 { Color::Green } else if ratio < 0.67 { Color::Red } else { Color::DarkGray };
+    let vol_1m = s.btc_vol_1m;
+    let vol_ses = if s.hft.btc_volume_24h > s.btc_vol_session_start {
+        s.hft.btc_volume_24h - s.btc_vol_session_start
+    } else { 0.0 };
+
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("VOL SESION", Style::default().fg(Color::Cyan).add_modifier(b))),
             Line::from(Span::styled(
-                format!("${:.0} ses", vol_ses), Style::default().fg(Color::White))),
+                format!("{vel_dir} ${vel:+.1}/s  {acel_dir} ${acel:+.2}/s²"),
+                Style::default().fg(Color::Magenta).add_modifier(b))),
             Line::from(Span::styled(
-                format!("B/A {ratio:.1}x  {:.0}/{:.0}", bid_v, ask_v),
-                Style::default().fg(r_c))),
-        ]).block(Block::default().borders(Borders::ALL).title("S4 VOL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
+                format!("1m {vol_1m:.0} BTC"),
+                Style::default().fg(if vol_1m > 10.0 { Color::Yellow } else { Color::DarkGray }))),
+            Line::from(Span::styled(
+                format!("ses {vol_ses:.0} BTC"),
+                Style::default().fg(if vol_ses > 50.0 { Color::Cyan } else { Color::DarkGray }))),
+        ]).block(Block::default().borders(Borders::ALL).title("S4 VEL+VOL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[3]);
 }
 
