@@ -263,10 +263,16 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let btc_o = if s.btc_open > 0.0 { s.btc_open } else { s.session_open_btc };
     let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
     let btc_up = btc_d >= 0.0;
-    let aligned = clob_up == btc_up && up_d.abs() > 0.05 && btc_d.abs() > 0.01;
+    // 30-second momentum
+    let up_30s = if s.clob_up_30s > 0.0 { (s.hft.clob_trade_up / s.clob_up_30s - 1.0) * 100.0 } else { 0.0 };
+    let dn_30s = if s.clob_dn_30s > 0.0 { (s.hft.clob_trade_dn / s.clob_dn_30s - 1.0) * 100.0 } else { 0.0 };
+    let btc_30s = if s.btc_price_30s > 0.0 { (s.btc / s.btc_price_30s - 1.0) * 100.0 } else { 0.0 };
+    // Updated aligned: uses max(|up_d|,|dn_d|) instead of only up_d
+    let clob_moved = up_d.abs().max(dn_d.abs()) > 0.05;
+    let aligned = (clob_up == btc_up) && clob_moved && btc_d.abs() > 0.01;
     let pulse_on = aligned && (s.pulse_tick % 12) < 8; // blink: 8/12 on, 4/12 off
 
-    // ── S1: CLOB MOM ──
+    // ── S1: CLOB MOM (session + 30s) ──
     let s1_bg = if pulse_on {
         if clob_up { Color::Green } else { Color::Red }
     } else if aligned {
@@ -275,25 +281,33 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         Color::Reset
     };
     let s1_border = if aligned { if clob_up { Color::Green } else { Color::Red } } else { Color::Rgb(20, 30, 45) };
+    let s1_fg = if aligned { Color::Black } else { Color::White };
     let clob_dir = if up_d.abs() > dn_d.abs() {
-        if clob_up { "▲ UP" } else { "▼ UP" }
+        if clob_up { "▲UP" } else { "▼UP" }
     } else {
-        if dn_d >= 0.0 { "▲ DN" } else { "▼ DN" }
+        if dn_d >= 0.0 { "▲DN" } else { "▼DN" }
     };
+    let up_30s_c = if up_30s > 0.0 { Color::Green } else if up_30s < 0.0 { Color::Red } else { Color::DarkGray };
+    let dn_30s_c = if dn_30s > 0.0 { Color::Green } else if dn_30s < 0.0 { Color::Red } else { Color::DarkGray };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled("CLOB MOM", Style::default().fg(if aligned { Color::White } else { Color::Cyan }).add_modifier(b))),
-            Line::from(Span::styled(
-                format!("UP {up_d:+.1}%  DN {dn_d:+.1}%"), Style::default().fg(if aligned { Color::Black } else { Color::White }))),
-            Line::from(Span::styled(
-                format!("{clob_dir}  {}", if aligned {"✓ BTC ✓"}else{"—"}),
-                Style::default().fg(if aligned { Color::Black } else { Color::DarkGray }).add_modifier(b))),
+            Line::from(vec![
+                Span::styled(format!("{clob_dir} "), Style::default().fg(s1_border).add_modifier(b)),
+                Span::styled(format!("ses UP{up_d:+.1}/DN{dn_d:+.1}%"), Style::default().fg(s1_fg)),
+            ]),
+            Line::from(vec![
+                Span::styled("30s ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("UP{up_30s:+.1}"), Style::default().fg(up_30s_c)),
+                Span::styled(format!("/DN{dn_30s:+.1}% "), Style::default().fg(dn_30s_c)),
+                Span::styled(if aligned {"✓ BTC ✓"}else{"—"}, Style::default().fg(if aligned { Color::Black } else { Color::DarkGray }).add_modifier(b)),
+            ]),
         ]).block(Block::default().borders(Borders::ALL).title("S1 CLOB")
             .border_style(Style::default().fg(s1_border))
             .style(Style::default().bg(s1_bg))),
         cols[0]);
 
-    // ── S2: BTC MOM ──
+    // ── S2: BTC MOM (session + 30s + CLOB lead) ──
     let s2_bg = if pulse_on {
         if btc_up { Color::Green } else { Color::Red }
     } else if aligned {
@@ -302,15 +316,33 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         Color::Reset
     };
     let s2_border = if aligned { if btc_up { Color::Green } else { Color::Red } } else { Color::Rgb(20, 30, 45) };
-    let btc_dir = if btc_d >= 0.0 { "▲ BULL" } else { "▼ BEAR" };
+    let s2_fg = if aligned { Color::Black } else { Color::White };
+    let btc_dir = if btc_d >= 0.0 { "▲BULL" } else { "▼BEAR" };
+    let btc_30s_c = if btc_30s > 0.0 { Color::Green } else if btc_30s < 0.0 { Color::Red } else { Color::DarkGray };
+    // BTC→CLOB lead: how much CLOB lags behind BTC
+    let clob_max_d = up_d.abs().max(dn_d.abs());
+    let btc_lead = if btc_d.abs() > clob_max_d && btc_d.abs() > 0.05 {
+        let lead = btc_d.abs() - clob_max_d;
+        (lead > 0.0, lead)
+    } else {
+        (false, 0.0)
+    };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled("BTC MOM", Style::default().fg(if aligned { Color::White } else { Color::Yellow }).add_modifier(b))),
-            Line::from(Span::styled(
-                format!("${:.0}  {btc_d:+.1}%", s.btc), Style::default().fg(if aligned { Color::Black } else { Color::White }))),
-            Line::from(Span::styled(
-                format!("{btc_dir}  {}", if aligned {"✓ CLOB ✓"}else{"—"}),
-                Style::default().fg(if aligned { Color::Black } else { Color::DarkGray }).add_modifier(b))),
+            Line::from(vec![
+                Span::styled(format!("${:.0} ", s.btc), Style::default().fg(s2_fg)),
+                Span::styled(format!("ses {btc_d:+.1}%"), Style::default().fg(if btc_up { Color::Green } else { Color::Red })),
+            ]),
+            Line::from(vec![
+                Span::styled(format!("{btc_dir} 30s"), Style::default().fg(s2_fg).add_modifier(b)),
+                Span::styled(format!("{btc_30s:+.1}%"), Style::default().fg(btc_30s_c)),
+                if btc_lead.0 {
+                    Span::styled(format!(" →CLOB+{:.1}%", btc_lead.1), Style::default().fg(Color::Cyan).add_modifier(b))
+                } else {
+                    Span::styled("", Style::default())
+                },
+            ]),
         ]).block(Block::default().borders(Borders::ALL).title("S2 BTC")
             .border_style(Style::default().fg(s2_border))
             .style(Style::default().bg(s2_bg))),
@@ -365,6 +397,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let acel = s.btc_acceleration;
     let vel_dir = if vel >= 0.0 { "▲" } else { "▼" };
     let acel_dir = if acel >= 0.0 { "▲" } else { "▼" };
+    let vel_color = if vel > 0.5 { Color::Green } else if vel < -0.5 { Color::Red } else { Color::Yellow };
 
     let vol_1m = s.btc_vol_1m;
     let vol_ses = if s.hft.btc_volume_24h > s.btc_vol_session_start {
@@ -373,15 +406,17 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
 
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled(
-                format!("{vel_dir} ${vel:+.1}/s  {acel_dir} ${acel:+.2}/s²"),
-                Style::default().fg(Color::Magenta).add_modifier(b))),
+            Line::from(vec![
+                Span::styled(format!("{vel_dir} "), Style::default().fg(vel_color).add_modifier(b)),
+                Span::styled(format!("${vel:+.1}/s  "), Style::default().fg(vel_color)),
+                Span::styled(format!("{acel_dir} ${acel:+.2}/s²"), Style::default().fg(Color::Magenta)),
+            ]),
             Line::from(Span::styled(
                 format!("1m {vol_1m:.0} BTC"),
-                Style::default().fg(if vol_1m > 10.0 { Color::Yellow } else { Color::DarkGray }))),
+                Style::default().fg(if vol_1m > 25.0 { Color::Green } else if vol_1m > 10.0 { Color::Yellow } else { Color::DarkGray }))),
             Line::from(Span::styled(
                 format!("ses {vol_ses:.0} BTC"),
-                Style::default().fg(if vol_ses > 50.0 { Color::Cyan } else { Color::DarkGray }))),
+                Style::default().fg(if vol_ses > 200.0 { Color::Green } else if vol_ses > 50.0 { Color::Cyan } else { Color::DarkGray }))),
         ]).block(Block::default().borders(Borders::ALL).title("S4 VEL+VOL").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[3]);
 }

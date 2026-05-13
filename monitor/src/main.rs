@@ -149,6 +149,12 @@ struct State {
     pub btc_velocity: f64,
     pub btc_acceleration: f64,
     pub session_vol_cum: f64,
+    // 30s CLOB momentum tracking
+    pub clob_up_history: VecDeque<(std::time::Instant, f64)>,
+    pub clob_dn_history: VecDeque<(std::time::Instant, f64)>,
+    pub clob_up_30s: f64,   // UP price ~30s ago (or earliest sample)
+    pub clob_dn_30s: f64,   // DN price ~30s ago
+    pub btc_price_30s: f64, // BTC price ~30s ago
     pub last_btc_vel: f64,
 
     // Gemini
@@ -262,6 +268,11 @@ impl State {
             btc_velocity: 0.0,
             btc_acceleration: 0.0,
             session_vol_cum: 0.0,
+            clob_up_history: VecDeque::with_capacity(100),
+            clob_dn_history: VecDeque::with_capacity(100),
+            clob_up_30s: 0.0,
+            clob_dn_30s: 0.0,
+            btc_price_30s: 0.0,
             last_btc_vel: 0.0,
             gemini_active: false,
             gemini_budget: 0.0,
@@ -717,6 +728,28 @@ async fn main() -> io::Result<()> {
                 {
                     s.btc_vol_1m = (data.btc_volume_24h - v_old).max(0.0);
                 }
+                // Track CLOB prices for 30s momentum
+                if data.clob_trade_up > 0.0 {
+                    s.clob_up_history.push_back((Instant::now(), data.clob_trade_up));
+                    if s.clob_up_history.len() > 100 { s.clob_up_history.pop_front(); }
+                }
+                if data.clob_trade_dn > 0.0 {
+                    s.clob_dn_history.push_back((Instant::now(), data.clob_trade_dn));
+                    if s.clob_dn_history.len() > 100 { s.clob_dn_history.pop_front(); }
+                }
+                let cutoff_30s = Instant::now() - Duration::from_secs(30);
+                s.clob_up_30s = s.clob_up_history.iter()
+                    .find(|(t,_)| *t <= cutoff_30s)
+                    .or_else(|| s.clob_up_history.front())
+                    .map(|(_,p)| *p).unwrap_or(data.clob_trade_up);
+                s.clob_dn_30s = s.clob_dn_history.iter()
+                    .find(|(t,_)| *t <= cutoff_30s)
+                    .or_else(|| s.clob_dn_history.front())
+                    .map(|(_,p)| *p).unwrap_or(data.clob_trade_dn);
+                s.btc_price_30s = s.btc_history.iter()
+                    .find(|(_, t)| *t <= cutoff_30s)
+                    .or_else(|| s.btc_history.front())
+                    .map(|(p,_)| *p).unwrap_or(data.btc_price);
                 commands::update_trailing_stop(&mut s).await;
                 commands::check_alerts(&mut s);
             }
