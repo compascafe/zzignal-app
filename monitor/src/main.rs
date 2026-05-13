@@ -669,7 +669,7 @@ async fn main() -> io::Result<()> {
             s.last_poll_btc = Instant::now();
             if let Some(data) = http_get::<BtcInfo>("/api/btc").await {
                 s.btc = data.price;
-                if s.btc_open == 0.0 { s.btc_open = data.open; }
+                if data.open > 0.0 { s.btc_open = data.open; } // backend BTC open from Gamma/Pyth (session-level)
                 // Track BTC price history for velocity/acceleration
                 s.btc_history.push_back((data.price, Instant::now()));
                 if s.btc_history.len() > 5 { s.btc_history.pop_front(); }

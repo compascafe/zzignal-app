@@ -1115,12 +1115,8 @@ async fn exec_cashout(s: &mut State) {
     s.gemini_outcome.clear();
     s.gemini_triggered = false;
 
-    // 2) Cancel ALL pending orders FIRST (SL, exit, pending buys)
-    //    This must happen BEFORE market sell to avoid conflicts
-    cancel_all_manual(s).await;
-    let _ = http_delete("/api/orders").await;
-
-    // 3) Market sell manual position (non-blocking: fires regardless)
+    // 2) Market sell manual position FIRST (primary goal)
+    //    Protective orders (SL/exit) stay alive until we know sell succeeded
     let mut mkt_ok = true;
     let mut mkt_err = String::new();
     if s.mt_state >= 2 {
@@ -1148,7 +1144,17 @@ async fn exec_cashout(s: &mut State) {
         }
     }
 
-    // 4) PANIC strategies (ALWAYS fires, regardless of market sell result)
+    // 3) Only cancel pending/protective orders if market sell succeeded
+    //    If market sell failed, SL/exit orders protect the position
+    if mkt_ok {
+        cancel_all_manual(s).await;
+        match http_delete("/api/orders").await {
+            Ok(()) => s.add_log("  ✓ Órdenes canceladas".to_string(), Color::Green),
+            Err(e) => s.add_log(format!("⚠ Cancel ALL orders FAIL: {}", e), Color::Red),
+        }
+    }
+
+    // 4) PANIC strategies (ALWAYS fires)
     if s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn {
         s.add_log("▶ Liquidando estrategias...".to_string(), Color::Yellow);
         match http_post("/api/panic", "{}").await {
@@ -1157,16 +1163,15 @@ async fn exec_cashout(s: &mut State) {
         }
     }
 
-    // 5) ALWAYS reset manual state — no zombie positions
-    s.reset_manual();
-
-    // 6) Clear final report
+    // 5) Reset state only if market sell succeeded
     if mkt_ok {
+        s.reset_manual();
         s.add_log("✅ CASH OUT completado — todo en USD".to_string(), Color::Green);
         s.add_trade_log("✅ Cash out completado".to_string(), Color::Green);
     } else {
-        s.add_log(format!("⚠ CASH OUT parcial: reintenta /lm ({})", mkt_err), Color::Red);
-        s.add_trade_log("⚠ Cash out parcial — usa /lm para reintentar".to_string(), Color::Red);
+        // Keep position tracking alive — user can retry with /lm or /x
+        s.add_log(format!("⚠ CASH OUT parcial: reintenta /lm  ({})", mkt_err), Color::Red);
+        s.add_trade_log(format!("⚠ Cash out parcial — usa /lm o /x ({})", mkt_err), Color::Red);
     }
 }
 

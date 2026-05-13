@@ -133,8 +133,10 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
     let big = Modifier::BOLD;
 
     // ── BTC CARD: Price to beat + Current + Delta ──
-    let btc_ref = if s.session_open_btc > 0.0 { s.session_open_btc }
-        else if s.btc_open > 0.0 { s.btc_open }
+    // btc_open from backend = real session BTC open (Gamma/Pyth)
+    // session_open_btc = fallback (live HFT BTC price at monitor session start)
+    let btc_ref = if s.btc_open > 0.0 { s.btc_open }
+        else if s.session_open_btc > 0.0 { s.session_open_btc }
         else { s.btc };
     let btc_delta = s.btc - btc_ref;
     let btc_delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
@@ -258,7 +260,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
     let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
     let clob_up = up_d >= 0.0;
-    let btc_o = s.session_open_btc;
+    let btc_o = if s.btc_open > 0.0 { s.btc_open } else { s.session_open_btc };
     let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
     let btc_up = btc_d >= 0.0;
     let aligned = clob_up == btc_up && up_d.abs() > 0.05 && btc_d.abs() > 0.01;
