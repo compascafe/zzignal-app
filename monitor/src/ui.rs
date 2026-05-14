@@ -207,22 +207,9 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
     let btc_up = btc_delta >= 0.0;
     let btc_c = if btc_up { BB_GREEN } else { BB_RED };
     let arrow = if btc_up { "▲" } else { "▼" };
-
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![Span::styled(format!("${:.0}", s.btc),
-                Style::default().fg(BB_WHITE).add_modifier(big))]),
-            Line::from(Span::styled(format!("abrio ${:.0}", btc_ref),
-                Style::default().fg(BB_GRAY))),
-            Line::from(Span::styled(s.btc_provider.to_uppercase(),
-                Style::default().fg(BB_DIM))),
-        ]).block(Block::default().borders(Borders::ALL).title("BTC")
-            .border_style(Style::default().fg(btc_c))
-            .style(Style::default().bg(BB_CARD))),
-        cols[0]);
-
     let delta_pulse = s.pulse_tick % 10 < 7;
     let delta_fg = if delta_pulse { BB_WHITE } else { btc_c };
+
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -350,7 +337,10 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let dn_30s_c = if dn_30s > 0.0 { BB_GREEN } else if dn_30s < 0.0 { BB_RED } else { BB_DIM };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("CLOB MOM", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s1_border_alert).add_modifier(b)),
+                Span::styled("CLOB MOM", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(vec![
                 Span::styled(format!("{clob_dir} "), Style::default().fg(s1_border).add_modifier(b)),
                 Span::styled(format!("ses UP{up_d:+.1}/DN{dn_d:+.1}%"), Style::default().fg(BB_WHITE)),
@@ -380,7 +370,10 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     } else { (false, 0.0) };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("BTC MOM", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s2_border_alert).add_modifier(b)),
+                Span::styled("BTC MOM", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(vec![
                 Span::styled(format!("${:.0} ", s.btc), Style::default().fg(BB_WHITE)),
                 Span::styled(format!("ses {btc_d:+.1}%"), Style::default().fg(if btc_up { BB_GREEN } else { BB_RED })),
@@ -417,7 +410,10 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("BTC Δ OPEN", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s3_border).add_modifier(b)),
+                Span::styled("BTC Δ OPEN", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("${:+.0}  {:+.1}%", delta, delta_pct),
                 Style::default().fg(s3_fg).add_modifier(b))),
             Line::from(Span::styled(format!("min {:.0}/15  ref ${:.0}", elapsed_min, btc_ref),
@@ -437,6 +433,10 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let vol_ses = s.hft.btc_vol_ses;
     f.render_widget(
         Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(vel_color).add_modifier(b)),
+                Span::styled("VEL+VOL", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(vec![
                 Span::styled(format!("{vel_dir} "), Style::default().fg(vel_color).add_modifier(b)),
                 Span::styled(format!("${vel:+.2}/s  "), Style::default().fg(vel_color)),
@@ -470,7 +470,10 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("IMBALANCE", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(imb_border).add_modifier(b)),
+                Span::styled("IMBALANCE", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("UP {up_imb:.2}x"),
                 Style::default().fg(if up_imb>1.1{BB_GREEN}else if up_imb<0.9{BB_RED}else{BB_AMBER}).add_modifier(b))),
             Line::from(Span::styled(format!("{imb_label}  DN {dn_imb:.2}x"),
@@ -485,7 +488,10 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let abs_dn_c = if s.abs_dn > 2.0 { BB_GREEN } else if s.abs_dn < -2.0 { BB_RED } else { BB_AMBER };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("ABSORPTION", Style::default().fg(BB_CYAN).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(if s.abs_up.abs() > s.abs_dn.abs() {abs_up_c} else {abs_dn_c}).add_modifier(b)),
+                Span::styled("ABSORPTION", Style::default().fg(BB_CYAN).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("UP {:+.3}%", s.abs_up),
                 Style::default().fg(abs_up_c).add_modifier(b))),
             Line::from(Span::styled(format!("DN {:+.3}%", s.abs_dn),
@@ -514,7 +520,10 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("SPREAD", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s7_border).add_modifier(b)),
+                Span::styled("SPREAD", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("{:.4}", spread_val), Style::default().fg(BB_WHITE).add_modifier(b))),
             Line::from(Span::styled(s7_label, Style::default().fg(s7_border))),
         ]).block(Block::default().borders(Borders::ALL).title("S7 B/A")
@@ -533,7 +542,10 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("DUMP", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s8_border).add_modifier(b)),
+                Span::styled("DUMP", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("{}/3", dump), Style::default().fg(BB_WHITE).add_modifier(b))),
             Line::from(Span::styled(s8_label, Style::default().fg(s8_border))),
         ]).block(Block::default().borders(Borders::ALL).title("S8 DC")
@@ -552,7 +564,10 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("TICK", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s9_border).add_modifier(b)),
+                Span::styled("TICK", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("{}ms", gap), Style::default().fg(BB_WHITE).add_modifier(b))),
             Line::from(Span::styled(s9_label, Style::default().fg(s9_border))),
         ]).block(Block::default().borders(Borders::ALL).title("S9 MS")
@@ -571,7 +586,10 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("SPOOF+WALL", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s10_border).add_modifier(b)),
+                Span::styled("SPOOF+WALL", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("S:{} W:{}", s.hft.spoof, s.hft.ask_wall),
                 Style::default().fg(BB_WHITE).add_modifier(b))),
             Line::from(Span::styled(s10_label, Style::default().fg(s10_border))),
@@ -600,7 +618,10 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("CONC", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s11_border).add_modifier(b)),
+                Span::styled("CONC", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("max {:.0}%", conc_max*100.0),
                 Style::default().fg(BB_WHITE).add_modifier(b))),
             Line::from(Span::styled(s11_label, Style::default().fg(s11_border))),
@@ -629,7 +650,10 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     };
     f.render_widget(
         Paragraph::new(vec![
-            Line::from(Span::styled("C↔B DIV", Style::default().fg(BB_AMBER).add_modifier(b))),
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(s12_border).add_modifier(b)),
+                Span::styled("C↔B DIV", Style::default().fg(BB_AMBER).add_modifier(b)),
+            ]),
             Line::from(Span::styled(format!("C{clob_dom:+.1}% B{btc_d:+.1}%"),
                 Style::default().fg(BB_WHITE).add_modifier(b))),
             Line::from(Span::styled(s12_label, Style::default().fg(s12_border))),
