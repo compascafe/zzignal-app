@@ -207,6 +207,20 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
     let btc_up = btc_delta >= 0.0;
     let btc_c = if btc_up { BB_GREEN } else { BB_RED };
     let arrow = if btc_up { "▲" } else { "▼" };
+
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![Span::styled(format!("${:.0}", s.btc),
+                Style::default().fg(BB_WHITE).add_modifier(big))]),
+            Line::from(Span::styled(format!("abrio ${:.0}", btc_ref),
+                Style::default().fg(BB_GRAY))),
+            Line::from(Span::styled(s.btc_provider.to_uppercase(),
+                Style::default().fg(BB_DIM))),
+        ]).block(Block::default().borders(Borders::ALL).title("BTC")
+            .border_style(Style::default().fg(btc_c))
+            .style(Style::default().bg(BB_CARD))),
+        cols[0]);
+
     let delta_pulse = s.pulse_tick % 10 < 7;
     let delta_fg = if delta_pulse { BB_WHITE } else { btc_c };
 
