@@ -349,7 +349,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 
     // ── S3: BTC Δ vs SESSION OPEN (Binance) ──
-    // Reglas: [0,7]s → amarillo | (7,14]s → verde +$50, amarillo [-50,+50], rojo -$50 | (14,fin] → amarillo
+    // Reglas: [0,7]min → amarillo | (7,14]min → verde +$50, amarillo [-50,+50], rojo -$50 | (14,15]min → amarillo
     let btc_ref = if s.btc_open > 0.0 { s.btc_open }
         else if s.session_open_btc > 0.0 { s.session_open_btc }
         else { s.btc };
@@ -358,10 +358,11 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
 
     let total_secs = 900; // 15-min session
     let elapsed = if s.hft.secs_left >= 0 { (total_secs - s.hft.secs_left).max(0) } else { 0 };
+    let elapsed_min = elapsed as f64 / 60.0;
 
-    let (s3_bg, s3_fg, s3_border) = if elapsed <= 7 {
+    let (s3_bg, s3_fg, s3_border) = if elapsed_min <= 7.0 {
         (Color::Yellow, Color::Black, Color::Yellow)
-    } else if elapsed <= 14 {
+    } else if elapsed_min <= 14.0 {
         if delta > 50.0 {
             (Color::Green, Color::Black, Color::Green)
         } else if delta >= -50.0 {
@@ -373,7 +374,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         (Color::Yellow, Color::Black, Color::Yellow)
     };
 
-    let s3_title = format!("S3 BTC Δ  [{:.0}s]", elapsed);
+    let s3_title = format!("S3 BTC Δ  [{:.0}m]", elapsed_min);
 
     f.render_widget(
         Paragraph::new(vec![
@@ -382,7 +383,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
                 format!("${:+.0}  {:+.1}%", delta, delta_pct),
                 Style::default().fg(s3_fg).add_modifier(b))),
             Line::from(Span::styled(
-                format!("t{:.0}s/900  ref ${:.0}", elapsed, btc_ref),
+                format!("min {:.0}/15  ref ${:.0}", elapsed_min, btc_ref),
                 Style::default().fg(s3_fg))),
         ]).block(Block::default().borders(Borders::ALL).title(s3_title)
             .border_style(Style::default().fg(s3_border))
@@ -427,11 +428,11 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let total_bear = up_ask_v + dn_bid_v;  // asks on UP + bids on DN = bearish pressure
     let comb_imb = if total_bear > 0.0 { total_bull / total_bear } else { 1.0 };
     let (imb_bg, imb_fg, imb_border, imb_label) = if comb_imb > 1.15 {
-        (Color::Rgb(0, 70, 0), Color::Black, Color::LightGreen, "▲ UP ▲")
+        (Color::Green, Color::Black, Color::Green, "▲ UP")
     } else if comb_imb < 0.85 {
-        (Color::Rgb(80, 0, 0), Color::Black, Color::LightRed, "▼ DN ▼")
+        (Color::Red, Color::Black, Color::Red, "▼ DN")
     } else {
-        (Color::Rgb(30, 30, 45), Color::White, Color::Cyan, "— —")
+        (Color::Yellow, Color::Black, Color::Yellow, "—")
     };
     f.render_widget(
         Paragraph::new(vec![
