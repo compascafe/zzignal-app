@@ -103,10 +103,11 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
         Constraint::Length(4),     // market info
         Constraint::Length(4),     // UP/DOWN price cards
-        Constraint::Length(5),     // indicators (S1..S4)
+        Constraint::Length(5),     // indicators row 1 (S1..S6)
+        Constraint::Length(5),     // indicators row 2 (S7..S12)
         Constraint::Length(3),     // manual trading status
-        Constraint::Length(13),    // orderbook depth
-        Constraint::Min(8),        // orders + positions + trade log (expands)
+        Constraint::Length(8),     // orderbook depth
+        Constraint::Min(5),        // orders + positions + trade log
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -115,6 +116,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     draw_market_info(f, m[idx], s); idx += 1;
     draw_price_cards(f, m[idx], s); idx += 1;
     draw_indicators(f, m[idx], s); idx += 1;
+    draw_indicators_row2(f, m[idx], s); idx += 1;
     draw_manual_status(f, m[idx], s); idx += 1;
     draw_depth_panel(f, m[idx], s); idx += 1;
 
@@ -428,9 +430,9 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let total_bear = up_ask_v + dn_bid_v;  // asks on UP + bids on DN = bearish pressure
     let comb_imb = if total_bear > 0.0 { total_bull / total_bear } else { 1.0 };
     let (imb_bg, imb_fg, imb_border, imb_label) = if comb_imb > 1.15 {
-        (Color::Green, Color::Black, Color::Green, "▲ UP")
+        (Color::Green, Color::White, Color::Green, "▲ UP")
     } else if comb_imb < 0.85 {
-        (Color::Red, Color::Black, Color::Red, "▼ DN")
+        (Color::Red, Color::White, Color::Red, "▼ DN")
     } else {
         (Color::Yellow, Color::Black, Color::Yellow, "—")
     };
@@ -438,9 +440,9 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(vec![
             Line::from(Span::styled("IMBALANCE", Style::default().fg(imb_fg).add_modifier(b))),
             Line::from(Span::styled(
-                format!("UP {up_imb:.2}x"), Style::default().fg(if up_imb > 1.1 { Color::Green } else if up_imb < 0.9 { Color::Red } else { Color::Yellow }).add_modifier(b))),
+                format!("UP {up_imb:.2}x"), Style::default().fg(imb_fg).add_modifier(b))),
             Line::from(Span::styled(
-                format!("{imb_label} DN {dn_imb:.2}x"),
+                format!("{imb_label}  DN {dn_imb:.2}x"),
                 Style::default().fg(imb_fg).add_modifier(b))),
         ]).block(Block::default().borders(Borders::ALL).title("S5 IMB")
             .border_style(Style::default().fg(imb_border))
@@ -458,6 +460,157 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
             Line::from(Span::styled(
                 format!("DN {:+.3}%", s.abs_dn), Style::default().fg(abs_dn_c).add_modifier(b))),
         ]).block(Block::default().borders(Borders::ALL).title("S6 ABS").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
+        cols[5]);
+}
+
+// ─── INDICATORS — 6 cards row 2 ──────────────────────────────
+
+fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
+    let cols = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,6); 6]).split(area);
+    let b = Modifier::BOLD;
+
+    // ── S7: SPREAD ──
+    let spread_val = s.hft.spread;
+    let (s7_bg, s7_fg, s7_border, s7_label) = if spread_val < 0.003 {
+        (Color::Green, Color::Black, Color::Green, "TIGHT ▲")
+    } else if spread_val < 0.008 {
+        (Color::Yellow, Color::Black, Color::Yellow, "MED —")
+    } else {
+        (Color::Red, Color::Black, Color::Red, "WIDE ▼")
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("SPREAD", Style::default().fg(s7_fg).add_modifier(b))),
+            Line::from(Span::styled(format!("{:.4}", spread_val), Style::default().fg(s7_fg).add_modifier(b))),
+            Line::from(Span::styled(s7_label, Style::default().fg(s7_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("S7 B/A")
+            .border_style(Style::default().fg(s7_border))
+            .style(Style::default().bg(s7_bg))),
+        cols[0]);
+
+    // ── S8: DUMP SCORE ──
+    let dump = s.hft.dump_score;
+    let (s8_bg, s8_fg, s8_border, s8_label) = if dump == 0 {
+        (Color::Green, Color::Black, Color::Green, "SAFE")
+    } else if dump <= 2 {
+        (Color::Yellow, Color::Black, Color::Yellow, "WARN")
+    } else {
+        (Color::Red, Color::Black, Color::Red, "DUMP!")
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("DUMP", Style::default().fg(s8_fg).add_modifier(b))),
+            Line::from(Span::styled(format!("{}/3", dump), Style::default().fg(s8_fg).add_modifier(b))),
+            Line::from(Span::styled(s8_label, Style::default().fg(s8_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("S8 DC")
+            .border_style(Style::default().fg(s8_border))
+            .style(Style::default().bg(s8_bg))),
+        cols[1]);
+
+    // ── S9: TICK GAP ──
+    let gap = s.hft.tick_gap_ms;
+    let (s9_bg, s9_fg, s9_border, s9_label) = if gap < 500 {
+        (Color::Green, Color::Black, Color::Green, "FAST ▲")
+    } else if gap < 2000 {
+        (Color::Yellow, Color::Black, Color::Yellow, "SLOW —")
+    } else {
+        (Color::Red, Color::Black, Color::Red, "FROZEN ▼")
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("TICK", Style::default().fg(s9_fg).add_modifier(b))),
+            Line::from(Span::styled(format!("{}ms", gap), Style::default().fg(s9_fg).add_modifier(b))),
+            Line::from(Span::styled(s9_label, Style::default().fg(s9_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("S9 MS")
+            .border_style(Style::default().fg(s9_border))
+            .style(Style::default().bg(s9_bg))),
+        cols[2]);
+
+    // ── S10: SPOOF + ASK WALL ──
+    let spoof_val = s.hft.spoof;
+    let wall_val = s.hft.ask_wall;
+    let spoof_risk = spoof_val + wall_val; // 0=clean, 1=warning, 2=danger
+    let (s10_bg, s10_fg, s10_border, s10_label) = if spoof_risk == 0 {
+        (Color::Green, Color::Black, Color::Green, "CLEAN")
+    } else if spoof_risk == 1 {
+        (Color::Yellow, Color::Black, Color::Yellow, "FLAG ⚠")
+    } else {
+        (Color::Red, Color::Black, Color::Red, "TRAP!")
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("SPOOF+WALL", Style::default().fg(s10_fg).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("S:{} W:{}", spoof_val, wall_val),
+                Style::default().fg(s10_fg).add_modifier(b))),
+            Line::from(Span::styled(s10_label, Style::default().fg(s10_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("S10 SW")
+            .border_style(Style::default().fg(s10_border))
+            .style(Style::default().bg(s10_bg))),
+        cols[3]);
+
+    // ── S11: LIQUIDITY CONCENTRATION ──
+    // How much of total depth is in top 3 levels → whale walls
+    let up_total: f64 = s.hft.depth_up_bids.iter().map(|(_,s)| s).sum::<f64>()
+        + s.hft.depth_up_asks.iter().map(|(_,s)| s).sum::<f64>();
+    let up_top3: f64 = s.hft.depth_up_bids.iter().take(3).map(|(_,s)| s).sum::<f64>()
+        + s.hft.depth_up_asks.iter().take(3).map(|(_,s)| s).sum::<f64>();
+    let dn_total: f64 = s.hft.depth_dn_bids.iter().map(|(_,s)| s).sum::<f64>()
+        + s.hft.depth_dn_asks.iter().map(|(_,s)| s).sum::<f64>();
+    let dn_top3: f64 = s.hft.depth_dn_bids.iter().take(3).map(|(_,s)| s).sum::<f64>()
+        + s.hft.depth_dn_asks.iter().take(3).map(|(_,s)| s).sum::<f64>();
+    let conc_up = if up_total > 0.0 { up_top3 / up_total } else { 0.0 };
+    let conc_dn = if dn_total > 0.0 { dn_top3 / dn_total } else { 0.0 };
+    let conc_max = conc_up.max(conc_dn);
+    let (s11_bg, s11_fg, s11_border, s11_label) = if conc_max < 0.5 {
+        (Color::Green, Color::Black, Color::Green, "SPREAD ▲")
+    } else if conc_max < 0.75 {
+        (Color::Yellow, Color::Black, Color::Yellow, "WHALE? —")
+    } else {
+        (Color::Red, Color::Black, Color::Red, "WALL ▼")
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("CONC", Style::default().fg(s11_fg).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("U{:.0}% D{:.0}%", conc_up*100.0, conc_dn*100.0),
+                Style::default().fg(s11_fg).add_modifier(b))),
+            Line::from(Span::styled(s11_label, Style::default().fg(s11_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("S11 LIQ")
+            .border_style(Style::default().fg(s11_border))
+            .style(Style::default().bg(s11_bg))),
+        cols[4]);
+
+    // ── S12: CLOB-BTC DIVERGENCE ──
+    // Compare CLOB direction vs BTC direction since session start
+    let up_ref = if s.session_open_up > 0.0 { s.session_open_up } else { s.hft.clob_trade_up };
+    let dn_ref = if s.session_open_dn > 0.0 { s.session_open_dn } else { s.hft.clob_trade_dn };
+    let btc_open = if s.btc_open > 0.0 { s.btc_open } else if s.session_open_btc > 0.0 { s.session_open_btc } else { s.btc };
+    let clob_up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
+    let clob_dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
+    let btc_d = if btc_open > 0.0 { (s.btc / btc_open - 1.0) * 100.0 } else { 0.0 };
+    let clob_dom = clob_up_d.abs().max(clob_dn_d.abs());
+    let clob_dir = if clob_up_d.abs() > clob_dn_d.abs() { clob_up_d >= 0.0 } else { clob_dn_d >= 0.0 };
+    let btc_dir = btc_d >= 0.0;
+    let aligned = clob_dir == btc_dir && clob_dom > 0.1 && btc_d.abs() > 0.02;
+    let (s12_bg, s12_fg, s12_border, s12_label) = if aligned {
+        (Color::Green, Color::Black, Color::Green, "LOCKED ▲")
+    } else if clob_dom < 0.1 || btc_d.abs() < 0.02 {
+        (Color::Yellow, Color::Black, Color::Yellow, "FLAT —")
+    } else {
+        (Color::Red, Color::Black, Color::Red, "DIVERGE ▼")
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("C↔B DIV", Style::default().fg(s12_fg).add_modifier(b))),
+            Line::from(Span::styled(
+                format!("C{clob_dom:+.1}% B{btc_d:+.1}%"),
+                Style::default().fg(s12_fg).add_modifier(b))),
+            Line::from(Span::styled(s12_label, Style::default().fg(s12_fg))),
+        ]).block(Block::default().borders(Borders::ALL).title("S12 DIV")
+            .border_style(Style::default().fg(s12_border))
+            .style(Style::default().bg(s12_bg))),
         cols[5]);
 }
 
