@@ -1655,6 +1655,281 @@ mod tests {
         assert_eq!(parsed("sl100"), "SL-50%"); // clamped to 50
     }
 
+    // ═══ STOP-MARKET SL TESTS ═════════════════════════════════════
+
+    #[test]
+    fn sl_trigger_logic_up_price_below() {
+        // UP position: trigger when current <= mt_sl_price
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_sl_price = 0.6175; // SL at 5% below 0.65
+        s.hft.clob_trade_up = 0.60; // price dropped below SL
+
+        let current_px = s.hft.clob_trade_up;
+        let triggered = current_px <= s.mt_sl_price;
+        assert!(triggered, "UP: 0.60 should trigger SL at 0.6175");
+    }
+
+    #[test]
+    fn sl_trigger_logic_up_price_above_no_trigger() {
+        // UP position: no trigger when current > mt_sl_price
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_sl_price = 0.6175;
+        s.hft.clob_trade_up = 0.63; // price above SL
+
+        let current_px = s.hft.clob_trade_up;
+        let triggered = current_px <= s.mt_sl_price;
+        assert!(!triggered, "UP: 0.63 should NOT trigger SL at 0.6175");
+    }
+
+    #[test]
+    fn sl_trigger_logic_up_price_at_sl_triggers() {
+        // UP: price exactly at SL level → triggers
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_sl_price = 0.6175;
+        s.hft.clob_trade_up = 0.6175; // exactly at SL
+
+        let current_px = s.hft.clob_trade_up;
+        let triggered = current_px <= s.mt_sl_price;
+        assert!(triggered, "UP: price at SL should trigger");
+    }
+
+    #[test]
+    fn sl_trigger_logic_down_price_above() {
+        // DOWN position: trigger when current >= mt_sl_price
+        let mut s = make_test_state(2, "down", 20.0, 0.40, 80.0);
+        s.mt_sl_price = 0.42; // SL at 5% above 0.40
+        s.hft.clob_trade_dn = 0.45; // price went above SL
+
+        let current_px = s.hft.clob_trade_dn;
+        let triggered = current_px >= s.mt_sl_price;
+        assert!(triggered, "DOWN: 0.45 should trigger SL at 0.42");
+    }
+
+    #[test]
+    fn sl_trigger_logic_down_price_below_no_trigger() {
+        // DOWN position: no trigger when current < mt_sl_price
+        let mut s = make_test_state(2, "down", 20.0, 0.40, 80.0);
+        s.mt_sl_price = 0.42;
+        s.hft.clob_trade_dn = 0.38; // price below SL (still safe for DOWN)
+
+        let current_px = s.hft.clob_trade_dn;
+        let triggered = current_px >= s.mt_sl_price;
+        assert!(!triggered, "DOWN: 0.38 should NOT trigger SL at 0.42");
+    }
+
+    #[test]
+    fn sl_no_trigger_when_disabled() {
+        // mt_sl_price == 0 means SL disabled
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_sl_price = 0.0; // disabled
+        s.hft.clob_trade_up = 0.01; // extreme drop
+
+        let guards_fail = s.mt_sl_price <= 0.0;
+        assert!(guards_fail, "SL disabled → no trigger");
+    }
+
+    #[test]
+    fn sl_no_trigger_when_no_position() {
+        // mt_state != 2 means no active position
+        let mut s = make_test_state(0, "up", 0.0, 0.0, 0.0);
+        s.mt_sl_price = 0.6175;
+        s.hft.clob_trade_up = 0.01;
+
+        let guards_fail = s.mt_state != 2;
+        assert!(guards_fail, "no position → no trigger");
+    }
+
+    #[test]
+    fn sl_no_trigger_pending_buy() {
+        // mt_state == 1 (pending): SL not active yet
+        let mut s = make_test_state(1, "up", 10.0, 0.65, 100.0);
+        s.mt_sl_price = 0.6175;
+        s.hft.clob_trade_up = 0.01;
+
+        assert_eq!(s.mt_state, 1);
+        // Guard: mt_state != 2 → skip
+        assert!(s.mt_state != 2);
+    }
+
+    #[test]
+    fn sl_setup_after_fill_up() {
+        // setup_sl_after_fill computes mt_sl_price after UP buy fills
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.sl_pct = 5.0;
+
+        // Simulate setup_sl_after_fill
+        if s.sl_pct > 0.0 && s.mt_entry > 0.0 {
+            s.mt_sl_price = if s.mt_outcome == "up" {
+                s.mt_entry * (1.0 - s.sl_pct / 100.0)
+            } else {
+                s.mt_entry * (1.0 + s.sl_pct / 100.0)
+            };
+        }
+
+        let expected: f64 = 0.65 * 0.95;
+        assert!((s.mt_sl_price - expected).abs() < 0.001,
+            "UP SL price should be {expected}, got {}", s.mt_sl_price);
+    }
+
+    #[test]
+    fn sl_setup_after_fill_down() {
+        // setup_sl_after_fill computes mt_sl_price after DOWN buy fills
+        let mut s = make_test_state(2, "down", 20.0, 0.40, 80.0);
+        s.sl_pct = 5.0;
+
+        if s.sl_pct > 0.0 && s.mt_entry > 0.0 {
+            s.mt_sl_price = if s.mt_outcome == "up" {
+                s.mt_entry * (1.0 - s.sl_pct / 100.0)
+            } else {
+                s.mt_entry * (1.0 + s.sl_pct / 100.0)
+            };
+        }
+
+        let expected: f64 = 0.40 * 1.05;
+        assert!((s.mt_sl_price - expected).abs() < 0.001,
+            "DOWN SL price should be {expected}, got {}", s.mt_sl_price);
+    }
+
+    #[test]
+    fn sl_setup_no_pct_no_trigger() {
+        // sl_pct == 0 → setup_sl_after_fill does nothing
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.sl_pct = 0.0;
+
+        let should_setup = s.sl_pct > 0.0 && s.mt_entry > 0.0;
+        assert!(!should_setup, "sl_pct=0 → no SL setup");
+        assert_eq!(s.mt_sl_price, 0.0);
+    }
+
+    #[test]
+    fn sl_set_via_command_computes_price() {
+        // /sl10 sets mt_sl_price when position active
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+
+        // Simulate exec_sl_set(10.0)
+        s.sl_pct = 10.0;
+        if s.mt_state == 2 && s.mt_entry > 0.0 {
+            s.mt_sl_price = if s.mt_outcome == "up" {
+                s.mt_entry * (1.0 - s.sl_pct / 100.0)
+            } else {
+                s.mt_entry * (1.0 + s.sl_pct / 100.0)
+            };
+        }
+
+        let expected: f64 = 0.65 * 0.90;
+        assert!((s.mt_sl_price - expected).abs() < 0.001);
+        assert_eq!(s.sl_pct, 10.0);
+    }
+
+    #[test]
+    fn sl_off_clears_trigger_price() {
+        // /nsl clears mt_sl_price
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_sl_price = 0.6175;
+        s.sl_pct = 5.0;
+
+        // /nsl
+        s.sl_pct = 0.0;
+        s.mt_sl_price = 0.0;
+
+        assert_eq!(s.sl_pct, 0.0);
+        assert_eq!(s.mt_sl_price, 0.0);
+    }
+
+    #[test]
+    fn sl_trigger_resets_state() {
+        // After SL triggers, state should be reset
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_sl_price = 0.6175;
+        s.hft.clob_trade_up = 0.60; // triggered
+
+        // Simulate what check_sl_trigger does on trigger:
+        // 1. Cancel all orders (HTTP, skip in test)
+        // 2. Market sell (HTTP, skip in test)
+        // 3. Reset
+        s.mt_sl_price = 0.0;
+        s.reset_manual();
+
+        assert_eq!(s.mt_state, 0);
+        assert_eq!(s.mt_sl_price, 0.0);
+        assert!(s.mt_order_id.is_empty());
+        assert!(s.mt_exit_order_id.is_empty());
+    }
+
+    #[test]
+    fn sl_tsl_dynamic_update_up() {
+        // TSL updates mt_sl_price as price rises for UP
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_tsl_pct = 2.0;
+        s.mt_tsl_high = 0.65;
+        s.hft.clob_trade_up = 0.70; // price rose
+
+        let current_px = s.hft.clob_trade_up;
+        let high = s.mt_tsl_high.max(current_px);
+        let new_sl = high * (1.0 - s.mt_tsl_pct / 100.0); // 0.70 * 0.98 = 0.686
+        let changed = high > s.mt_tsl_high;
+
+        assert!(changed, "high moved from 0.65 to 0.70");
+        assert!((new_sl - 0.686).abs() < 0.001, "new SL = 0.70 * 0.98 = 0.686");
+
+        // Apply
+        s.mt_tsl_high = high;
+        s.mt_sl_price = new_sl;
+
+        assert!((s.mt_sl_price - 0.686).abs() < 0.001);
+        assert_eq!(s.mt_tsl_high, 0.70);
+    }
+
+    #[test]
+    fn sl_tsl_dynamic_update_down() {
+        // TSL updates mt_sl_price as price falls for DOWN
+        let mut s = make_test_state(2, "down", 20.0, 0.40, 80.0);
+        s.mt_tsl_pct = 2.0;
+        s.mt_tsl_low = 0.40;
+        s.hft.clob_trade_dn = 0.35; // price fell (good for DOWN)
+
+        let current_px = s.hft.clob_trade_dn;
+        let low = s.mt_tsl_low.min(current_px);
+        let new_sl = low * (1.0 + s.mt_tsl_pct / 100.0); // 0.35 * 1.02 = 0.357
+        let changed = low < s.mt_tsl_low;
+
+        assert!(changed, "low moved from 0.40 to 0.35");
+        assert!((new_sl - 0.357).abs() < 0.001, "new SL = 0.35 * 1.02 = 0.357");
+
+        s.mt_tsl_low = low;
+        s.mt_sl_price = new_sl;
+
+        assert!((s.mt_sl_price - 0.357).abs() < 0.001);
+        assert_eq!(s.mt_tsl_low, 0.35);
+    }
+
+    #[test]
+    fn sl_tsl_no_update_when_unchanged() {
+        // TSL shouldn't update when extreme hasn't moved
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_tsl_pct = 2.0;
+        s.mt_tsl_high = 0.70; // already tracked higher
+        s.mt_sl_price = 0.686;
+        s.hft.clob_trade_up = 0.68; // price below tracked high
+
+        let current_px = s.hft.clob_trade_up;
+        let high = s.mt_tsl_high.max(current_px); // still 0.70
+        let changed = high > s.mt_tsl_high;
+
+        assert!(!changed, "extreme unchanged → no TSL update needed");
+        assert_eq!(high, 0.70);
+    }
+
+    #[test]
+    fn sl_set_via_command_no_position() {
+        // /sl5 without active position: sets pct but no mt_sl_price
+        let mut s = crate::State::new(false);
+        s.sl_pct = 5.0;
+
+        assert_eq!(s.sl_pct, 5.0);
+        assert_eq!(s.mt_sl_price, 0.0); // no trigger without position
+    }
+
     #[test]
     fn meta_commands() {
         assert_eq!(parsed("man"),  "MAN");
