@@ -388,17 +388,22 @@ async fn run_cycle(
     };
 
     if raw_bal <= 0.0 && !is_approve_running() {
-        info!("Balance USDC raw=0 — ejecutando approve USDC + CTF...");
+        info!("Balance USDC raw=0 — ejecutando approve USDC + CTF en background...");
         set_approve_running(true);
-        match approve_usdc_for_ctf(creds).await {
-            Ok(()) => {
-                info!("Approvals confirmados. Refrescando balance CLOB...");
-                let _ = clob_client.update_balance_allowance(balance_req.clone()).await;
-                tokio::time::sleep(Duration::from_secs(3)).await;
+        let creds_bg = creds.clone();
+        let clob_bg = clob_client.clone();
+        let tx_bg = tx.clone();
+        tokio::spawn(async move {
+            match approve_usdc_for_ctf(&creds_bg).await {
+                Ok(()) => {
+                    info!("Approvals confirmados. Refrescando balance CLOB...");
+                    let _ = clob_bg.update_balance_allowance(BalanceAllowanceRequest::default()).await;
+                    fetch_and_send_balance(&clob_bg, &tx_bg).await;
+                }
+                Err(e) => warn!("Approve USDC falló: {e}"),
             }
-            Err(e) => warn!("Approve USDC falló: {e}"),
-        }
-        set_approve_running(false);
+            set_approve_running(false);
+        });
     }
 
     fetch_and_send_balance(&clob_client, tx).await;
@@ -409,23 +414,28 @@ async fn run_cycle(
         Err(_) => 0.0,
     };
     if raw_bal2 <= 0.0 {
-        info!("Balance CLOB = 0, chequeando USDC.e en EOA para auto-wrap...");
-        match quick_usdc_balance(creds).await {
-            Ok(bal) => {
-                if bal > alloy::primitives::U256::ZERO {
-                    info!("USDC.e detectado: {bal} — ejecutando wrap automático");
-                    match wrap_usdc_to_pusd(creds, "0x0000000000000000000000000000000000000000").await {
-                        Ok(()) => {
-                            info!("Wrap automático completado. Refrescando balance...");
-                            let _ = clob_client.update_balance_allowance(balance_req.clone()).await;
-                            fetch_and_send_balance(&clob_client, tx).await;
+        info!("Balance CLOB = 0, chequeando USDC.e en EOA para auto-wrap en background...");
+        let creds_bg2 = creds.clone();
+        let clob_bg2 = clob_client.clone();
+        let tx_bg2 = tx.clone();
+        tokio::spawn(async move {
+            match quick_usdc_balance(&creds_bg2).await {
+                Ok(bal) => {
+                    if bal > alloy::primitives::U256::ZERO {
+                        info!("USDC.e detectado: {bal} — ejecutando wrap automático");
+                        match wrap_usdc_to_pusd(&creds_bg2, "0x0000000000000000000000000000000000000000").await {
+                            Ok(()) => {
+                                info!("Wrap automático completado. Refrescando balance...");
+                                let _ = clob_bg2.update_balance_allowance(BalanceAllowanceRequest::default()).await;
+                                fetch_and_send_balance(&clob_bg2, &tx_bg2).await;
+                            }
+                            Err(e) => warn!("Auto-wrap falló: {e}"),
                         }
-                        Err(e) => warn!("Auto-wrap falló: {e}"),
                     }
                 }
+                Err(e) => warn!("No se pudo leer USDC.e: {e}"),
             }
-            Err(e) => warn!("No se pudo leer USDC.e: {e}"),
-        }
+        });
     }
 
     // 4. Descubrir mercado
