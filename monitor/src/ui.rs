@@ -51,11 +51,22 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── COMMIT BAR ────────────────────────────────────────────────────
     let commit = option_env!("GIT_HASH").unwrap_or("dev");
     let total_w = area.width as usize;
-    let filler_w = total_w.saturating_sub(commit.len() + 19);
+
+    // Aggregate alert level: worst of all indicators
+    let (alert_color, alert_blink) = aggregate_alert(s);
+
+    let pulse = s.pulse_tick;
+    let dot = if alert_blink && pulse % 8 < 5 { "●" } else if alert_blink { "○" } else { "●" };
+    let dot_span = Span::styled(format!("{dot} "), Style::default().fg(alert_color).add_modifier(Modifier::BOLD));
+
+    let filler_w = total_w.saturating_sub(commit.len() + 22);
     let filler = " ".repeat(filler_w.min(80));
     f.render_widget(
-        Paragraph::new(format!("|ZZIGNAL{filler}{commit}|"))
-            .style(Style::default().fg(BB_AMBER).add_modifier(Modifier::BOLD)),
+        Paragraph::new(Line::from(vec![
+            dot_span,
+            Span::styled(format!("|ZZIGNAL{filler}{commit}|"),
+                Style::default().fg(BB_AMBER).add_modifier(Modifier::BOLD)),
+        ])),
         chunks[ci],
     );
     ci += 1;
@@ -107,6 +118,46 @@ pub fn draw(f: &mut Frame, s: &State) {
 
     // ─── FOOTER ───────────────────────────────────────────────────────
     draw_footer(f, chunks[ci], s);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AGGREGATE ALERT — status light for commit bar
+// ═══════════════════════════════════════════════════════════════════
+
+fn aggregate_alert(s: &State) -> (Color, bool) {
+    // Check all indicator thresholds — worst wins (RED > YELLOW > GREEN)
+    let spread = s.hft.spread;
+    let dump = s.hft.dump_score;
+    let gap = s.hft.tick_gap_ms;
+    let spoof_risk = s.hft.spoof + s.hft.ask_wall;
+
+    // RED conditions
+    if spread >= 0.008 || dump >= 3 || gap >= 2000 || spoof_risk >= 2 {
+        return (BB_RED, true); // blink fast
+    }
+
+    // YELLOW conditions
+    if spread >= 0.003 || dump >= 1 || gap >= 500 || spoof_risk >= 1 {
+        return (BB_AMBER, true); // blink medium
+    }
+
+    // Check aligned signal (S1/S2)
+    let up_ref = if s.session_open_up > 0.0 { s.session_open_up } else { s.hft.clob_trade_up };
+    let dn_ref = if s.session_open_dn > 0.0 { s.session_open_dn } else { s.hft.clob_trade_dn };
+    let btc_o = if s.btc_open > 0.0 { s.btc_open } else if s.session_open_btc > 0.0 { s.session_open_btc } else { s.btc };
+    let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
+    let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
+    let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
+    let clob_moved = up_d.abs().max(dn_d.abs()) > 0.05;
+    let clob_up = up_d >= 0.0;
+    let btc_up = btc_d >= 0.0;
+    let aligned = (clob_up == btc_up) && clob_moved && btc_d.abs() > 0.01;
+
+    if aligned {
+        return (BB_GREEN, true); // blink slow — good signal
+    }
+
+    (BB_DIM, false) // everything quiet
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -288,6 +339,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
 
     // ── S1: CLOB MOM ──
     let s1_border = if aligned { if btc_up { BB_GREEN } else { BB_RED } } else { BB_BORDER };
+    let s1_border_alert = if aligned && pulse_on { s1_border } else { BB_BORDER };
     let s1_fg = if aligned { BB_WHITE } else { if btc_up { BB_GREEN } else { BB_RED } };
     let clob_dir = if up_d.abs() > dn_d.abs() {
         if clob_up { "▲UP" } else { "▼UP" }
@@ -307,16 +359,17 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
                 Span::styled("30s ", Style::default().fg(BB_DIM)),
                 Span::styled(format!("UP{up_30s:+.1}"), Style::default().fg(up_30s_c)),
                 Span::styled(format!("/DN{dn_30s:+.1}% "), Style::default().fg(dn_30s_c)),
-                Span::styled(if aligned && pulse_on {"✓ BTC ✓"}else{"—"},
+                Span::styled(if aligned&&pulse_on {"✓ BTC ✓"}else{"—"},
                     Style::default().fg(if aligned&&pulse_on{BB_GREEN}else{BB_DIM}).add_modifier(b)),
             ]),
         ]).block(Block::default().borders(Borders::ALL).title("S1 CLOB")
-            .border_style(Style::default().fg(s1_border))
+            .border_style(Style::default().fg(s1_border_alert))
             .style(Style::default().bg(BB_CARD))),
         cols[0]);
 
     // ── S2: BTC MOM ──
     let s2_border = if aligned { if btc_up { BB_GREEN } else { BB_RED } } else { BB_BORDER };
+    let s2_border_alert = if aligned && pulse_on { s2_border } else { BB_BORDER };
     let s2_fg = if aligned { BB_WHITE } else { if btc_up { BB_GREEN } else { BB_RED } };
     let btc_dir = if btc_d >= 0.0 { "▲BULL" } else { "▼BEAR" };
     let btc_30s_c = if btc_30s > 0.0 { BB_GREEN } else if btc_30s < 0.0 { BB_RED } else { BB_DIM };
