@@ -436,6 +436,18 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
         s.session_open_btc = new_hft.btc_price;
+        // Reset all strategy position flags for new session
+        s.pos_odi_up = false; s.pos_odi_dn = false;
+        s.pos_odi_entry_up = 0.0; s.pos_odi_entry_dn = 0.0;
+        s.pos_h65_up = false; s.pos_h65_dn = false;
+        s.pos_h65_entry_up = 0.0; s.pos_h65_entry_dn = 0.0;
+        s.pos_sen_up = false; s.pos_sen_dn = false;
+        s.pos_sen_entry_up = 0.0; s.pos_sen_entry_dn = 0.0;
+        // Clear stale manual position if still active from previous session
+        if s.mt_state > 0 {
+            s.add_trade_log("SESSION RESET — posicion manual cerrada".to_string(), Color::Yellow);
+            s.reset_manual();
+        }
         s.add_log("SESSION RESET — new orderbook".to_string(), Color::Yellow);
     }
     if s.session_open_up == 0.0 && new_hft.clob_trade_up > 0.0 {
