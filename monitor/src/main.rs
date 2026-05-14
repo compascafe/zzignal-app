@@ -761,21 +761,22 @@ async fn main() -> io::Result<()> {
                     .find(|(_, t)| *t <= cutoff_30s)
                     .or_else(|| s.btc_history.front())
                     .map(|(p,_)| *p).unwrap_or(data.btc_price);
-                // Depth absorption: net bid - ask size change at best levels
-                let best_bid_up = data.depth_up_bids.first().map(|(_,s)| *s).unwrap_or(0.0);
-                let best_ask_up = data.depth_up_asks.first().map(|(_,s)| *s).unwrap_or(0.0);
-                let best_bid_dn = data.depth_dn_bids.first().map(|(_,s)| *s).unwrap_or(0.0);
-                let best_ask_dn = data.depth_dn_asks.first().map(|(_,s)| *s).unwrap_or(0.0);
+                // Depth absorption: net bid - ask size change at bottom levels
+                // .last() = deepest level (cheapest bid, most expensive ask) — less noisy than best level
+                let deep_bid_up = data.depth_up_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
+                let deep_ask_up = data.depth_up_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
+                let deep_bid_dn = data.depth_dn_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
+                let deep_ask_dn = data.depth_dn_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
                 if s.prev_bid_up > 0.0 {
-                    let b_up = (best_bid_up / s.prev_bid_up - 1.0) * 100.0;
-                    let a_up = (best_ask_up / s.prev_ask_up - 1.0) * 100.0;
-                    s.abs_up = b_up - a_up;  // + = bids growing vs asks = bullish
-                    let b_dn = (best_bid_dn / s.prev_bid_dn - 1.0) * 100.0;
-                    let a_dn = (best_ask_dn / s.prev_ask_dn - 1.0) * 100.0;
+                    let b_up = (deep_bid_up / s.prev_bid_up - 1.0) * 100.0;
+                    let a_up = (deep_ask_up / s.prev_ask_up - 1.0) * 100.0;
+                    s.abs_up = b_up - a_up;  // + = deep bids growing vs asks = whale accumulation
+                    let b_dn = (deep_bid_dn / s.prev_bid_dn - 1.0) * 100.0;
+                    let a_dn = (deep_ask_dn / s.prev_ask_dn - 1.0) * 100.0;
                     s.abs_dn = b_dn - a_dn;
                 }
-                s.prev_bid_up = best_bid_up; s.prev_ask_up = best_ask_up;
-                s.prev_bid_dn = best_bid_dn; s.prev_ask_dn = best_ask_dn;
+                s.prev_bid_up = deep_bid_up; s.prev_ask_up = deep_ask_up;
+                s.prev_bid_dn = deep_bid_dn; s.prev_ask_dn = deep_ask_dn;
                 commands::update_trailing_stop(&mut s).await;
                 commands::check_sl_trigger(&mut s).await;
                 commands::check_alerts(&mut s);
