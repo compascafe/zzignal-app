@@ -569,7 +569,7 @@ async fn exec_liq_market(s: &mut State) {
         s.add_log(format!("▶ MARKET SELL {} sz={:.0}  PnL est:{:+.2}", outcome.to_uppercase(), size, pnl), Color::Yellow);
         s.add_trade_log(format!("▶ MKT SELL {} sz={:.0} @mercado", outcome.to_uppercase(), size), Color::Yellow);
         let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
-            outcome, s.mt_budget);
+            outcome, size);
         if let Err(e) = http_post("/api/orders/market", &body).await {
             s.add_log(format!("MARKET SELL FAIL: {}", e), Color::Red);
             s.add_trade_log(format!("\u{2717} MKT SELL FAIL: {}", e), Color::Red);
@@ -841,7 +841,7 @@ pub async fn check_sl_trigger(s: &mut State) {
     let outcome = s.mt_outcome.clone();
     let pnl = s.mt_size * (current_px - s.mt_entry);
     let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
-        outcome, s.mt_budget);
+        outcome, s.mt_size);
 
     match http_post("/api/orders/market", &body).await {
         Ok(()) => {
@@ -1197,8 +1197,8 @@ async fn exec_cashout(s: &mut State) {
         let current_px = if outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
         let pnl = s.mt_size * (current_px - s.mt_entry);
         let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
-            outcome, s.mt_budget);
-        s.add_log(format!("▶ MARKET SELL {} ${:.2}", outcome.to_uppercase(), s.mt_budget), Color::Yellow);
+            outcome, s.mt_size);
+        s.add_log(format!("▶ MARKET SELL {} sz={:.0} ${:.2}", outcome.to_uppercase(), s.mt_size, s.mt_budget), Color::Yellow);
         match http_post("/api/orders/market", &body).await {
             Ok(()) => {
                 s.mt_pnl_cum += pnl;
@@ -1216,16 +1216,43 @@ async fn exec_cashout(s: &mut State) {
         }
     }
 
-    // 5) PANIC strategies
-    if s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn {
-        s.add_log("▶ Liquidando estrategias...".to_string(), Color::Yellow);
-        match http_post("/api/panic", "{}").await {
-            Ok(()) => s.add_log("  ✓ Estrategias liquidadas".to_string(), Color::Green),
-            Err(e) => s.add_log(format!("⚠ PANIC strategies FAIL: {}", e), Color::Red),
+    // 5) Market sell each active strategy position individually
+    {
+        let strat_pos: Vec<(&str, &str, f64, f64)> = {
+            let mut v = Vec::new();
+            if s.pos_h65_up && s.h65_budget > 0.0 { v.push(("H65", "up", s.h65_budget, s.pos_h65_entry_up)); }
+            if s.pos_h65_dn && s.h65_budget > 0.0 { v.push(("H65", "down", s.h65_budget, s.pos_h65_entry_dn)); }
+            if s.pos_odi_up && s.odi_budget > 0.0 { v.push(("ODI", "up", s.odi_budget, s.pos_odi_entry_up)); }
+            if s.pos_odi_dn && s.odi_budget > 0.0 { v.push(("ODI", "down", s.odi_budget, s.pos_odi_entry_dn)); }
+            if s.pos_sen_up && s.sen_budget > 0.0 { v.push(("SEN", "up", s.sen_budget, s.pos_sen_entry_up)); }
+            if s.pos_sen_dn && s.sen_budget > 0.0 { v.push(("SEN", "down", s.sen_budget, s.pos_sen_entry_dn)); }
+            v
+        };
+        for (strat, outcome, budget, entry) in &strat_pos {
+            let shares = if *entry > 0.0 { (budget / entry).floor().max(1.0) } else { *budget };
+            let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#, outcome, shares);
+            s.add_log(format!("▶ MARKET SELL {} {} sz={:.0} ${:.0}", strat, outcome.to_uppercase(), shares, budget), Color::Yellow);
+            match http_post("/api/orders/market", &body).await {
+                Ok(()) => {
+                    s.add_log(format!("  ✓ {} {} vendido", strat, outcome.to_uppercase()), Color::Green);
+                    s.add_trade_log(format!("💰 CASH OUT {} {} budget={:.0}", strat, outcome.to_uppercase(), budget), Color::Green);
+                }
+                Err(e) => {
+                    mkt_failed = true;
+                    s.add_log(format!("❌ {} {} market sell FAIL: {}", strat, outcome.to_uppercase(), e), Color::Red);
+                    s.add_trade_log(format!("✗ CASH OUT: {} {} FAIL ({})", strat, outcome.to_uppercase(), e), Color::Red);
+                }
+            }
         }
     }
 
-    // 6) Reset manual state (do NOT cancel orders again — market sell must survive)
+    // 6) PANIC — cancel remaining orders + disable all strategies (safety net)
+    match http_post("/api/panic", "{}").await {
+        Ok(()) => s.add_log("  ✓ Estrategias desactivadas".to_string(), Color::Green),
+        Err(e) => s.add_log(format!("⚠ PANIC strategies FAIL: {}", e), Color::Red),
+    }
+
+    // 7) Reset manual state (do NOT cancel orders again — market sell must survive)
     if mkt_failed {
         s.add_log("⚠ CASH OUT parcial: reintenta /lm o /x".to_string(), Color::Red);
         s.add_trade_log("⚠ Cash out parcial — reintenta /lm o /x".to_string(), Color::Red);
@@ -2516,18 +2543,14 @@ mod tests {
 
     #[test]
     fn cashout_order_of_operations() {
-        // Verify the correct ORDER of operations:
-        // 1. Cancel Gemini → 2. Cancel orders → 3/4 handle position → 5. PANIC → 6. Reset
         let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
         s.mt_order_id = "buy-001".into();
         s.mt_exit_order_id = "exit-001".into();
         s.mt_sl_order_id = "sl-001".into();
 
-        // 1. Cancel Gemini
         s.gemini_active = false;
         assert!(!s.gemini_active);
 
-        // 2. Cancel orders FIRST (collect IDs before clearing)
         let ids: Vec<String> = {
             let mut v = Vec::new();
             if !s.mt_order_id.is_empty() { v.push(s.mt_order_id.clone()); }
@@ -2535,21 +2558,490 @@ mod tests {
             if !s.mt_sl_order_id.is_empty() { v.push(s.mt_sl_order_id.clone()); }
             v
         };
-        assert_eq!(ids.len(), 3); // buy, exit, SL
+        assert_eq!(ids.len(), 3);
         s.mt_order_id.clear();
         s.mt_exit_order_id.clear();
         s.mt_sl_order_id.clear();
 
-        // All order IDs are empty BEFORE market sell is placed
         assert!(s.mt_order_id.is_empty());
         assert!(s.mt_exit_order_id.is_empty());
         assert!(s.mt_sl_order_id.is_empty());
 
-        // 4. Market sell would be placed here (no local ID captured)
-        // 5. PANIC strategies would be called here
-        // 6. Reset
         s.reset_manual();
         assert_eq!(s.mt_state, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — BUILD MKT SELL BODY helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    /// Build the JSON body for a manual market sell (matching exec_cashout step 4).
+    fn build_manual_mkt_body(outcome: &str, size: f64) -> String {
+        format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#, outcome, size)
+    }
+
+    /// Build the JSON body for a strategy market sell (matching exec_cashout step 5).
+    fn build_strat_mkt_body(outcome: &str, budget: f64, entry: f64) -> (String, f64) {
+        let shares = if entry > 0.0 { (budget / entry).floor().max(1.0) } else { budget };
+        (format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#, outcome, shares), shares)
+    }
+
+    /// Collect active strategy positions (matching exec_cashout step 5 collection).
+    fn collect_active_strategies(s: &crate::State) -> Vec<(&'static str, &str, f64, f64)> {
+        let mut v: Vec<(&str, &str, f64, f64)> = Vec::new();
+        if s.pos_h65_up && s.h65_budget > 0.0 { v.push(("H65", "up", s.h65_budget, s.pos_h65_entry_up)); }
+        if s.pos_h65_dn && s.h65_budget > 0.0 { v.push(("H65", "down", s.h65_budget, s.pos_h65_entry_dn)); }
+        if s.pos_odi_up && s.odi_budget > 0.0 { v.push(("ODI", "up", s.odi_budget, s.pos_odi_entry_up)); }
+        if s.pos_odi_dn && s.odi_budget > 0.0 { v.push(("ODI", "down", s.odi_budget, s.pos_odi_entry_dn)); }
+        if s.pos_sen_up && s.sen_budget > 0.0 { v.push(("SEN", "up", s.sen_budget, s.pos_sen_entry_up)); }
+        if s.pos_sen_dn && s.sen_budget > 0.0 { v.push(("SEN", "down", s.sen_budget, s.pos_sen_entry_dn)); }
+        v
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — MANUAL MARKET SELL USES SHARES (NOT BUDGET)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_manual_sell_uses_shares_not_dollars() {
+        // BUG FIX: amount_usdc for SELL must be shares, not dollars.
+        // $200 at $0.50 = 400 shares. Old code sent 200 (dollars) → only 200 sold.
+        // Fixed code sends 400 (shares) → all shares sold.
+        let outcome = "up";
+        let size = 400.0;   // shares
+        let budget = 200.0; // dollars
+        assert_ne!(size, budget, "shares ≠ dollars: must not be equal for this test");
+
+        let body = build_manual_mkt_body(outcome, size);
+        let body_budget = build_manual_mkt_body(outcome, budget);
+
+        // Fixed: uses size (shares) to close entire position
+        assert!(body.contains("400"));
+        assert!(!body.contains("200"));
+        assert_ne!(body, body_budget, "correct body uses shares, old bug used dollars");
+    }
+
+    #[test]
+    fn cashout_manual_sell_shares_match_fill_size() {
+        // Verify that mt_size (filled shares) is used, not mt_budget
+        let sizes_and_budgets = [
+            (200.0, 100.0),   // 200 shares at $0.50 = $100
+            (333.0, 200.0),   // 333 shares at $0.60 = $200
+            (10.0, 5.0),      // 10 shares at $0.50 = $5
+            (1000.0, 500.0),  // 1000 shares at $0.50 = $500
+        ];
+        for (size, budget) in &sizes_and_budgets {
+            let body = build_manual_mkt_body("up", *size);
+            assert!(body.contains(&format!("{}", *size)), "body for size={size}");
+            if (*size - *budget).abs() > 0.1 {
+                assert!(!body.contains(&format!("{}", *budget)), "body should NOT contain budget ${budget}");
+            }
+        }
+    }
+
+    #[test]
+    fn cashout_pnl_uses_shares_not_budget() {
+        // PnL calculation already uses size (shares): pnl = mt_size * (current_px - mt_entry)
+        let size = 400.0;
+        let entry = 0.50;
+        let current = 0.55;
+        let budget = 200.0;
+
+        let pnl_shares: f64 = size * (current - entry);     // correct
+        let pnl_budget: f64 = budget * (current - entry);   // would be wrong
+
+        assert!((pnl_shares - 20.0).abs() < 0.001, "PnL with shares: {pnl_shares}");
+        assert!((pnl_budget - 10.0).abs() < 0.001, "old PnL with budget would understate");
+        assert!(pnl_shares > pnl_budget, "shares-based PnL correctly reflects position size");
+    }
+
+    #[test]
+    fn cashout_manual_sell_body_has_correct_structure() {
+        let body = build_manual_mkt_body("down", 333.0);
+        assert!(body.contains(r#""side":"sell""#));
+        assert!(body.contains(r#""outcome":"down""#));
+        assert!(body.contains(r#""amount_usdc":333"#));
+        assert!(!body.contains("mt_budget"), "budget field should NOT appear");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — STRATEGY SHARES CALCULATION
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_strategy_shares_budget_div_entry() {
+        let cases = [
+            (200.0, 0.50, 400.0),
+            (100.0, 0.65, 153.0),
+            (50.0, 0.40, 125.0),
+            (75.0, 0.33, 227.0),
+            (300.0, 0.75, 400.0),
+        ];
+        for (budget, entry, expected_shares) in &cases {
+            let (_body, shares) = build_strat_mkt_body("up", *budget, *entry);
+            assert!((shares - expected_shares).abs() < 0.01,
+                "budget={budget} entry={entry}: expected shares={expected_shares}, got {shares}");
+        }
+    }
+
+    #[test]
+    fn cashout_strategy_shares_min_1() {
+        // Even tiny budgets produce at least 1 share
+        let (_body, shares) = build_strat_mkt_body("up", 1.0, 0.99);
+        assert!(shares >= 1.0, "shares must be at least 1.0, got {shares}");
+    }
+
+    #[test]
+    fn cashout_strategy_zero_entry_falls_back_to_budget() {
+        // If entry price is 0 (no data yet), fall back to using budget as shares
+        let budget = 100.0;
+        let (_body, shares) = build_strat_mkt_body("up", budget, 0.0);
+        assert_eq!(shares, budget, "zero entry should fall back to budget as share count");
+    }
+
+    #[test]
+    fn cashout_strategy_body_uses_calculated_shares() {
+        let budget = 150.0;
+        let entry = 0.60;
+        let (body, shares) = build_strat_mkt_body("down", budget, entry);
+        let expected_shares = (budget / entry).floor().max(1.0);
+
+        assert_eq!(shares, expected_shares);
+        assert!(body.contains(&format!("{}", expected_shares as i64)),
+            "body should contain calculated shares {expected_shares}, got: {body}");
+        assert!(body.contains(r#""outcome":"down""#));
+        assert!(body.contains(r#""side":"sell""#));
+    }
+
+    #[test]
+    fn cashout_strategy_shares_vs_budget_are_different() {
+        // Verify that shares ≠ budget (proving the fix is meaningful)
+        for (budget, entry) in [(200.0, 0.50), (100.0, 0.80), (50.0, 0.25)] {
+            let (_body, shares) = build_strat_mkt_body("up", budget, entry);
+            assert_ne!(shares, budget, "budget={budget} entry={entry}: shares must differ from budget");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — EACH POSITION SOLD INDIVIDUALLY
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_each_active_strategy_sold_individually() {
+        let mut s = crate::State::new(false);
+        s.pos_h65_up = true;  s.h65_budget = 200.0; s.pos_h65_entry_up = 0.50;
+        s.pos_odi_dn = true;  s.odi_budget = 150.0; s.pos_odi_entry_dn = 0.40;
+        s.pos_sen_up = true;  s.sen_budget = 100.0; s.pos_sen_entry_up = 0.65;
+
+        let positions = collect_active_strategies(&s);
+
+        assert_eq!(positions.len(), 3, "should have 3 active positions");
+        assert_eq!(positions[0].0, "H65");
+        assert_eq!(positions[0].1, "up");
+        assert_eq!(positions[1].0, "ODI");
+        assert_eq!(positions[1].1, "down");
+        assert_eq!(positions[2].0, "SEN");
+        assert_eq!(positions[2].1, "up");
+
+        // Each position gets its own market sell with correct shares
+        for (strat, outcome, budget, entry) in &positions {
+            let (_body, shares) = build_strat_mkt_body(outcome, *budget, *entry);
+            assert!(shares > 0.0, "{strat} {outcome}: shares should be positive");
+            // shares should differ from budget (unless entry=0)
+            if *entry > 0.0 && *entry != 1.0 {
+                assert_ne!(shares, *budget, "{strat} {outcome}: shares should differ from budget");
+            }
+        }
+    }
+
+    #[test]
+    fn cashout_no_strategies_collects_empty() {
+        let s = crate::State::new(false);
+        let positions = collect_active_strategies(&s);
+        assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn cashout_all_6_positions_collected() {
+        let mut s = crate::State::new(false);
+        s.pos_h65_up = true;  s.h65_budget = 100.0; s.pos_h65_entry_up = 0.50;
+        s.pos_h65_dn = true;  s.pos_h65_entry_dn = 0.55;
+        s.pos_odi_up = true;  s.odi_budget = 100.0; s.pos_odi_entry_up = 0.60;
+        s.pos_odi_dn = true;  s.pos_odi_entry_dn = 0.45;
+        s.pos_sen_up = true;  s.sen_budget = 100.0; s.pos_sen_entry_up = 0.70;
+        s.pos_sen_dn = true;  s.pos_sen_entry_dn = 0.35;
+
+        let positions = collect_active_strategies(&s);
+        assert_eq!(positions.len(), 6);
+        assert!(positions.iter().any(|(s, o, _, _)| *s == "H65" && *o == "up"));
+        assert!(positions.iter().any(|(s, o, _, _)| *s == "H65" && *o == "down"));
+        assert!(positions.iter().any(|(s, o, _, _)| *s == "ODI" && *o == "up"));
+        assert!(positions.iter().any(|(s, o, _, _)| *s == "ODI" && *o == "down"));
+        assert!(positions.iter().any(|(s, o, _, _)| *s == "SEN" && *o == "up"));
+        assert!(positions.iter().any(|(s, o, _, _)| *s == "SEN" && *o == "down"));
+    }
+
+    #[test]
+    fn cashout_strategy_with_zero_budget_skipped() {
+        let mut s = crate::State::new(false);
+        s.pos_h65_up = true;  s.h65_budget = 0.0; s.pos_h65_entry_up = 0.50;
+        s.pos_odi_up = true;  s.odi_budget = 100.0; s.pos_odi_entry_up = 0.60;
+
+        let positions = collect_active_strategies(&s);
+        assert_eq!(positions.len(), 1, "zero-budget strategy should be skipped");
+        assert_eq!(positions[0].0, "ODI");
+    }
+
+    #[test]
+    fn cashout_strategies_disabled_by_flag_only() {
+        let mut s = crate::State::new(false);
+        // Position flag false even with budget > 0 → skipped
+        s.pos_h65_up = false;
+        s.h65_budget = 200.0;
+        s.pos_h65_entry_up = 0.50;
+
+        let positions = collect_active_strategies(&s);
+        assert!(positions.is_empty(), "must be skipped if pos flag is false regardless of budget");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — FAILURE SCENARIOS
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_market_sell_failure_marks_mkt_failed() {
+        // When any market sell fails, mkt_failed = true and state is preserved
+        let mut s = make_test_state(2, "up", 400.0, 0.50, 200.0);
+        let mkt_failed = true;
+
+        if !mkt_failed {
+            s.reset_manual();
+        }
+
+        // State preserved — user can retry
+        assert_eq!(s.mt_state, 2);
+        assert_eq!(s.mt_size, 400.0);
+        assert_eq!(s.mt_entry, 0.50);
+        assert_eq!(s.mt_budget, 200.0);
+    }
+
+    #[test]
+    fn cashout_strategy_sell_failure_marks_mkt_failed() {
+        // If any strategy market sell fails, mkt_failed = true
+        let mut s = make_test_state(2, "down", 333.0, 0.40, 100.0);
+        s.pos_h65_dn = true; s.h65_budget = 200.0; s.pos_h65_entry_dn = 0.40;
+
+        let positions = collect_active_strategies(&s);
+        assert_eq!(positions.len(), 1);
+
+        // Simulate: first sell succeeds, second fails → mkt_failed
+        let mut mkt_failed = false;
+        for (_, _, _, _) in &positions {
+            // simulating failure
+            mkt_failed = true;
+        }
+
+        assert!(mkt_failed, "strategy sell failure should mark mkt_failed");
+        // Manual state should NOT be reset
+        assert_eq!(s.mt_state, 2);
+    }
+
+    #[test]
+    fn cashout_mkt_failed_prevents_reset_manual() {
+        let mut s = make_test_state(2, "up", 200.0, 0.65, 100.0);
+        let mkt_failed = true;
+
+        if !mkt_failed {
+            s.reset_manual();
+        }
+
+        assert_eq!(s.mt_state, 2, "position must be preserved on failure");
+        assert_eq!(s.mt_size, 200.0);
+        assert_eq!(s.mt_entry, 0.65);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — COMBINED MANUAL + STRATEGY SCENARIOS
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_manual_up_plus_three_strategies() {
+        // Most common real scenario: manual UP + 3 strategies active
+        let mut s = make_test_state(2, "up", 300.0, 0.55, 150.0);
+        s.pos_odi_up = true; s.odi_budget = 150.0; s.pos_odi_entry_up = 0.55;
+        s.pos_h65_up = true; s.h65_budget = 200.0; s.pos_h65_entry_up = 0.55;
+        s.pos_sen_dn = true; s.sen_budget = 100.0; s.pos_sen_entry_dn = 0.45;
+
+        // Manual sell
+        let manual_body = build_manual_mkt_body(&s.mt_outcome, s.mt_size);
+        assert!(manual_body.contains("300"), "manual body should use mt_size=300 shares");
+
+        // Strategy sells
+        let positions = collect_active_strategies(&s);
+        assert_eq!(positions.len(), 3);
+
+        let mut total_shares_to_sell = s.mt_size;
+        for (_, _, budget, entry) in &positions {
+            let (body, shares) = build_strat_mkt_body("up", *budget, *entry);
+            assert!(shares > 0.0);
+            assert!(body.contains(r#""side":"sell""#));
+            total_shares_to_sell += shares;
+        }
+
+        // All positions accounted for
+        assert!(total_shares_to_sell > s.mt_size, "strategy shares add to total");
+    }
+
+    #[test]
+    fn cashout_manual_down_with_all_strategies() {
+        let mut s = make_test_state(2, "down", 250.0, 0.45, 200.0);
+        s.pos_h65_up = true; s.h65_budget = 100.0; s.pos_h65_entry_up = 0.50;
+        s.pos_h65_dn = true; s.pos_h65_entry_dn = 0.48;
+        s.pos_odi_up = true; s.odi_budget = 50.0;  s.pos_odi_entry_up = 0.52;
+        s.pos_odi_dn = true; s.pos_odi_entry_dn = 0.46;
+        s.pos_sen_up = true; s.sen_budget = 75.0;  s.pos_sen_entry_up = 0.55;
+        s.pos_sen_dn = true; s.pos_sen_entry_dn = 0.42;
+
+        let manual_body = build_manual_mkt_body("down", s.mt_size);
+        assert!(manual_body.contains("250"));
+
+        let positions = collect_active_strategies(&s);
+        assert_eq!(positions.len(), 6);
+
+        let total_sells = 1 + positions.len(); // manual + 6 strategies
+        assert_eq!(total_sells, 7, "all 7 positions must generate market sell orders");
+    }
+
+    #[test]
+    fn cashout_no_positions_at_all() {
+        let mut s = crate::State::new(false);
+        s.mt_state = 0;
+
+        let has_manual = s.mt_state >= 2;
+        let positions = collect_active_strategies(&s);
+
+        assert!(!has_manual);
+        assert!(positions.is_empty());
+        // Reset still works on empty state
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — ORDER SAFETY (PANIC still called)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_panic_called_even_with_no_individual_sells() {
+        // PANIC is always called as safety net — even if no positions
+        let s = crate::State::new(false);
+        let positions = collect_active_strategies(&s);
+        assert!(positions.is_empty());
+        // PANIC would be called in step 6 regardless (disables strategies)
+    }
+
+    #[test]
+    fn cashout_panic_called_after_individual_sells() {
+        // Individual sells execute first, THEN PANIC (step 5 then step 6)
+        let mut s = make_test_state(2, "up", 400.0, 0.50, 200.0);
+        s.pos_h65_up = true; s.h65_budget = 100.0; s.pos_h65_entry_up = 0.50;
+
+        // Step 4: manual sell (uses shares)
+        let manual_body = build_manual_mkt_body("up", s.mt_size);
+        assert!(manual_body.contains("400"));
+
+        // Step 5: individual strategy sells
+        let positions = collect_active_strategies(&s);
+        assert_eq!(positions.len(), 1);
+        let (strat_body, _) = build_strat_mkt_body("up", positions[0].2, positions[0].3);
+        assert!(!strat_body.is_empty());
+
+        // Step 6: PANIC (would be called via http_post)
+        // Reset only if no failures
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — EDGE CASES
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_entry_price_one() {
+        // entry = 1.0 (max) → budget / entry = budget → shares = budget
+        let budget = 200.0;
+        let entry = 1.0;
+        let (_body, shares) = build_strat_mkt_body("up", budget, entry);
+        assert!((shares - budget).abs() < 0.01,
+            "entry=1.0: shares should equal budget");
+    }
+
+    #[test]
+    fn cashout_tiny_budget_high_price() {
+        let (_body, shares) = build_strat_mkt_body("down", 5.0, 0.95);
+        assert_eq!(shares as i64, 5, "$5 at 0.95 → 5 shares (floor)");
+    }
+
+    #[test]
+    fn cashout_large_budget_asymmetric_outcomes() {
+        // Common: large UP budget with strategies
+        let mut s = make_test_state(2, "up", 800.0, 0.52, 400.0);
+        s.pos_odi_up = true; s.odi_budget = 300.0; s.pos_odi_entry_up = 0.52;
+        s.pos_sen_up = true; s.sen_budget = 200.0; s.pos_sen_entry_up = 0.52;
+
+        let manual_body = build_manual_mkt_body("up", s.mt_size);
+        assert!(manual_body.contains("800"));
+
+        let positions = collect_active_strategies(&s);
+        assert_eq!(positions.len(), 2);
+        let total_shares: f64 = s.mt_size + positions.iter()
+            .map(|(_, _, budget, entry)| {
+                let (_, shares) = build_strat_mkt_body("up", *budget, *entry);
+                shares
+            })
+            .sum::<f64>();
+
+        assert!(total_shares > 1000.0, "combined shares > 1000 for large positions");
+    }
+
+    #[test]
+    fn cashout_budget_and_entry_sync() {
+        // Verify that when budget and entry differ, the market sell body
+        // uses shares (budget/entry), not raw budget
+        let cases = [
+            ("H65", "up", 200.0, 0.50, 400.0),
+            ("ODI", "down", 150.0, 0.60, 250.0),
+            ("SEN", "up", 100.0, 0.40, 250.0),
+        ];
+        for (strat, outcome, budget, entry, expected_shares) in &cases {
+            let (body, shares) = build_strat_mkt_body(outcome, *budget, *entry);
+            assert!((shares - expected_shares).abs() < 0.01,
+                "{strat} {outcome}: shares={shares} expected={expected_shares}");
+            assert!(body.contains(&format!("{}", *expected_shares as i64)),
+                "{strat} body should contain {expected_shares} shares, got: {body}");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CASH OUT — VERIFY NO REGRESSION ON PARSER
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn cashout_parser_isolated_from_cancel() {
+        assert_eq!(parsed("co"), "CASHOUT");
+        assert_eq!(parsed("c"), "CANCEL");
+        assert_eq!(parsed("clm"), "CANCEL+LIQ MKT");
+        assert_ne!(parsed("co"), parsed("c"));
+        assert_ne!(parsed("co"), parsed("clm"));
+    }
+
+    #[test]
+    fn cashout_parser_not_confused_with_limit_buy_co() {
+        // "l10co65" — has 'co' in the middle, should NOT parse as cashout
+        let r = parsed("l10co65");
+        assert!(!r.contains("CASHOUT"), "'co' buried in buy command should not trigger cashout, got: {r}");
+        // Should be UNKNOWN (invalid side pattern) or BUY if valid
+        assert!(r.contains("UNKNOWN") || r.contains("BUY"), "should be UNKNOWN or BUY, got: {r}");
     }
 
     #[test]

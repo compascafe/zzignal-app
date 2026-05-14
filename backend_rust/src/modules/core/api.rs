@@ -883,6 +883,8 @@ async fn cancel_all_orders(State(s): State<Arc<AppState>>) -> Json<Value> {
 #[derive(Deserialize)]
 struct PanicBody {
     outcome: Option<String>, // "up", "down", o ausente = ambos
+    amount_up: Option<f64>,
+    amount_down: Option<f64>,
 }
 
 async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>) -> Json<Value> {
@@ -904,12 +906,22 @@ async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>)
             "down" => Outcome::Down,
             _      => continue,
         };
-        // Vender 100 shares a mercado — cierra cualquier posicion abierta
-        info!("  Market SELL {outcome} × 100 shares");
+        let amount = match *outcome {
+            "up"   => body.amount_up.unwrap_or(0.0),
+            "down" => body.amount_down.unwrap_or(0.0),
+            _      => 0.0,
+        };
+        let shares = if amount > 0.0 { amount } else {
+            // Fallback: sell a generous amount to close any remaining position
+            // The monitor now sends individual market sells before PANIC,
+            // so this fallback only triggers for direct /p usage.
+            500.0
+        };
+        info!("  Market SELL {outcome} × {shares:.0} shares");
         let _ = s.cmd_tx.send(CmdMsg::PlaceMarketOrder {
             side: OrderSide::Sell,
             outcome: outcome_enum,
-            amount_usdc: 100.0,
+            amount_usdc: shares,
         });
     }
 
