@@ -638,7 +638,10 @@ async fn main() -> io::Result<()> {
                     if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
                 }
                 Some("hft_state") => {
-                    if let Some(ref hft) = msg.data { apply_hft_state(hft, &mut s); }
+                    if let Some(ref hft) = msg.data {
+                        apply_hft_state(hft, &mut s);
+                        commands::check_sl_trigger(&mut s).await;
+                    }
                 }
                 Some("book") => {
                     if let Some(ref book) = msg.book {
@@ -712,8 +715,9 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // Poll HFT (500ms)
-        if s.last_poll_hft.elapsed() > Duration::from_millis(500) {
+        // Poll HFT (100ms when SL active, 500ms otherwise)
+        let hft_interval = if s.mt_sl_price > 0.0 || s.mt_tsl_pct > 0.0 { 100 } else { 500 };
+        if s.last_poll_hft.elapsed() > Duration::from_millis(hft_interval) {
             s.last_poll_hft = Instant::now();
             if let Some(data) = http_get::<HftState>("/api/hft/latest").await {
                 let api_lat = s.last_api_ok.elapsed().as_millis() as u64;
