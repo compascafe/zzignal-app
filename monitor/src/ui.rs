@@ -106,8 +106,8 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
         Constraint::Length(5),     // indicators row 1 (S1..S6)
         Constraint::Length(5),     // indicators row 2 (S7..S12)
         Constraint::Length(3),     // manual trading status
-        Constraint::Length(8),     // orderbook depth
-        Constraint::Min(5),        // orders + positions + trade log
+        Constraint::Length(13),    // orderbook depth
+        Constraint::Min(3),        // orders + positions + trade log
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
