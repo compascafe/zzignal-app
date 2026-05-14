@@ -431,8 +431,8 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
 
     let secs = new_hft.secs_left;
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
-        s.book_up = api::BookDepth::default();
-        s.book_dn = api::BookDepth::default();
+        // DO NOT clear book_up/book_dn — they stay live from CLOB WS stream
+        // The book is continuous across sessions (same market)
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
         s.session_open_btc = new_hft.btc_price;
