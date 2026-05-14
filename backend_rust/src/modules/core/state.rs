@@ -43,6 +43,9 @@ pub struct LatestHftState {
     pub btc_acel: f64,
     pub btc_volatility: f64,  // EMA of |velocity| — micro-volatility indicator
     pub btc_volume_24h: f64,      // BTC 24h volume from Binance
+    pub btc_vol_1m: f64,         // real-time BTC volume in last 60s (aggTrade per-tick sum)
+    pub btc_vol_ses: f64,        // cumulative real BTC volume since session start
+    pub btc_vol: f64,            // latest per-tick BTC volume from aggTrade
     pub spoof: u8,
     pub dump_score: u8,
     pub ask_wall: u8,
@@ -81,6 +84,9 @@ pub struct AppState {
     pub balance:         RwLock<Option<f64>>,
     pub btc_price:       RwLock<Option<f64>>,
     pub btc_volume:      RwLock<f64>,
+    pub btc_vol_window:  RwLock<VecDeque<(i64, f64)>>, // (ts_ms, volume) for 60s rolling sum
+    pub btc_vol_1m:      RwLock<f64>,  // real-time BTC volume in last 60s
+    pub btc_vol_ses:     RwLock<f64>,  // cumulative real BTC volume since session start
     pub btc_open:        RwLock<Option<f64>>,
     pub trade_window_up:   RwLock<VecDeque<(f64,f64)>>, // (price, size) — last N UP trades with vol>=min_vol
     pub trade_window_dn:   RwLock<VecDeque<(f64,f64)>>, // last N DOWN trades
@@ -196,6 +202,9 @@ impl AppState {
             balance:           RwLock::new(None),
             btc_price:         RwLock::new(None),
             btc_volume:        RwLock::new(0.0),
+            btc_vol_window:    RwLock::new(VecDeque::with_capacity(256)),
+            btc_vol_1m:        RwLock::new(0.0),
+            btc_vol_ses:       RwLock::new(0.0),
             btc_open:          RwLock::new(None),
             trade_window_up:   RwLock::new(VecDeque::with_capacity(10)),
             trade_window_dn:   RwLock::new(VecDeque::with_capacity(10)),

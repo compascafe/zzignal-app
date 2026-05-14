@@ -142,8 +142,6 @@ struct State {
     // /man page
     pub show_man: bool,
     pub pulse_tick: u64,
-    pub btc_vol_session_start: f64,
-    pub btc_vol_history: VecDeque<(std::time::Instant, f64)>,
     pub btc_vol_1m: f64,  // BTC volume in last 60s
     pub btc_history: VecDeque<(f64, std::time::Instant)>,
     pub btc_velocity: f64,
@@ -265,8 +263,6 @@ impl State {
             alerts: Vec::new(),
             show_man: false,
             pulse_tick: 0,
-            btc_vol_session_start: 0.0,
-            btc_vol_history: VecDeque::with_capacity(150),
             btc_vol_1m: 0.0,
             btc_history: VecDeque::with_capacity(10),
             btc_velocity: 0.0,
@@ -711,10 +707,6 @@ async fn main() -> io::Result<()> {
             if let Some(data) = http_get::<BtcProviderInfo>("/api/btc/provider").await {
                 s.btc_provider = data.provider;
             }
-            // Track session start volume
-            if s.session_open_btc > 0.0 && s.btc_vol_session_start == 0.0 && s.hft.btc_volume_24h > 0.0 {
-                s.btc_vol_session_start = s.hft.btc_volume_24h;
-            }
         }
 
         // Poll HFT (500ms)
@@ -726,15 +718,8 @@ async fn main() -> io::Result<()> {
                 if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
                 s.last_api_ok = Instant::now();
                 apply_hft_state(&data, &mut s);
-                // Track 24h volume for 1-min delta
-                s.btc_vol_history.push_back((Instant::now(), data.btc_volume_24h));
-                if s.btc_vol_history.len() > 150 { s.btc_vol_history.pop_front(); }
-                let cutoff = Instant::now() - Duration::from_secs(60);
-                if let Some((_, v_old)) = s.btc_vol_history.iter().find(|(t,_)| *t <= cutoff)
-                    .or_else(|| s.btc_vol_history.front())
-                {
-                    s.btc_vol_1m = (data.btc_volume_24h - v_old).max(0.0);
-                }
+                // Use backend-computed real-time BTC volume (aggTrade per-tick sum)
+                s.btc_vol_1m = data.btc_vol_1m;
                 // Track CLOB prices for 30s momentum
                 if data.clob_trade_up > 0.0 {
                     s.clob_up_history.push_back((Instant::now(), data.clob_trade_up));

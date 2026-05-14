@@ -530,6 +530,18 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             state.tracking_state.push_volume(*event_time, *volume);
             state.tracking_state.track_price(*price, *event_time);
 
+            // Rolling 60s real BTC volume (aggTrade per-tick sum)
+            {
+                let mut window = state.btc_vol_window.write().await;
+                window.push_back((*event_time, *volume));
+                let cutoff = *event_time - 60_000;
+                while window.front().map_or(false, |(ts, _)| *ts < cutoff) {
+                    window.pop_front();
+                }
+                *state.btc_vol_1m.write().await = window.iter().map(|(_, v)| *v).sum();
+            }
+            *state.btc_vol_ses.write().await += *volume;
+
             let n = BTC_TICK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if n % 10 == 0 {
                 if let Err(e) = db::insert_btc_tick(state.db.as_ref(), *price).await {
@@ -937,6 +949,9 @@ async fn capture_combined(
         hft.btc_acel = rec.btc_acel;
         hft.btc_volatility = rec.btc_volatility;
         hft.btc_volume_24h = rec.binance_vol_24h;
+        hft.btc_vol = rec.btc_vol;
+        hft.btc_vol_1m = *state.btc_vol_1m.read().await;
+        hft.btc_vol_ses = *state.btc_vol_ses.read().await;
         hft.spoof = rec.spoofing_flag;
         hft.dump_score = rec.dump_score;
         hft.ask_wall = rec.ask_wall;

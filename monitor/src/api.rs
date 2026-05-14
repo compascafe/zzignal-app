@@ -114,6 +114,9 @@ pub struct HftState {
     pub btc_acel: f64,
     pub btc_volatility: f64,
     pub btc_volume_24h: f64,
+    pub btc_vol_1m: f64,       // real-time BTC volume in last 60s (aggTrade per-tick sum)
+    pub btc_vol_ses: f64,      // cumulative real BTC volume since session start
+    pub btc_vol: f64,           // latest per-tick BTC volume from aggTrade
     pub spoof: u8,
     pub dump_score: u8,
     pub ask_wall: u8,

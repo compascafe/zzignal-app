@@ -349,7 +349,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 
     // ── S3: BTC Δ vs SESSION OPEN (Binance) ──
-    // Reglas: [0,3] min → amarillo | (3,14] min → verde si >+50, amarillo [-50,+50], rojo si <-50
+    // Reglas: [0,7]s → amarillo | (7,14]s → verde +$50, amarillo [-50,+50], rojo -$50 | (14,fin] → amarillo
     let btc_ref = if s.btc_open > 0.0 { s.btc_open }
         else if s.session_open_btc > 0.0 { s.session_open_btc }
         else { s.btc };
@@ -358,11 +358,10 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
 
     let total_secs = 900; // 15-min session
     let elapsed = if s.hft.secs_left >= 0 { (total_secs - s.hft.secs_left).max(0) } else { 0 };
-    let elapsed_min = elapsed as f64 / 60.0;
 
-    let (s3_bg, s3_fg, s3_border) = if elapsed_min <= 3.0 {
+    let (s3_bg, s3_fg, s3_border) = if elapsed <= 7 {
         (Color::Yellow, Color::Black, Color::Yellow)
-    } else {
+    } else if elapsed <= 14 {
         if delta > 50.0 {
             (Color::Green, Color::Black, Color::Green)
         } else if delta >= -50.0 {
@@ -370,13 +369,11 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         } else {
             (Color::Red, Color::Black, Color::Red)
         }
+    } else {
+        (Color::Yellow, Color::Black, Color::Yellow)
     };
 
-    let s3_title = if elapsed_min <= 3.0 {
-        format!("S3 BTC Δ  [{:.0}m]", elapsed_min)
-    } else {
-        format!("S3 BTC Δ")
-    };
+    let s3_title = format!("S3 BTC Δ  [{:.0}s]", elapsed);
 
     f.render_widget(
         Paragraph::new(vec![
@@ -385,7 +382,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
                 format!("${:+.0}  {:+.1}%", delta, delta_pct),
                 Style::default().fg(s3_fg).add_modifier(b))),
             Line::from(Span::styled(
-                format!("min {:.0}/15  ref ${:.0}", elapsed_min, btc_ref),
+                format!("t{:.0}s/900  ref ${:.0}", elapsed, btc_ref),
                 Style::default().fg(s3_fg))),
         ]).block(Block::default().borders(Borders::ALL).title(s3_title)
             .border_style(Style::default().fg(s3_border))
@@ -400,9 +397,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let vel_color = if vel > 0.5 { Color::Green } else if vel < -0.5 { Color::Red } else { Color::Yellow };
 
     let vol_1m = s.btc_vol_1m;
-    let vol_ses = if s.hft.btc_volume_24h > s.btc_vol_session_start {
-        s.hft.btc_volume_24h - s.btc_vol_session_start
-    } else { 0.0 };
+    let vol_ses = s.hft.btc_vol_ses;
 
     f.render_widget(
         Paragraph::new(vec![
@@ -432,20 +427,20 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let total_bear = up_ask_v + dn_bid_v;  // asks on UP + bids on DN = bearish pressure
     let comb_imb = if total_bear > 0.0 { total_bull / total_bear } else { 1.0 };
     let (imb_bg, imb_fg, imb_border, imb_label) = if comb_imb > 1.15 {
-        (Color::Rgb(10, 40, 15), Color::Green, Color::Green, "▲ UP")
+        (Color::Rgb(0, 70, 0), Color::Black, Color::LightGreen, "▲ UP ▲")
     } else if comb_imb < 0.85 {
-        (Color::Rgb(40, 10, 10), Color::Red, Color::Red, "▼ DN")
+        (Color::Rgb(80, 0, 0), Color::Black, Color::LightRed, "▼ DN ▼")
     } else {
-        (Color::Reset, Color::Yellow, Color::Rgb(20, 30, 45), "—")
+        (Color::Rgb(30, 30, 45), Color::White, Color::Cyan, "— —")
     };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled("IMBALANCE", Style::default().fg(imb_fg).add_modifier(b))),
             Line::from(Span::styled(
-                format!("UP {up_imb:.2}x"), Style::default().fg(if up_imb > 1.1 { Color::Green } else if up_imb < 0.9 { Color::Red } else { Color::Yellow }))),
+                format!("UP {up_imb:.2}x"), Style::default().fg(if up_imb > 1.1 { Color::Green } else if up_imb < 0.9 { Color::Red } else { Color::Yellow }).add_modifier(b))),
             Line::from(Span::styled(
                 format!("{imb_label} DN {dn_imb:.2}x"),
-                Style::default().fg(imb_fg))),
+                Style::default().fg(imb_fg).add_modifier(b))),
         ]).block(Block::default().borders(Borders::ALL).title("S5 IMB")
             .border_style(Style::default().fg(imb_border))
             .style(Style::default().bg(imb_bg))),
@@ -458,9 +453,9 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(vec![
             Line::from(Span::styled("ABSORPTION", Style::default().fg(Color::Cyan).add_modifier(b))),
             Line::from(Span::styled(
-                format!("UP {:+.1}%", s.abs_up), Style::default().fg(abs_up_c).add_modifier(b))),
+                format!("UP {:+.3}%", s.abs_up), Style::default().fg(abs_up_c).add_modifier(b))),
             Line::from(Span::styled(
-                format!("DN {:+.1}%", s.abs_dn), Style::default().fg(abs_dn_c).add_modifier(b))),
+                format!("DN {:+.3}%", s.abs_dn), Style::default().fg(abs_dn_c).add_modifier(b))),
         ]).block(Block::default().borders(Borders::ALL).title("S6 ABS").border_style(Style::default().fg(Color::Rgb(20, 30, 45)))),
         cols[5]);
 }
