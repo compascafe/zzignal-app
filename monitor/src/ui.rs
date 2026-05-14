@@ -1186,9 +1186,12 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
         Line::from(vec![
             Span::styled("/4up65e70 ", Style::default().fg(Color::Green)),
             Span::styled("BUY+exit  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("/5g70 ", Style::default().fg(Color::Magenta)),
-            Span::styled("Gemini  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("/provider binance  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/sl5 /sl ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("stop-loss ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/nsl ", Style::default().fg(Color::DarkGray)),
+            Span::styled("off  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("/tsl2 ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled("trail stop  ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("SL:{sl_info} TSL:{tsl_info}", sl_info=sl_info, tsl_info=tsl_info), Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![

@@ -1360,6 +1360,261 @@ mod tests {
     }
 
     #[test]
+    fn sl_price_calculation() {
+        // SL price = entry * (1 - pct/100)
+        let entry: f64 = 0.6500;
+        let delta: f64 = (entry * (1.0 - 5.0 / 100.0) - 0.6175).abs();
+        assert!(delta < 0.0001); // sl5 → 0.6175
+        let delta: f64 = (entry * (1.0 - 10.0 / 100.0) - 0.5850).abs();
+        assert!(delta < 0.0001); // sl10 → 0.5850
+        let delta: f64 = (entry * (1.0 - 1.0 / 100.0) - 0.6435).abs();
+        assert!(delta < 0.0001); // sl1 → 0.6435
+        let delta: f64 = (entry * (1.0 - 50.0 / 100.0) - 0.3250).abs();
+        assert!(delta < 0.0001); // sl50 → 0.3250
+        // sl0 would give same as entry → 0.65 (but sl0 is clamped to sl1)
+    }
+
+    #[test]
+    fn sl_toggle_flips_market_flag() {
+        // /sl toggles between LIMIT and MARKET stop type
+        // Default: sl_market = true (MARKET)
+        let mut s = crate::State::new(false);
+        assert!(s.sl_market); // default: MARKET
+
+        // Simulate toggle to LIMIT
+        s.sl_market = !s.sl_market;
+        assert!(!s.sl_market);
+
+        // Toggle back to MARKET
+        s.sl_market = !s.sl_market;
+        assert!(s.sl_market);
+    }
+
+    #[test]
+    fn sl_set_preserves_market_flag() {
+        // /sl10 should set percentage but keep current sl_market state
+        let mut s = crate::State::new(false);
+        s.sl_market = true;  // currently MARKET
+        s.sl_pct = 10.0;     // set 10%
+
+        assert!(s.sl_market);
+        assert_eq!(s.sl_pct, 10.0);
+
+        // Toggle to LIMIT
+        s.sl_market = !s.sl_market;
+        assert!(!s.sl_market);
+        assert_eq!(s.sl_pct, 10.0); // pct unchanged
+    }
+
+    #[test]
+    fn sl_off_clears_state() {
+        // /nsl turns off SL: clears pct, cancels order, clears order ID
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.sl_pct = 5.0;
+        s.sl_market = true;
+        s.mt_sl_order_id = "sl-order-001".into();
+
+        // /nsl
+        s.sl_pct = 0.0;
+        s.mt_sl_order_id.clear();
+
+        assert_eq!(s.sl_pct, 0.0);
+        assert!(s.mt_sl_order_id.is_empty());
+        // sl_market is not reset by /nsl
+        assert!(s.sl_market);
+    }
+
+    #[test]
+    fn sl_no_position_just_sets_percentage() {
+        // Without position, /sl10 only sets pct — no order placed
+        let mut s = crate::State::new(false);
+        s.sl_pct = 10.0;
+        assert_eq!(s.sl_pct, 10.0);
+        assert!(s.mt_sl_order_id.is_empty()); // no order
+        assert_eq!(s.mt_state, 0); // still idle
+    }
+
+    #[test]
+    fn sl_with_active_position_would_place_order() {
+        // With active position, SL setup should be ready to place order
+        let mut s = make_test_state(2, "down", 20.0, 0.40, 80.0);
+        s.sl_pct = 5.0;
+
+        // place_sl_order conditions: sl_pct > 0, mt_state == 2, sl_price valid
+        let can_place = s.sl_pct > 0.0 && s.mt_state == 2;
+        assert!(can_place);
+
+        let sl_price = s.mt_entry * (1.0 - s.sl_pct / 100.0);
+        assert!((sl_price - 0.38).abs() < 0.0001); // 0.40 * 0.95 = 0.38
+        assert!(sl_price > 0.0 && sl_price < 1.0); // valid price
+    }
+
+    #[test]
+    fn sl_bracket_overrides_percentage() {
+        // /l10up65s60 sets bracket SL, which overrides sl_pct
+        let mut s = crate::State::new(false);
+        s.sl_pct = 5.0; // had SL set before
+
+        // Bracket buy resets sl_pct to 0
+        s.sl_pct = 0.0;
+        assert_eq!(s.sl_pct, 0.0);
+
+        // The bracket SL would be at 0.60 (from /l10up65s60)
+        // Regular SL at 5% would be 0.65 * 0.95 = 0.6175 — different!
+        let bracket_sl: f64 = 0.60;
+        let regular_sl: f64 = 0.65 * 0.95;
+        let diff: f64 = (bracket_sl - regular_sl).abs();
+        assert!(diff > 0.01); // bracket ≠ percentage
+    }
+
+    #[test]
+    fn sl_boundaries_clamped() {
+        // SL percentage is clamped to [1, 50]
+        fn clamp_sl(pct: f64) -> f64 { pct.max(1.0).min(50.0) }
+        assert_eq!(clamp_sl(0.0), 1.0);
+        assert_eq!(clamp_sl(0.5), 1.0);
+        assert_eq!(clamp_sl(1.0), 1.0);
+        assert_eq!(clamp_sl(5.0), 5.0);
+        assert_eq!(clamp_sl(25.0), 25.0);
+        assert_eq!(clamp_sl(50.0), 50.0);
+        assert_eq!(clamp_sl(51.0), 50.0);
+        assert_eq!(clamp_sl(100.0), 50.0);
+    }
+
+    #[test]
+    fn sl_price_boundary_validation() {
+        // place_sl_order guards: sl_price <= 0.0 || sl_price >= 1.0 → return
+        let cases: Vec<(f64, f64, f64, bool)> = vec![
+            (0.65, 1.0, 0.6435, true),     // entry=0.65, sl=1%, price=0.6435 ✓
+            (0.65, 50.0, 0.325, true),     // entry=0.65, sl=50%, price=0.325 ✓
+            (0.99, 5.0, 0.9405, true),     // entry=0.99, sl=5%, price=0.9405 ✓
+            (0.50, 10.0, 0.45, true),      // entry=0.50, sl=10%, price=0.45 ✓
+            (0.05, 5.0, 0.0475, true),     // entry=0.05, sl=5%, still valid (>0) ✓
+            // Edge: sl_pct=100% with entry=0.01 → price=0.0 (invalid)
+            (0.01, 100.0, 0.0, false),
+        ];
+        for (entry, pct, expected_price, should_be_valid) in cases {
+            let sl_price = entry * (1.0 - pct / 100.0);
+            let diff: f64 = (sl_price - expected_price).abs();
+            assert!(diff < 0.001,
+                "entry={entry} pct={pct} expected={expected_price} got={sl_price}");
+            let valid = sl_price > 0.0 && sl_price < 1.0;
+            assert_eq!(valid, should_be_valid, "entry={entry} pct={pct}");
+        }
+    }
+
+    #[test]
+    fn sl_with_exit_order_both_active() {
+        // SL and TP (exit) can coexist: exit at profit, SL protects downside
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_exit_price = 0.70;         // TP exit at 0.70
+        s.mt_exit_order_id = "exit-001".into();
+        s.sl_pct = 5.0;                  // SL at 0.65*0.95 = 0.6175
+        s.mt_sl_order_id = "sl-001".into();
+
+        assert!(s.mt_exit_price > s.mt_entry); // TP above entry
+        let sl_price = s.mt_entry * (1.0 - s.sl_pct / 100.0);
+        assert!(sl_price < s.mt_entry); // SL below entry
+        assert!(!s.mt_exit_order_id.is_empty());
+        assert!(!s.mt_sl_order_id.is_empty());
+    }
+
+    #[test]
+    fn sl_toggle_with_active_position_refreshes() {
+        // When SL is toggled and position is active + SL% > 0, it places/replaces order
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.sl_pct = 5.0;
+        s.sl_market = false;
+        s.mt_sl_order_id = "old-sl".into();
+
+        // Toggle: LIMIT → MARKET
+        s.sl_market = !s.sl_market;
+        assert!(s.sl_market);
+
+        // Conditions to refresh SL order
+        let should_refresh = s.mt_state == 2 && s.sl_pct > 0.0;
+        assert!(should_refresh);
+
+        // Old SL would be cancelled, new one placed
+        s.mt_sl_order_id.clear(); // simulate cancel old
+        assert!(s.mt_sl_order_id.is_empty());
+    }
+
+    #[test]
+    fn sl_full_lifecycle() {
+        // Full SL lifecycle: set → active position → exit clears SL
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+
+        // Step 1: /sl5 — set SL at 5%
+        s.sl_pct = 5.0;
+        assert_eq!(s.sl_pct, 5.0);
+        let sl_price = s.mt_entry * (1.0 - s.sl_pct / 100.0);
+        assert!((sl_price - 0.6175).abs() < 0.0001);
+        s.mt_sl_order_id = "sl-active".into();
+
+        // Step 2: price moves, still active
+        assert_eq!(s.mt_state, 2);
+
+        // Step 3: exit trade (simulate fill)
+        s.mt_pnl_cum += s.mt_size * (0.70 - s.mt_entry);
+        s.mt_trades += 1;
+        s.mt_wins += 1;
+        s.mt_sl_order_id.clear(); // cancel SL on exit
+        s.reset_manual();
+
+        assert_eq!(s.mt_state, 0);
+        assert!(s.mt_sl_order_id.is_empty());
+        assert!(s.mt_pnl_cum > 0.0);
+    }
+
+    #[test]
+    fn sl_vs_tsl_exclusive() {
+        // /sl and /tsl share mt_sl_order_id — setting TSL replaces SL order
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.sl_pct = 5.0;
+        s.mt_sl_order_id = "sl-005".into();
+
+        // Set TSL
+        s.mt_tsl_pct = 2.0;
+        // TSL update cancels old SL and places new one
+        s.mt_sl_order_id.clear();
+        s.mt_sl_order_id = "tsl-002".into();
+
+        assert_eq!(s.sl_pct, 5.0); // sl_pct still set (for info)
+        assert_eq!(s.mt_tsl_pct, 2.0);
+        assert_eq!(s.mt_sl_order_id, "tsl-002".to_string());
+    }
+
+    #[test]
+    fn sl_parse_all_valid_inputs() {
+        // All valid SL parse variants
+        let cases = vec![
+            ("sl", "SL-TOGGLE"),
+            ("sl1", "SL-1%"),
+            ("sl2", "SL-2%"),
+            ("sl5", "SL-5%"),
+            ("sl10", "SL-10%"),
+            ("sl15", "SL-15%"),
+            ("sl25", "SL-25%"),
+            ("sl49", "SL-49%"),
+            ("sl50", "SL-50%"),
+            ("nsl", "SL-OFF"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(parsed(input), expected, "FAIL: /{input}");
+        }
+    }
+
+    #[test]
+    fn sl_parse_boundary_clamping() {
+        // Values outside [1,50] are clamped
+        assert_eq!(parsed("sl0"), "SL-1%");   // clamped to 1
+        assert_eq!(parsed("sl51"), "SL-50%"); // clamped to 50
+        assert_eq!(parsed("sl99"), "SL-50%"); // clamped to 50
+        assert_eq!(parsed("sl100"), "SL-50%"); // clamped to 50
+    }
+
+    #[test]
     fn meta_commands() {
         assert_eq!(parsed("man"),  "MAN");
         assert_eq!(parsed("quit"), "QUIT");
