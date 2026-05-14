@@ -659,36 +659,31 @@ async fn exec_cancel_liq(outcome: String, price_opt: Option<f64>, market: bool, 
 async fn exec_sl_toggle(s: &mut State) {
     s.sl_market = !s.sl_market;
     s.add_log(format!("SL: {} {}", if s.sl_market {"MARKET"}else{"LIMIT"}, if s.sl_pct > 0.0 {format!("{}%", s.sl_pct)}else{"OFF".into()}), Color::Yellow);
-
-    // Refresh SL order if position is active
-    if s.mt_state == 2 && s.sl_pct > 0.0 {
-        place_sl_order(s).await;
-    }
 }
 
 async fn exec_sl_set(pct: f64, s: &mut State) {
     s.sl_pct = pct;
-    s.add_log(format!("SL: {}% {}", s.sl_pct, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
-    s.add_trade_log(format!("🛡 SL {:.0}% {}", pct, if s.sl_market {"MKT"}else{"LMT"}), Color::Yellow);
-
-    if s.mt_state == 2 {
-        place_sl_order(s).await;
+    // Compute stop-market trigger price
+    if s.mt_state == 2 && s.mt_entry > 0.0 {
+        s.mt_sl_price = if s.mt_outcome == "up" {
+            s.mt_entry * (1.0 - s.sl_pct / 100.0)
+        } else {
+            s.mt_entry * (1.0 + s.sl_pct / 100.0)
+        };
+        s.add_log(format!("▶ SL {:.0}% trigger @{:.4} ({} side)", pct, s.mt_sl_price, s.mt_outcome.to_uppercase()), Color::Yellow);
+        s.add_trade_log(format!("🛡 SL {:.0}% @{:.4}", pct, s.mt_sl_price), Color::Yellow);
+    } else {
+        s.mt_sl_price = 0.0;
+        s.add_log(format!("SL: {:.0}% {} (sin posicion activa)", pct, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
+        s.add_trade_log(format!("🛡 SL {:.0}% {}", pct, if s.sl_market {"MKT"}else{"LMT"}), Color::Yellow);
     }
 }
 
 async fn exec_sl_off(s: &mut State) {
     s.sl_pct = 0.0;
+    s.mt_sl_price = 0.0;
     s.add_log("SL: OFF — sin stop loss".to_string(), Color::DarkGray);
     s.add_trade_log("🛡 SL OFF".to_string(), Color::DarkGray);
-
-    if !s.mt_sl_order_id.is_empty() {
-        if let Err(e) = http_delete(&format!("/api/orders/{}", s.mt_sl_order_id)).await {
-            s.add_log(format!("Cancel SL FAIL: {}", e), Color::Red);
-        } else {
-            s.add_log("SL cancelado".to_string(), Color::Green);
-        }
-        s.mt_sl_order_id.clear();
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -808,6 +803,68 @@ pub async fn place_sl_order(s: &mut State) {
 // FILL TRACKER — called from main.rs on each orders poll
 // ═══════════════════════════════════════════════════════════════════
 
+fn setup_sl_after_fill(s: &mut State) {
+    if s.sl_pct > 0.0 && s.mt_entry > 0.0 {
+        s.mt_sl_price = if s.mt_outcome == "up" {
+            s.mt_entry * (1.0 - s.sl_pct / 100.0)
+        } else {
+            s.mt_entry * (1.0 + s.sl_pct / 100.0)
+        };
+        s.add_log(format!("🛡 SL activado: {:.0}% trigger @{:.4}", s.sl_pct, s.mt_sl_price), Color::Yellow);
+        s.add_trade_log(format!("🛡 SL {:.0}% @{:.4}", s.sl_pct, s.mt_sl_price), Color::Yellow);
+    }
+}
+
+pub async fn check_sl_trigger(s: &mut State) {
+    if s.mt_sl_price <= 0.0 || s.mt_state != 2 { return; }
+
+    let current_px = if s.mt_outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+    if current_px <= 0.0 { return; }
+
+    let triggered = if s.mt_outcome == "up" {
+        current_px <= s.mt_sl_price
+    } else {
+        current_px >= s.mt_sl_price
+    };
+
+    if !triggered { return; }
+
+    s.add_log(format!("⚠ SL TRIGGERED! {} @{:.4} (SL:{:.4}) → market sell",
+        s.mt_outcome.to_uppercase(), current_px, s.mt_sl_price), Color::Red);
+    s.add_trade_log(format!("🛑 SL HIT {} current={:.4} SL={:.4}",
+        s.mt_outcome.to_uppercase(), current_px, s.mt_sl_price), Color::Red);
+
+    // Cancel ALL orders to clear the deck
+    let _ = http_delete("/api/orders").await;
+
+    // Market sell the position
+    let outcome = s.mt_outcome.clone();
+    let pnl = s.mt_size * (current_px - s.mt_entry);
+    let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
+        outcome, s.mt_budget);
+
+    match http_post("/api/orders/market", &body).await {
+        Ok(()) => {
+            s.mt_pnl_cum += pnl;
+            s.mt_trades += 1;
+            if pnl >= 0.0 { s.mt_wins += 1; }
+            let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
+            s.add_log(format!("  ✓ SL EXIT {} PnL:{:+.2} Σ{:+.2}",
+                outcome.to_uppercase(), pnl, s.mt_pnl_cum), pnl_c);
+            s.add_trade_log(format!("🛑 SL EXIT {} sz={:.0} PnL:{:+.2}",
+                outcome.to_uppercase(), s.mt_size, pnl), pnl_c);
+        }
+        Err(e) => {
+            s.add_log(format!("❌ SL market sell FAIL: {}", e), Color::Red);
+            s.add_trade_log(format!("✗ SL market sell FAIL: {}", e), Color::Red);
+        }
+    }
+
+    // Reset position state
+    s.mt_sl_price = 0.0;
+    s.reset_manual();
+}
+
 pub async fn track_manual_fills(s: &mut State) {
     if s.mt_state == 1 {
         let order_info: Option<(String, f64, f64, f64, bool, bool)> = {
@@ -838,6 +895,7 @@ pub async fn track_manual_fills(s: &mut State) {
                 let budget = s.mt_budget;
                 let sz = size_matched;
                 s.mt_state = 2;
+                setup_sl_after_fill(s);
                 s.mt_size = sz;
                 s.add_log(format!("▲ FILLED {} @{:.4} sz={:.0} ${:.2}",
                     outcome_up.to_uppercase(), entry, sz, budget), Color::Green);
@@ -851,6 +909,7 @@ pub async fn track_manual_fills(s: &mut State) {
         } else if s.mt_order_seen {
             // Was seen, now gone → filled
             s.mt_state = 2;
+            setup_sl_after_fill(s);
             let outcome = s.mt_outcome.clone();
             let entry = s.mt_entry;
             let sz = s.mt_size;
@@ -866,6 +925,7 @@ pub async fn track_manual_fills(s: &mut State) {
         } else {
             // Not seen for >3s → filled silently (fast fill between polls)
             s.mt_state = 2;
+            setup_sl_after_fill(s);
             let outcome = s.mt_outcome.clone();
             let entry = s.mt_entry;
             let sz = s.mt_size;
@@ -975,12 +1035,9 @@ async fn exec_tsl_set(pct: f64, s: &mut State) {
 
 async fn exec_tsl_off(s: &mut State) {
     s.mt_tsl_pct = 0.0;
+    s.mt_sl_price = 0.0;
     s.add_log("TSL: OFF".to_string(), Color::DarkGray);
     s.add_trade_log("📈 TSL OFF".to_string(), Color::DarkGray);
-    if !s.mt_sl_order_id.is_empty() {
-        let _ = http_delete(&format!("/api/orders/{}", s.mt_sl_order_id)).await;
-        s.mt_sl_order_id.clear();
-    }
 }
 
 pub async fn update_trailing_stop(s: &mut State) {
@@ -1004,24 +1061,8 @@ pub async fn update_trailing_stop(s: &mut State) {
     if s.mt_outcome == "up" { s.mt_tsl_high = new_extreme; } else { s.mt_tsl_low = new_extreme; }
 
     if changed {
-        // Cancel old + place new SL
-        if !s.mt_sl_order_id.is_empty() {
-            let _ = http_delete(&format!("/api/orders/{}", s.mt_sl_order_id)).await;
-            s.mt_sl_order_id.clear();
-        }
-        let body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#,
-            s.mt_outcome, new_sl_price, s.mt_size);
-        match http_post_result::<OrderPlaced>("/api/orders/limit", &body).await {
-            Ok(placed) => {
-                s.mt_sl_order_id = placed.id.clone();
-                s.add_log(format!("📈 TSL {}→SL @{:.4}",
-                    if s.mt_outcome=="up" { format!("{:.4}", s.mt_tsl_high) } else { format!("{:.4}", s.mt_tsl_low) },
-                    new_sl_price), Color::Magenta);
-            }
-            Err(e) => {
-                s.add_log(format!("TSL FAIL: {}", e), Color::Red);
-            }
-        }
+        s.mt_sl_price = new_sl_price;
+        s.add_trade_log(format!("📈 TSL → @{:.4}", new_sl_price), Color::Magenta);
     }
 }
 

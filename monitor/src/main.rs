@@ -128,6 +128,7 @@ struct State {
     pub last_order_id: String,   // for /u undo
     pub last_order_type: String, // "buy"/"sell"/"exit"
     pub mt_sl_order_id: String,
+    pub mt_sl_price: f64,        // stop-market trigger price (0=disabled)
 
     // Clean trade log
     pub trade_log: VecDeque<TradeLogEntry>,
@@ -254,6 +255,7 @@ impl State {
             mt_pnl_cum: 0.0, mt_trades: 0, mt_wins: 0,
             mt_last_fill_pct: 0.0,
             mt_sl_order_id: String::new(),
+            mt_sl_price: 0.0,
             mt_tsl_pct: 0.0, mt_tsl_high: 0.0, mt_tsl_low: 1.0,
             mt_fill_avg: 0.0, mt_fill_count: 0,
             last_order_id: String::new(), last_order_type: String::new(),
@@ -308,6 +310,7 @@ impl State {
         self.mt_order_id.clear();
         self.mt_exit_order_id.clear();
         self.mt_sl_order_id.clear();
+        self.mt_sl_price = 0.0;
         self.mt_order_seen = false;
         self.mt_exit_order_seen = false;
         self.mt_last_fill_pct = 0.0;
@@ -758,6 +761,7 @@ async fn main() -> io::Result<()> {
                 s.prev_bid_up = best_bid_up; s.prev_ask_up = best_ask_up;
                 s.prev_bid_dn = best_bid_dn; s.prev_ask_dn = best_ask_dn;
                 commands::update_trailing_stop(&mut s).await;
+                commands::check_sl_trigger(&mut s).await;
                 commands::check_alerts(&mut s);
             }
         }
