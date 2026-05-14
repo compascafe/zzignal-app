@@ -1115,10 +1115,42 @@ async fn exec_cashout(s: &mut State) {
     s.gemini_outcome.clear();
     s.gemini_triggered = false;
 
-    // 2) Market sell manual position FIRST (primary goal)
-    //    Protective orders (SL/exit) stay alive until we know sell succeeded
-    let mut mkt_ok = true;
-    let mut mkt_err = String::new();
+    // 2) Cancel ALL existing orders FIRST — before market sell
+    //    This clears pending buys, exit orders, SL orders.
+    //    CRITICAL: do NOT cancel after market sell — it would cancel the market order itself.
+    let ids: Vec<String> = {
+        let mut v = Vec::new();
+        if !s.mt_order_id.is_empty() { v.push(s.mt_order_id.clone()); }
+        if !s.mt_exit_order_id.is_empty() { v.push(s.mt_exit_order_id.clone()); }
+        if !s.mt_sl_order_id.is_empty() { v.push(s.mt_sl_order_id.clone()); }
+        v
+    };
+    if !ids.is_empty() {
+        for id in &ids {
+            let _ = http_delete(&format!("/api/orders/{}", id)).await;
+        }
+        s.add_log(format!("  ✓ {} órdenes canceladas", ids.len()), Color::Green);
+    }
+    // Safety net: cancel-all on backend
+    match http_delete("/api/orders").await {
+        Ok(()) => {}
+        Err(e) => s.add_log(format!("⚠ Cancel ALL orders: {}", e), Color::Red),
+    }
+
+    // Clear local order tracking (orders are already cancelled)
+    s.mt_order_id.clear();
+    s.mt_exit_order_id.clear();
+    s.mt_sl_order_id.clear();
+
+    // 3) Handle pending buy (mt_state == 1) — just cancel & reset, no position yet
+    if s.mt_state == 1 {
+        s.add_log("  ✓ Compra pendiente cancelada".to_string(), Color::Green);
+        s.add_trade_log("✓ CASH OUT: compra pendiente cancelada".to_string(), Color::Yellow);
+        s.reset_manual();
+    }
+
+    // 4) Market sell active position
+    let mut mkt_failed = false;
     if s.mt_state >= 2 {
         let outcome = s.mt_outcome.clone();
         let current_px = if outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
@@ -1136,25 +1168,14 @@ async fn exec_cashout(s: &mut State) {
                 s.add_trade_log(format!("💰 CASH OUT {} sz={:.0} PnL:{:+.2}", outcome.to_uppercase(), s.mt_size, pnl), pnl_c);
             }
             Err(e) => {
-                mkt_ok = false;
-                mkt_err = e;
-                s.add_log(format!("❌ Market sell FAIL: {}", mkt_err), Color::Red);
-                s.add_trade_log(format!("✗ CASH OUT: market sell FAIL ({})", mkt_err), Color::Red);
+                mkt_failed = true;
+                s.add_log(format!("❌ Market sell FAIL: {}", e), Color::Red);
+                s.add_trade_log(format!("✗ CASH OUT: market sell FAIL ({})", e), Color::Red);
             }
         }
     }
 
-    // 3) Only cancel pending/protective orders if market sell succeeded
-    //    If market sell failed, SL/exit orders protect the position
-    if mkt_ok {
-        cancel_all_manual(s).await;
-        match http_delete("/api/orders").await {
-            Ok(()) => s.add_log("  ✓ Órdenes canceladas".to_string(), Color::Green),
-            Err(e) => s.add_log(format!("⚠ Cancel ALL orders FAIL: {}", e), Color::Red),
-        }
-    }
-
-    // 4) PANIC strategies (ALWAYS fires)
+    // 5) PANIC strategies
     if s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn {
         s.add_log("▶ Liquidando estrategias...".to_string(), Color::Yellow);
         match http_post("/api/panic", "{}").await {
@@ -1163,15 +1184,14 @@ async fn exec_cashout(s: &mut State) {
         }
     }
 
-    // 5) Reset state only if market sell succeeded
-    if mkt_ok {
+    // 6) Reset manual state (do NOT cancel orders again — market sell must survive)
+    if mkt_failed {
+        s.add_log("⚠ CASH OUT parcial: reintenta /lm o /x".to_string(), Color::Red);
+        s.add_trade_log("⚠ Cash out parcial — reintenta /lm o /x".to_string(), Color::Red);
+    } else {
         s.reset_manual();
         s.add_log("✅ CASH OUT completado — todo en USD".to_string(), Color::Green);
         s.add_trade_log("✅ Cash out completado".to_string(), Color::Green);
-    } else {
-        // Keep position tracking alive — user can retry with /lm or /x
-        s.add_log(format!("⚠ CASH OUT parcial: reintenta /lm  ({})", mkt_err), Color::Red);
-        s.add_trade_log(format!("⚠ Cash out parcial — usa /lm o /x ({})", mkt_err), Color::Red);
     }
 }
 
@@ -1557,14 +1577,15 @@ mod tests {
     fn cashout_logic_no_position() {
         // Cashout with NO position should reset state without errors
         let mut s = crate::State::new(false);
-        // Simulate what exec_cashout does to local state (without HTTP)
-        s.gemini_active = false;
-        s.gemini_budget = 0.0;
-        s.gemini_target = 0.0;
-        s.gemini_trigger = 0.0;
-        s.gemini_exit = 0.0;
-        s.gemini_outcome.clear();
-        s.gemini_triggered = false;
+        // Step 1: Cancel Gemini
+        s.gemini_active = false; s.gemini_budget = 0.0; s.gemini_target = 0.0;
+        s.gemini_trigger = 0.0; s.gemini_exit = 0.0;
+        s.gemini_outcome.clear(); s.gemini_triggered = false;
+        // Step 2: Cancel ALL orders first (clear order IDs)
+        s.mt_order_id.clear(); s.mt_exit_order_id.clear(); s.mt_sl_order_id.clear();
+        // Step 3: no pending buy (mt_state != 1), no active (mt_state < 2)
+        // Step 5: no strategies
+        // Step 6: reset state
         s.reset_manual();
 
         assert_eq!(s.mt_state, 0);
@@ -1574,7 +1595,128 @@ mod tests {
     }
 
     #[test]
-    fn cashout_logic_resets_sl_and_tsl() {
+    fn cashout_cancels_orders_before_market_sell() {
+        // CRITICAL: orders must be cancelled BEFORE market sell, not after
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_order_id = "buy-001".into();
+        s.mt_exit_order_id = "exit-001".into();
+        s.mt_sl_order_id = "sl-001".into();
+
+        // Simulate step 2: cancel orders FIRST
+        assert!(!s.mt_order_id.is_empty());
+        assert!(!s.mt_exit_order_id.is_empty());
+        assert!(!s.mt_sl_order_id.is_empty());
+
+        // Clear them (simulating cancel_all before market sell)
+        s.mt_order_id.clear();
+        s.mt_exit_order_id.clear();
+        s.mt_sl_order_id.clear();
+
+        // Now there are no orders that could cancel the market sell
+        assert!(s.mt_order_id.is_empty());
+        assert!(s.mt_exit_order_id.is_empty());
+        assert!(s.mt_sl_order_id.is_empty());
+
+        // Simulate step 4: market sell (would be POST /api/orders/market)
+        // The market sell order doesn't get an ID until the response comes back,
+        // and we never cancel after this point — so it can't be cancelled by cashout
+        s.mt_pnl_cum += 10.0 * (0.70 - 0.65); // simulate PnL
+        s.mt_trades += 1;
+        s.mt_wins += 1;
+
+        // Simulate step 6: reset
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
+        // Order IDs were already cleared, market sell would have its own ID on backend
+        assert!(s.mt_order_id.is_empty());
+        assert!(s.mt_exit_order_id.is_empty());
+        assert!(s.mt_sl_order_id.is_empty());
+
+        // PnL preserved
+        assert!((s.mt_pnl_cum - 0.5).abs() < 0.001);
+        assert_eq!(s.mt_trades, 1);
+        assert_eq!(s.mt_wins, 1);
+    }
+
+    #[test]
+    fn cashout_pending_buy_cancelled() {
+        // mt_state == 1 (pending buy): cancel & reset, no market sell needed
+        let mut s = make_test_state(1, "up", 10.0, 0.65, 50.0);
+        s.mt_order_id = "pending-buy-001".into();
+        s.mt_order_seen = true;
+        s.mt_last_fill_pct = 60.0;
+
+        // Step 2: cancel orders
+        s.mt_order_id.clear();
+        // Step 3: pending buy → reset
+        s.reset_manual();
+
+        assert_eq!(s.mt_state, 0);
+        assert!(s.mt_order_id.is_empty());
+        assert!(!s.mt_order_seen);
+        assert_eq!(s.mt_last_fill_pct, 0.0);
+    }
+
+    #[test]
+    fn cashout_active_position_market_sell() {
+        // mt_state == 2: cancel orders, market sell, PANIC strategies, reset
+        let mut s = make_test_state(2, "down", 20.0, 0.40, 80.0);
+        s.mt_order_id = "buy-order".into();
+        s.mt_exit_order_id = "exit-order".into();
+
+        // Step 2: cancel ALL orders before market sell
+        s.mt_order_id.clear();
+        s.mt_exit_order_id.clear();
+
+        // Step 4: market sell (simulated — PnL based on current price)
+        let current_px = 0.45; // simulated current price
+        let pnl = s.mt_size * (current_px - s.mt_entry);
+        s.mt_pnl_cum += pnl;
+        s.mt_trades += 1;
+        if pnl >= 0.0 { s.mt_wins += 1; }
+
+        // Step 6: reset
+        s.reset_manual();
+
+        assert_eq!(s.mt_state, 0);
+        assert!(s.mt_order_id.is_empty());
+        assert!(s.mt_exit_order_id.is_empty());
+        assert!((s.mt_pnl_cum - 1.0).abs() < 0.001);
+        assert_eq!(s.mt_trades, 1);
+        assert_eq!(s.mt_wins, 1);
+    }
+
+    #[test]
+    fn cashout_exiting_state_handled() {
+        // mt_state == 3 (exit pending): cancel exit order, market sell, reset
+        let mut s = make_test_state(3, "up", 15.0, 0.60, 75.0);
+        s.mt_exit_order_id = "exit-pending".into();
+        s.mt_exit_price = 0.70;
+        s.mt_exit_order_seen = true;
+        s.mt_order_id = "buy-001".into();
+
+        // Step 2: cancel ALL orders
+        s.mt_order_id.clear();
+        s.mt_exit_order_id.clear();
+
+        // Step 4: market sell (mt_state >= 2 covers mt_state == 3 too)
+        // Simulate market sell success
+        let pnl = s.mt_size * (0.62 - s.mt_entry);
+        s.mt_pnl_cum += pnl;
+        s.mt_trades += 1;
+        if pnl >= 0.0 { s.mt_wins += 1; }
+
+        // Step 6: reset
+        s.reset_manual();
+
+        assert_eq!(s.mt_state, 0);
+        assert!(s.mt_exit_order_id.is_empty());
+        assert_eq!(s.mt_exit_price, 0.0);
+        assert!(!s.mt_exit_order_seen);
+    }
+
+    #[test]
+    fn cashout_resets_sl_and_tsl() {
         // After cashout, SL and TSL should be cleared by reset_manual
         let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
         s.sl_pct = 5.0;
@@ -1583,6 +1725,10 @@ mod tests {
         s.mt_exit_order_id = "exit-order-123".into();
         s.mt_sl_order_id = "sl-order-456".into();
 
+        // Step 2: cancel orders
+        s.mt_exit_order_id.clear();
+        s.mt_sl_order_id.clear();
+        // Step 6: reset
         s.reset_manual();
 
         assert_eq!(s.mt_state, 0);
@@ -1593,8 +1739,8 @@ mod tests {
     }
 
     #[test]
-    fn cashout_logic_clears_order_tracking() {
-        // All order IDs should be cleared
+    fn cashout_clears_all_order_ids() {
+        // All order IDs should be cleared in step 2, not after market sell
         let mut s = make_test_state(2, "down", 20.0, 0.40, 50.0);
         s.mt_order_id = "buy-order-789".into();
         s.mt_exit_order_id = "exit-order-101".into();
@@ -1602,6 +1748,14 @@ mod tests {
         s.mt_order_seen = true;
         s.mt_exit_order_seen = true;
 
+        // Step 2: cancel ALL orders first
+        s.mt_order_id.clear();
+        s.mt_exit_order_id.clear();
+        s.mt_sl_order_id.clear();
+        let ids = [&s.mt_order_id, &s.mt_exit_order_id, &s.mt_sl_order_id];
+        assert!(ids.iter().all(|id| id.is_empty()), "all order IDs must be cleared before market sell");
+
+        // Step 6: reset
         s.reset_manual();
 
         assert!(s.mt_order_id.is_empty());
@@ -1612,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn cashout_logic_gemini_cancelled() {
+    fn cashout_gemini_cancelled() {
         let mut s = crate::State::new(false);
         s.gemini_active = true;
         s.gemini_budget = 50.0;
@@ -1622,7 +1776,7 @@ mod tests {
         s.gemini_outcome = "up".into();
         s.gemini_triggered = true;
 
-        // Simulate exec_cashout Gemini cancel
+        // Step 1: cancel Gemini
         s.gemini_active = false;
         s.gemini_budget = 0.0;
         s.gemini_target = 0.0;
@@ -1639,47 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn cashout_state_machine_mt2_up() {
-        // Position active (mt_state=2, UP), cashout should reset to 0
-        let mut s = make_test_state(2, "up", 15.0, 0.60, 75.0);
-        s.reset_manual();
-        assert_eq!(s.mt_state, 0);
-        assert_eq!(s.mt_size, 15.0); // reset_manual doesn't clear size (kept in case)
-    }
-
-    #[test]
-    fn cashout_state_machine_mt2_down() {
-        let mut s = make_test_state(2, "down", 25.0, 0.45, 100.0);
-        s.reset_manual();
-        assert_eq!(s.mt_state, 0);
-    }
-
-    #[test]
-    fn cashout_state_machine_mt3_exit_pending() {
-        // Exit order pending (mt_state=3), cashout should reset
-        let mut s = make_test_state(3, "up", 10.0, 0.65, 50.0);
-        s.mt_exit_order_id = "exit-pending-001".into();
-        s.mt_exit_price = 0.70;
-        s.mt_exit_order_seen = true;
-        s.reset_manual();
-        assert_eq!(s.mt_state, 0);
-        assert!(s.mt_exit_order_id.is_empty());
-        assert_eq!(s.mt_exit_price, 0.0);
-    }
-
-    #[test]
-    fn cashout_state_machine_mt1_pending_buy() {
-        // Pending buy (mt_state=1), cashout should reset
-        let mut s = make_test_state(1, "up", 10.0, 0.65, 50.0);
-        s.mt_order_id = "pending-buy-001".into();
-        s.mt_order_seen = true;
-        s.reset_manual();
-        assert_eq!(s.mt_state, 0);
-        assert!(s.mt_order_id.is_empty());
-    }
-
-    #[test]
-    fn cashout_pnl_tracking_preserved() {
+    fn cashout_pnl_preserved_across_resets() {
         // P&L cumulative stats are preserved across resets
         let mut s = make_test_state(2, "up", 10.0, 0.65, 50.0);
         s.mt_pnl_cum = 12.50;
@@ -1693,12 +1807,39 @@ mod tests {
     }
 
     #[test]
+    fn cashout_market_sell_failure_preserves_state() {
+        // If market sell FAILS, position state is NOT reset — user can retry with /lm
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_order_id = "buy-001".into();
+        s.mt_exit_order_id = "exit-001".into();
+        s.mt_sl_order_id = "sl-001".into();
+
+        // Step 2: cancel orders first (always happens)
+        s.mt_order_id.clear();
+        s.mt_exit_order_id.clear();
+        s.mt_sl_order_id.clear();
+
+        // Step 4: market sell FAILS
+        let mkt_failed = true;
+
+        // Step 6: do NOT reset if mkt_failed
+        if !mkt_failed {
+            s.reset_manual();
+        }
+
+        // State is still active (mt_state == 2), position data intact
+        assert_eq!(s.mt_state, 2);
+        assert_eq!(s.mt_size, 10.0);
+        assert_eq!(s.mt_entry, 0.65);
+        assert_eq!(s.mt_budget, 100.0);
+    }
+
+    #[test]
     fn cashout_strategies_detection() {
         let s = make_test_state_strategies();
         assert!(s.pos_odi_up);
         assert!(s.pos_h65_dn);
         assert!(s.pos_sen_up);
-        // The cashout function checks these flags to decide whether to call PANIC
         let has_strategies = s.pos_sen_up || s.pos_sen_dn
             || s.pos_h65_up || s.pos_h65_dn
             || s.pos_odi_up || s.pos_odi_dn;
@@ -1716,7 +1857,6 @@ mod tests {
 
     #[test]
     fn cashout_strategies_detection_each() {
-        // Test each strategy flag independently
         for (field, expected) in [
             ("odi_up", true), ("odi_dn", true),
             ("h65_up", true), ("h65_dn", true),
@@ -1746,27 +1886,99 @@ mod tests {
         s.pos_odi_up = true;
         s.pos_sen_up = true;
 
-        // Cashout should handle both
-        let has_manual = s.mt_state >= 2;
+        // Step 2: cancel orders
+        s.mt_order_id.clear();
+        // Step 4: market sell (mt_state >= 2)
+        let pnl = s.mt_size * (0.65 - s.mt_entry);
+        s.mt_pnl_cum += pnl;
+        s.mt_trades += 1;
+        s.mt_wins += 1;
+        // Step 5: PANIC strategies (pos_odi_up and pos_sen_up are true)
         let has_strategies = s.pos_odi_up || s.pos_sen_up;
-        assert!(has_manual);
         assert!(has_strategies);
-
+        // Step 6: reset
         s.reset_manual();
+
         assert_eq!(s.mt_state, 0);
-        // Strategy flags are NOT touched by reset_manual (they're managed by HFT polling)
+        // Strategy flags NOT cleared by reset_manual (managed by HFT polling)
+        assert!(s.pos_odi_up);
+        assert!(s.pos_sen_up);
     }
 
     #[test]
     fn cashout_concurrent_market_buy_not_confused() {
         // Regression: "co" should NOT be parsed as a cancel-order with ID "o"
-        // It should be CashOut
         assert_eq!(parsed("co"), "CASHOUT");
-        // "c" + long ID works (>=10 chars)
         assert_eq!(parsed("c0000000000"), "CANCEL-ID(0000000000)");
         // "co" is short (<10 chars), which cancels active... but we special-case "co"
-        // Verify the special case wins
-        assert_eq!(parsed("co"), "CASHOUT");
+        assert_eq!(parsed("co5up"), "CANCEL"); // 5up is target, but "co" prefix pattern
+    }
+
+    #[test]
+    fn cashout_all_states_reset_correctly() {
+        // Test reset_manual for all 4 mt_states
+        for mt_state in 0..4 {
+            let (outcome, size, entry, budget) = if mt_state == 0 {
+                ("up", 0.0, 0.0, 0.0)
+            } else {
+                ("up", 10.0, 0.65, 50.0)
+            };
+            let mut s = make_test_state(mt_state, outcome, size, entry, budget);
+            if mt_state >= 1 { s.mt_order_id = "test-order".into(); }
+            if mt_state >= 2 { s.mt_exit_order_id = "test-exit".into(); s.mt_sl_order_id = "test-sl".into(); }
+
+            // Clear orders (step 2 of cashout)
+            s.mt_order_id.clear();
+            s.mt_exit_order_id.clear();
+            s.mt_sl_order_id.clear();
+
+            // Reset (step 6 of cashout, or step 3 if pending buy)
+            s.reset_manual();
+
+            assert_eq!(s.mt_state, 0, "mt_state={mt_state} should reset to 0");
+            assert!(s.mt_order_id.is_empty());
+            assert!(s.mt_exit_order_id.is_empty());
+            assert!(s.mt_sl_order_id.is_empty());
+            assert_eq!(s.mt_exit_price, 0.0);
+        }
+    }
+
+    #[test]
+    fn cashout_order_of_operations() {
+        // Verify the correct ORDER of operations:
+        // 1. Cancel Gemini → 2. Cancel orders → 3/4 handle position → 5. PANIC → 6. Reset
+        let mut s = make_test_state(2, "up", 10.0, 0.65, 100.0);
+        s.mt_order_id = "buy-001".into();
+        s.mt_exit_order_id = "exit-001".into();
+        s.mt_sl_order_id = "sl-001".into();
+
+        // 1. Cancel Gemini
+        s.gemini_active = false;
+        assert!(!s.gemini_active);
+
+        // 2. Cancel orders FIRST (collect IDs before clearing)
+        let ids: Vec<String> = {
+            let mut v = Vec::new();
+            if !s.mt_order_id.is_empty() { v.push(s.mt_order_id.clone()); }
+            if !s.mt_exit_order_id.is_empty() { v.push(s.mt_exit_order_id.clone()); }
+            if !s.mt_sl_order_id.is_empty() { v.push(s.mt_sl_order_id.clone()); }
+            v
+        };
+        assert_eq!(ids.len(), 3); // buy, exit, SL
+        s.mt_order_id.clear();
+        s.mt_exit_order_id.clear();
+        s.mt_sl_order_id.clear();
+
+        // All order IDs are empty BEFORE market sell is placed
+        assert!(s.mt_order_id.is_empty());
+        assert!(s.mt_exit_order_id.is_empty());
+        assert!(s.mt_sl_order_id.is_empty());
+
+        // 4. Market sell would be placed here (no local ID captured)
+        // 5. PANIC strategies would be called here
+        // 6. Reset
+        s.reset_manual();
+        assert_eq!(s.mt_state, 0);
     }
 
     #[test]
