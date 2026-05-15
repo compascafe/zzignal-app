@@ -341,7 +341,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     // ── S1: CLOB MOM ──
     let s1_border = if aligned { if btc_up { BB_GREEN } else { BB_RED } } else { BB_BORDER };
     let s1_border_alert = if aligned && pulse_on { s1_border } else { BB_BORDER };
-    let s1_fg = if aligned { BB_WHITE } else { if btc_up { BB_GREEN } else { BB_RED } };
+    let _s1_fg = if aligned { BB_WHITE } else { if btc_up { BB_GREEN } else { BB_RED } };
     let clob_dir = if up_d.abs() > dn_d.abs() {
         if clob_up { "▲UP" } else { "▼UP" }
     } else {
@@ -516,163 +516,209 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         cols[5]);
 }
 
-// ─── INDICATORS — 6 cards row 2 ──────────────────────────────
+// ─── INDICATORS — 6 cards row 2: IMBALANCE + WALLS ────────────
 
 fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     let cols = Layout::default().direction(Direction::Horizontal)
         .constraints([Constraint::Ratio(1,6); 6]).split(area);
     let b = Modifier::BOLD;
 
-    // ── S7: SPREAD ──
-    let spread_val = s.hft.spread;
-    let (s7_border, s7_label) = if spread_val < 0.003 {
-        (BB_GREEN, "TIGHT ▲")
-    } else if spread_val < 0.008 {
-        (BB_AMBER, "MED —")
+    // Compute depth sums for all cards
+    let up_bid_v: f64 = s.hft.depth_up_bids.iter().map(|(_,s)| s).sum();
+    let up_ask_v: f64 = s.hft.depth_up_asks.iter().map(|(_,s)| s).sum();
+    let dn_bid_v: f64 = s.hft.depth_dn_bids.iter().map(|(_,s)| s).sum();
+    let dn_ask_v: f64 = s.hft.depth_dn_asks.iter().map(|(_,s)| s).sum();
+    let up_imb = if up_ask_v > 0.0 { up_bid_v / up_ask_v } else { 1.0 };
+    let dn_imb = if dn_ask_v > 0.0 { dn_bid_v / dn_ask_v } else { 1.0 };
+    let total_bull = up_bid_v + dn_ask_v;
+    let total_bear = up_ask_v + dn_bid_v;
+    let comb_imb = if total_bear > 0.0 { total_bull / total_bear } else { 1.0 };
+    // Wall pressure: bid vs ask from the combined book (backend bid_vol/ask_vol)
+    let wall_p = if s.hft.ask_vol > 0.0 { s.hft.bid_vol / s.hft.ask_vol } else { 1.0 };
+    // Imbalance momentum: delta from last tick
+    let imb_mom = comb_imb - s.prev_comb_imb;
+    // UP vs DN divergence: up_imb / dn_imb
+    let imb_div = if dn_imb > 0.0 { up_imb / dn_imb } else { 1.0 };
+
+    // ── S7: IMB UP ──────────────────────────────────────────
+    let (up_border, up_label) = if up_imb > 1.15 {
+        (BB_GREEN, "▲BID")
+    } else if up_imb < 0.85 {
+        (BB_RED, "▼ASK")
     } else {
-        (BB_RED, "WIDE ▼")
+        (BB_AMBER, "—BAL")
     };
+    let up_vol_c = if up_bid_v > up_ask_v * 1.5 { BB_GREEN }
+        else if up_ask_v > up_bid_v * 1.5 { BB_RED } else { BB_AMBER };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("● ", Style::default().fg(s7_border).add_modifier(b)),
-                Span::styled("SPREAD", Style::default().fg(BB_AMBER).add_modifier(b)),
+                Span::styled("● ", Style::default().fg(up_border).add_modifier(b)),
+                Span::styled("IMB UP", Style::default().fg(BB_GREEN).add_modifier(b)),
             ]),
-            Line::from(Span::styled(format!("{:.4}", spread_val), Style::default().fg(BB_WHITE).add_modifier(b))),
-            Line::from(Span::styled(s7_label, Style::default().fg(s7_border))),
-        ]).block(Block::default().borders(Borders::ALL).title("S7 B/A")
-            .border_style(Style::default().fg(s7_border))
+            Line::from(Span::styled(format!("{up_label} {up_imb:.2}x"),
+                Style::default().fg(up_border).add_modifier(b))),
+            Line::from(Span::styled(format!("B{:.0}k A{:.0}k", up_bid_v/1000.0, up_ask_v/1000.0),
+                Style::default().fg(up_vol_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("S7 IMB▲")
+            .border_style(Style::default().fg(up_border))
             .style(Style::default().bg(BB_CARD))),
         cols[0]);
 
-    // ── S8: DUMP SCORE ──
-    let dump = s.hft.dump_score;
-    let (s8_border, s8_label) = if dump == 0 {
-        (BB_GREEN, "SAFE")
-    } else if dump <= 2 {
-        (BB_AMBER, "WARN")
+    // ── S8: IMB DN ──────────────────────────────────────────
+    let (dn_border, dn_label) = if dn_imb > 1.15 {
+        (BB_GREEN, "▲BID")
+    } else if dn_imb < 0.85 {
+        (BB_RED, "▼ASK")
     } else {
-        (BB_RED, "DUMP!")
+        (BB_AMBER, "—BAL")
     };
+    let dn_vol_c = if dn_bid_v > dn_ask_v * 1.5 { BB_GREEN }
+        else if dn_ask_v > dn_bid_v * 1.5 { BB_RED } else { BB_AMBER };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("● ", Style::default().fg(s8_border).add_modifier(b)),
-                Span::styled("DUMP", Style::default().fg(BB_AMBER).add_modifier(b)),
+                Span::styled("● ", Style::default().fg(dn_border).add_modifier(b)),
+                Span::styled("IMB DN", Style::default().fg(BB_RED).add_modifier(b)),
             ]),
-            Line::from(Span::styled(format!("{}/3", dump), Style::default().fg(BB_WHITE).add_modifier(b))),
-            Line::from(Span::styled(s8_label, Style::default().fg(s8_border))),
-        ]).block(Block::default().borders(Borders::ALL).title("S8 DC")
-            .border_style(Style::default().fg(s8_border))
+            Line::from(Span::styled(format!("{dn_label} {dn_imb:.2}x"),
+                Style::default().fg(dn_border).add_modifier(b))),
+            Line::from(Span::styled(format!("B{:.0}k A{:.0}k", dn_bid_v/1000.0, dn_ask_v/1000.0),
+                Style::default().fg(dn_vol_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("S8 IMB▼")
+            .border_style(Style::default().fg(dn_border))
             .style(Style::default().bg(BB_CARD))),
         cols[1]);
 
-    // ── S9: TICK GAP ──
-    let gap = s.hft.tick_gap_ms;
-    let (s9_border, s9_label) = if gap < 500 {
-        (BB_GREEN, "FAST ▲")
-    } else if gap < 2000 {
-        (BB_AMBER, "SLOW —")
+    // ── S9: IMB COMB — Cross-book directional flow ──────────
+    let (comb_border, comb_label) = if comb_imb > 1.15 {
+        (BB_GREEN, "▲BULL")
+    } else if comb_imb < 0.85 {
+        (BB_RED, "▼BEAR")
     } else {
-        (BB_RED, "FROZEN ▼")
+        (BB_AMBER, "—FLAT")
     };
+    let conv = (comb_imb - 1.0).abs();
+    let conv_label = if conv > 0.30 { "STRONG" } else if conv > 0.15 { "MOD" } else { "WEAK" };
+    let conv_c = if conv > 0.30 { BB_WHITE } else { BB_DIM };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("● ", Style::default().fg(s9_border).add_modifier(b)),
-                Span::styled("TICK", Style::default().fg(BB_AMBER).add_modifier(b)),
+                Span::styled("● ", Style::default().fg(comb_border).add_modifier(b)),
+                Span::styled("IMB COMB", Style::default().fg(BB_AMBER).add_modifier(b)),
             ]),
-            Line::from(Span::styled(format!("{}ms", gap), Style::default().fg(BB_WHITE).add_modifier(b))),
-            Line::from(Span::styled(s9_label, Style::default().fg(s9_border))),
-        ]).block(Block::default().borders(Borders::ALL).title("S9 MS")
-            .border_style(Style::default().fg(s9_border))
+            Line::from(Span::styled(format!("{comb_label} {comb_imb:.2}x"),
+                Style::default().fg(comb_border).add_modifier(b))),
+            Line::from(vec![
+                Span::styled(format!("bull "), Style::default().fg(BB_GREEN)),
+                Span::styled(format!("{:.0}k", total_bull/1000.0), Style::default().fg(BB_WHITE)),
+                Span::styled(format!(" bear "), Style::default().fg(BB_RED)),
+                Span::styled(format!("{:.0}k", total_bear/1000.0), Style::default().fg(BB_WHITE)),
+                Span::styled(format!(" {conv_label}"), Style::default().fg(conv_c)),
+            ]),
+        ]).block(Block::default().borders(Borders::ALL).title("S9 IMB↕")
+            .border_style(Style::default().fg(comb_border))
             .style(Style::default().bg(BB_CARD))),
         cols[2]);
 
-    // ── S10: SPOOF + ASK WALL ──
-    let spoof_risk = s.hft.spoof + s.hft.ask_wall;
-    let (s10_border, s10_label) = if spoof_risk == 0 {
-        (BB_GREEN, "CLEAN")
-    } else if spoof_risk == 1 {
-        (BB_AMBER, "FLAG ⚠")
+    // ── S10: WALL PRESSURE ─────────────────────────────────
+    let (wp_border, wp_label) = if wall_p > 3.0 {
+        (BB_GREEN, "█BID>>")
+    } else if wall_p > 1.5 {
+        (BB_GREEN, "▓BID>")
+    } else if wall_p < 0.33 {
+        (BB_RED, "█ASK>>")
+    } else if wall_p < 0.67 {
+        (BB_RED, "▓ASK>")
     } else {
-        (BB_RED, "TRAP!")
+        (BB_AMBER, "—BAL")
     };
+    let wall_flag = if s.hft.ask_wall > 0 { "ASK⚡" } else { "" };
+    let spoof_flag = if s.hft.spoof > 0 { "SPOOF" } else { "" };
+    let flags = if wall_flag.is_empty() && spoof_flag.is_empty() { "CLEAN" }
+        else { &format!("{wall_flag}{spoof_flag}")[..] };
+    let flags_c = if flags == "CLEAN" { BB_GREEN } else { BB_RED };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("● ", Style::default().fg(s10_border).add_modifier(b)),
-                Span::styled("SPOOF+WALL", Style::default().fg(BB_AMBER).add_modifier(b)),
+                Span::styled("● ", Style::default().fg(wp_border).add_modifier(b)),
+                Span::styled("WALL P", Style::default().fg(BB_CYAN).add_modifier(b)),
             ]),
-            Line::from(Span::styled(format!("S:{} W:{}", s.hft.spoof, s.hft.ask_wall),
-                Style::default().fg(BB_WHITE).add_modifier(b))),
-            Line::from(Span::styled(s10_label, Style::default().fg(s10_border))),
-        ]).block(Block::default().borders(Borders::ALL).title("S10 SW")
-            .border_style(Style::default().fg(s10_border))
+            Line::from(Span::styled(format!("{wp_label} {wall_p:.2}x"),
+                Style::default().fg(wp_border).add_modifier(b))),
+            Line::from(vec![
+                Span::styled(format!("B{:.0}k", s.hft.bid_vol/1000.0), Style::default().fg(BB_GREEN)),
+                Span::styled(format!("/A{:.0}k  ", s.hft.ask_vol/1000.0), Style::default().fg(BB_RED)),
+                Span::styled(flags.to_string(), Style::default().fg(flags_c).add_modifier(b)),
+            ]),
+        ]).block(Block::default().borders(Borders::ALL).title("S10 WALL")
+            .border_style(Style::default().fg(wp_border))
             .style(Style::default().bg(BB_CARD))),
         cols[3]);
 
-    // ── S11: LIQUIDITY CONCENTRATION ──
-    let up_total: f64 = s.hft.depth_up_bids.iter().map(|(_,s)| s).sum::<f64>()
-        + s.hft.depth_up_asks.iter().map(|(_,s)| s).sum::<f64>();
-    let up_top3: f64 = s.hft.depth_up_bids.iter().take(3).map(|(_,s)| s).sum::<f64>()
-        + s.hft.depth_up_asks.iter().take(3).map(|(_,s)| s).sum::<f64>();
-    let dn_total: f64 = s.hft.depth_dn_bids.iter().map(|(_,s)| s).sum::<f64>()
-        + s.hft.depth_dn_asks.iter().map(|(_,s)| s).sum::<f64>();
-    let dn_top3: f64 = s.hft.depth_dn_bids.iter().take(3).map(|(_,s)| s).sum::<f64>()
-        + s.hft.depth_dn_asks.iter().take(3).map(|(_,s)| s).sum::<f64>();
-    let conc_max = if up_total>0.0 {up_top3/up_total} else{0.0}
-        .max(if dn_total>0.0 {dn_top3/dn_total} else{0.0});
-    let (s11_border, s11_label) = if conc_max < 0.5 {
-        (BB_GREEN, "SPREAD ▲")
-    } else if conc_max < 0.75 {
-        (BB_AMBER, "WHALE? —")
+    // ── S11: IMB MOM — Imbalance momentum ───────────────────
+    let (mom_border, mom_label) = if imb_mom > 0.03 {
+        (BB_GREEN, "▲ACCEL")
+    } else if imb_mom < -0.03 {
+        (BB_RED, "▼DECEL")
+    } else if imb_mom > 0.01 {
+        (BB_GREEN, "▲rising")
+    } else if imb_mom < -0.01 {
+        (BB_RED, "▼falling")
     } else {
-        (BB_RED, "WALL ▼")
+        (BB_AMBER, "—flat")
     };
+    // Compute trend over last ~10 ticks
+    let trend: f64 = if s.imb_history.len() >= 5 {
+        let old = s.imb_history.iter().take(s.imb_history.len().saturating_sub(5)).copied().collect::<Vec<_>>();
+        if let Some(&first) = old.first() {
+            comb_imb - first
+        } else { 0.0 }
+    } else { 0.0 };
+    let trend_c = if trend > 0.05 { BB_GREEN } else if trend < -0.05 { BB_RED } else { BB_AMBER };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("● ", Style::default().fg(s11_border).add_modifier(b)),
-                Span::styled("CONC", Style::default().fg(BB_AMBER).add_modifier(b)),
+                Span::styled("● ", Style::default().fg(mom_border).add_modifier(b)),
+                Span::styled("IMB MOM", Style::default().fg(BB_AMBER).add_modifier(b)),
             ]),
-            Line::from(Span::styled(format!("max {:.0}%", conc_max*100.0),
-                Style::default().fg(BB_WHITE).add_modifier(b))),
-            Line::from(Span::styled(s11_label, Style::default().fg(s11_border))),
-        ]).block(Block::default().borders(Borders::ALL).title("S11 LIQ")
-            .border_style(Style::default().fg(s11_border))
+            Line::from(Span::styled(format!("{mom_label} {imb_mom:+.3}"),
+                Style::default().fg(mom_border).add_modifier(b))),
+            Line::from(Span::styled(format!("trend {trend:+.3}  N={}", s.imb_history.len()),
+                Style::default().fg(trend_c))),
+        ]).block(Block::default().borders(Borders::ALL).title("S11 MOM")
+            .border_style(Style::default().fg(mom_border))
             .style(Style::default().bg(BB_CARD))),
         cols[4]);
 
-    // ── S12: CLOB-BTC DIVERGENCE ──
-    let up_ref = if s.session_open_up > 0.0 { s.session_open_up } else { s.hft.clob_trade_up };
-    let dn_ref = if s.session_open_dn > 0.0 { s.session_open_dn } else { s.hft.clob_trade_dn };
-    let btc_open = if s.btc_open > 0.0 { s.btc_open } else if s.session_open_btc > 0.0 { s.session_open_btc } else { s.btc };
-    let clob_up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
-    let clob_dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
-    let btc_d = if btc_open > 0.0 { (s.btc / btc_open - 1.0) * 100.0 } else { 0.0 };
-    let clob_dom = clob_up_d.abs().max(clob_dn_d.abs());
-    let clob_dir = if clob_up_d.abs() > clob_dn_d.abs() { clob_up_d >= 0.0 } else { clob_dn_d >= 0.0 };
-    let btc_dir = btc_d >= 0.0;
-    let aligned = clob_dir == btc_dir && clob_dom > 0.1 && btc_d.abs() > 0.02;
-    let (s12_border, s12_label) = if aligned {
-        (BB_GREEN, "LOCKED ▲")
-    } else if clob_dom < 0.1 || btc_d.abs() < 0.02 {
-        (BB_AMBER, "FLAT —")
+    // ── S12: IMB DIV — UP vs DN divergence ──────────────────
+    let (div_border, div_label) = if imb_div > 1.4 {
+        (BB_GREEN, "▲UP»DN")
+    } else if imb_div < 0.7 {
+        (BB_RED, "▼DN»UP")
+    } else if imb_div > 1.15 {
+        (BB_GREEN, "UP>DN")
+    } else if imb_div < 0.85 {
+        (BB_RED, "DN>UP")
     } else {
-        (BB_RED, "DIVERGE ▼")
+        (BB_AMBER, "—ALIGN")
     };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("● ", Style::default().fg(s12_border).add_modifier(b)),
-                Span::styled("C↔B DIV", Style::default().fg(BB_AMBER).add_modifier(b)),
+                Span::styled("● ", Style::default().fg(div_border).add_modifier(b)),
+                Span::styled("IMB DIV", Style::default().fg(BB_CYAN).add_modifier(b)),
             ]),
-            Line::from(Span::styled(format!("C{clob_dom:+.1}% B{btc_d:+.1}%"),
-                Style::default().fg(BB_WHITE).add_modifier(b))),
-            Line::from(Span::styled(s12_label, Style::default().fg(s12_border))),
+            Line::from(Span::styled(format!("{div_label} {imb_div:.2}x"),
+                Style::default().fg(div_border).add_modifier(b))),
+            Line::from(vec![
+                Span::styled(format!("UP"), Style::default().fg(BB_GREEN)),
+                Span::styled(format!("{:.2}x", up_imb), Style::default().fg(if up_imb>1.0{BB_GREEN}else{BB_RED})),
+                Span::styled(format!(" DN"), Style::default().fg(BB_RED)),
+                Span::styled(format!("{:.2}x", dn_imb), Style::default().fg(if dn_imb>1.0{BB_GREEN}else{BB_RED})),
+            ]),
         ]).block(Block::default().borders(Borders::ALL).title("S12 DIV")
-            .border_style(Style::default().fg(s12_border))
+            .border_style(Style::default().fg(div_border))
             .style(Style::default().bg(BB_CARD))),
         cols[5]);
 }
@@ -934,195 +980,280 @@ fn draw_book_side(f: &mut Frame, area: Rect, label: &str, border_c: Color,
 // TAB GRAFICOS — DOM + TAP + Area Acumulada + Histograma
 // ═══════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════
+// TAB 2: OBI OSCILLATOR (Order Book Imbalance)
+// ═══════════════════════════════════════════════════════════════════
+
 fn draw_graficos(f: &mut Frame, area: Rect, s: &State) {
     let vert = Layout::default().direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(2,5), Constraint::Ratio(2,5), Constraint::Ratio(1,5)])
+        .constraints([Constraint::Ratio(3,5), Constraint::Ratio(1,5), Constraint::Ratio(1,5)])
         .split(area);
 
-    draw_dom(f, vert[0], s);
-    draw_tap(f, vert[1], s);
-
-    let bot = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
-        .split(vert[2]);
-    draw_area_acumulada(f, bot[0], s);
-    draw_histograma(f, bot[1], s);
+    draw_obi_oscillator(f, vert[0], s);
+    draw_obi_updn(f, vert[1], s);
+    draw_obi_stats(f, vert[2], s);
 }
 
-fn draw_dom(f: &mut Frame, area: Rect, s: &State) {
-    let cols = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
-        .split(area);
+fn draw_obi_oscillator(f: &mut Frame, area: Rect, s: &State) {
+    let chart_h = (area.height as usize).saturating_sub(3).max(3);
+    let chart_w = (area.width as usize).saturating_sub(12).max(10);
 
-    draw_dom_side(f, cols[0], "UP", Color::Green, &s.book_up);
-    draw_dom_side(f, cols[1], "DOWN", Color::Red, &s.book_dn);
-}
-
-fn draw_dom_side(f: &mut Frame, area: Rect, label: &str, c: Color, book: &crate::api::BookDepth) {
-    let max_n = (area.height as usize).saturating_sub(4) / 2;
-    let n = max_n.min(10).max(3);
-
-    let mut bids: Vec<(f64,f64)> = book.bids.iter().map(|l| (l.price, l.size)).collect();
-    let mut asks: Vec<(f64,f64)> = book.asks.iter().map(|l| (l.price, l.size)).collect();
-    bids.sort_unstable_by(|a,b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    asks.sort_unstable_by(|a,b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let best_bid = bids.first().map(|&(p,_)| p).unwrap_or(0.0);
-    let best_ask = asks.first().map(|&(p,_)| p).unwrap_or(0.0);
-    let max_size = bids.iter().chain(asks.iter()).map(|&(_,s)| s).fold(0.0f64, f64::max).max(1.0);
-    let log_max = (max_size + 1.0).ln();
-
-    let bar_w = area.width.saturating_sub(18) as usize;
-    let mut lines: Vec<Line> = Vec::new();
-    let bid_bg = if label == "UP" { Color::Green } else { Color::Red };
-
-    for &(price, size) in asks.iter().take(n).rev() {
-        let log_sz = (size + 1.0).ln();
-        let w = if log_max > 0.0 { (log_sz / log_max * bar_w as f64) as usize } else { 0 };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4}", price), Style::default().fg(Color::Red)),
-            Span::styled(format!("{:>7.0}", size), Style::default().fg(Color::DarkGray)),
-            Span::styled("█".repeat(w.min(bar_w)), Style::default().fg(Color::Red)),
-        ]));
-    }
-    if best_ask > 0.0 && best_bid > 0.0 {
-        lines.push(Line::from(Span::styled(
-            format!("── {:.4} ──", best_ask - best_bid),
-            Style::default().fg(Color::Yellow))));
-    }
-    for &(price, size) in bids.iter().take(n) {
-        let log_sz = (size + 1.0).ln();
-        let w = if log_max > 0.0 { (log_sz / log_max * bar_w as f64) as usize } else { 0 };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:<8.4}", price), Style::default().fg(bid_bg)),
-            Span::styled(format!("{:>7.0}", size), Style::default().fg(Color::DarkGray)),
-            Span::styled("█".repeat(w.min(bar_w)), Style::default().fg(bid_bg)),
-        ]));
-    }
-    let title = if best_bid > 0.0 && best_ask > 0.0 {
-        format!("{label} {:.4}/{:.4}", best_bid, best_ask)
-    } else { format!("{label} DOM") };
-    f.render_widget(Paragraph::new(lines).block(
-        Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(c))), area);
-}
-
-fn draw_tap(f: &mut Frame, area: Rect, s: &State) {
-    let max_n = (area.height as usize).saturating_sub(3).min(20);
-    let mut lines: Vec<Line> = Vec::new();
-    for t in s.trades.iter().take(max_n) {
-        let col = if t.side == "UP" { Color::Green } else { Color::Red };
-        let ts = if t.ts.len() > 12 { &t.ts[t.ts.len()-12..] } else { &t.ts };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", ts), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:>6.4} ", t.price), Style::default().fg(col).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{:>6.0} ", t.size), Style::default().fg(Color::DarkGray)),
-            Span::styled(&t.side, Style::default().fg(col)),
-        ]));
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled("  esperando trades...", Color::DarkGray)));
-    }
-    f.render_widget(Paragraph::new(lines).block(
-        Block::default().borders(Borders::ALL).title("TAP — Time & Sales")), area);
-}
-
-fn draw_area_acumulada(f: &mut Frame, area: Rect, s: &State) {
-    let avail_h = (area.height as usize).saturating_sub(3).max(1);
-    let avail_w = (area.width as usize).saturating_sub(16).max(1);
-
-    let bids: Vec<(f64,f64)> = s.book_up.bids.iter().map(|l| (l.price, l.size)).collect();
-    let asks: Vec<(f64,f64)> = s.book_up.asks.iter().map(|l| (l.price, l.size)).collect();
-
-    let all: Vec<(f64,f64)> = bids.iter().copied().chain(asks.iter().copied()).collect();
-    let max_cum = bids.iter().map(|&(_,s)| s).sum::<f64>().max(asks.iter().map(|&(_,s)| s).sum::<f64>()).max(1.0);
-    let min_p = all.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min).max(0.0);
-    let max_p = all.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max).min(1.0);
-    let p_range = (max_p - min_p).max(0.01);
-
-    let buckets = avail_h.min(20);
-    let mut rows: Vec<(f64, f64, f64)> = Vec::new();
-    for i in 0..buckets {
-        let p = min_p + (p_range * (buckets - 1 - i) as f64 / (buckets - 1).max(1) as f64);
-        let bid_cum: f64 = bids.iter().filter(|&&(bp,_)| bp >= p).map(|&(_,s)| s).sum();
-        let ask_cum: f64 = asks.iter().filter(|&&(ap,_)| ap <= p).map(|&(_,s)| s).sum();
-        rows.push((p, bid_cum, ask_cum));
+    let history: Vec<f64> = s.imb_history.iter().copied().collect();
+    if history.len() < 2 {
+        let lines = vec![Line::from(Span::styled("  esperando datos...",
+            Style::default().fg(BB_DIM)))];
+        f.render_widget(Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title("OBI OSCILLATOR")
+                .border_style(Style::default().fg(BB_AMBER))), area);
+        return;
     }
 
-    let mut lines: Vec<Line> = Vec::new();
-    for (p, bid_cum, ask_cum) in &rows {
-        let bw = ((bid_cum / max_cum) * avail_w as f64) as usize;
-        let aw = ((ask_cum / max_cum) * avail_w as f64) as usize;
-        let mid_w = avail_w.saturating_sub(bw + aw);
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:<7.4}", p), Style::default().fg(Color::DarkGray)),
-            Span::styled("█".repeat(bw.min(avail_w)), Style::default().fg(Color::Green)),
-            Span::styled("░".repeat(mid_w), Style::default().fg(Color::DarkGray)),
-            Span::styled("█".repeat(aw.min(avail_w)), Style::default().fg(Color::Red)),
-            Span::styled(format!(" {:.0}", bid_cum + ask_cum), Style::default().fg(Color::DarkGray)),
-        ]));
+    // Subsample to fit chart width
+    let step = if history.len() > chart_w {
+        (history.len() as f64 / chart_w as f64).max(1.0)
+    } else { 1.0 };
+    let mut sampled: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut idx = 0.0f64;
+    while idx < history.len() as f64 && sampled.len() < chart_w {
+        sampled.push(history[idx as usize]);
+        idx += step;
     }
-    f.render_widget(Paragraph::new(lines).block(
-        Block::default().borders(Borders::ALL).title("Area Acumulada")), area);
-}
 
-fn draw_histograma(f: &mut Frame, area: Rect, s: &State) {
-    let avail_h = (area.height as usize).saturating_sub(3).max(1);
-    let avail_w = (area.width as usize).saturating_sub(14).max(1);
+    let min_v = sampled.iter().cloned().fold(f64::INFINITY, f64::min).min(0.70);
+    let max_v = sampled.iter().cloned().fold(f64::NEG_INFINITY, f64::max).max(1.30);
+    let range = (max_v - min_v).max(0.01);
 
-    let bids: Vec<(f64,f64)> = s.book_up.bids.iter().map(|l| (l.price, l.size)).collect();
-    let asks: Vec<(f64,f64)> = s.book_up.asks.iter().map(|l| (l.price, l.size)).collect();
+    // Build chart grid: row 0 = top (max_v) → row chart_h-1 = bottom (min_v)
+    // Use a Vec<Vec<Option<char>>> for the chart with fill
+    let mut grid: Vec<Vec<Option<(char, Color)>>> = vec![vec![None; sampled.len()]; chart_h];
 
-    let max_vol = bids.iter().map(|&(_,s)| s).chain(asks.iter().map(|&(_,s)| s)).fold(0.0f64, f64::max).max(1.0);
-    let all: Vec<(f64,f64)> = bids.iter().copied().chain(asks.iter().copied()).collect();
-    let min_p = all.iter().map(|&(p,_)| p).fold(f64::INFINITY, f64::min).max(0.0);
-    let max_p = all.iter().map(|&(p,_)| p).fold(f64::NEG_INFINITY, f64::max).min(1.0);
-    let p_range = (max_p - min_p).max(0.01);
-
-    let log_max = (max_vol + 1.0).ln().max(1.0);
-
-    let buckets = avail_h.min(30);
-    let grid_every = (buckets / 4).max(1);
-    let mut lines: Vec<Line> = Vec::new();
-
-    for i in 0..buckets {
-        let p_lo = min_p + (p_range * i as f64 / buckets as f64);
-        let p_hi = min_p + (p_range * (i + 1) as f64 / buckets as f64);
-        let vol: f64 = bids.iter().filter(|&&(bp,_)| bp >= p_lo && bp < p_hi).map(|&(_,s)| s).sum::<f64>()
-            + asks.iter().filter(|&&(ap,_)| ap >= p_lo && ap < p_hi).map(|&(_,s)| s).sum::<f64>();
-
-        let w = if vol > 0.0 {
-            ((vol + 1.0).ln() / log_max * avail_w as f64).min(avail_w as f64) as usize
-        } else { 0 };
-
-        let is_grid = i > 0 && i % grid_every == 0;
-        let c = if vol > 0.0 { Color::Cyan } else { Color::DarkGray };
-
-        let bar = if w > 0 && vol > 0.0 { "█".repeat(w.min(avail_w)) } else { String::new() };
-        let fill = if w < avail_w { "░".repeat(avail_w.saturating_sub(w)) } else { String::new() };
-
-        if is_grid {
-            let grid_w = avail_w.min(area.width.saturating_sub(14) as usize);
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:<7.4} ", p_lo), Style::default().fg(Color::DarkGray)),
-                Span::styled(bar, Style::default().fg(c)),
-                Span::styled(fill, Style::default().fg(Color::Rgb(18,18,28))),
-                Span::styled(format!(" {:.0}", vol), Style::default().fg(Color::DarkGray)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("        ", Style::default()),
-                Span::styled("·".repeat(grid_w), Style::default().fg(Color::Rgb(30,30,42))),
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:<7.4} ", p_lo), Style::default().fg(Color::DarkGray)),
-                Span::styled(bar, Style::default().fg(c)),
-                Span::styled(fill, Style::default().fg(Color::Rgb(18,18,28))),
-                Span::styled(format!(" {:.0}", vol), Style::default().fg(Color::DarkGray)),
-            ]));
+    for (x, &val) in sampled.iter().enumerate() {
+        let y = ((max_v - val) / range * (chart_h - 1) as f64).round() as usize;
+        let y = y.min(chart_h - 1);
+        let color = if val >= 1.0 { BB_GREEN } else { BB_RED };
+        // Fill from line to center (1.0) for area effect
+        let center_y = ((max_v - 1.0) / range * (chart_h - 1) as f64).round() as usize;
+        let center_y = center_y.min(chart_h - 1);
+        let (fill_start, fill_end) = if y <= center_y { (y, center_y) } else { (center_y, y) };
+        for fy in fill_start..=fill_end {
+            if fy < chart_h {
+                let fill_color = if fy <= center_y { BB_GREEN } else { BB_RED };
+                grid[fy][x] = Some(('█', fill_color));
+            }
         }
+        grid[y][x] = Some(('▀', color)); // line on top
     }
+
+    // Highlight threshold lines
+    let bull_y = ((max_v - 1.15) / range * (chart_h - 1) as f64).round() as usize;
+    let bear_y = ((max_v - 0.85) / range * (chart_h - 1) as f64).round() as usize;
+    let bull_y = bull_y.min(chart_h - 1);
+    let bear_y = bear_y.min(chart_h - 1);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    for row in 0..chart_h {
+        let val_at_row = max_v - (row as f64 / (chart_h - 1) as f64) * range;
+        let is_center = row == ((max_v - 1.0) / range * (chart_h - 1) as f64).round() as usize;
+        let is_bull = row == bull_y;
+        let is_bear = row == bear_y;
+
+        let label = if is_bull {
+            Span::styled(format!("{:<7.2}─", 1.15), Style::default().fg(BB_GREEN).add_modifier(Modifier::BOLD))
+        } else if is_center {
+            Span::styled(format!("{:<7.2}─", 1.00), Style::default().fg(BB_AMBER).add_modifier(Modifier::BOLD))
+        } else if is_bear {
+            Span::styled(format!("{:<7.2}─", 0.85), Style::default().fg(BB_RED).add_modifier(Modifier::BOLD))
+        } else if row % 3 == 0 {
+            Span::styled(format!("{:<7.2} ", val_at_row), Style::default().fg(BB_DIM))
+        } else {
+            Span::styled("        ", Style::default())
+        };
+
+        let mut spans = vec![label];
+
+        for x in 0..sampled.len() {
+            if let Some((ch, c)) = grid[row][x] {
+                if is_bull || is_bear || is_center {
+                    // Threshold lines override with dotted style
+                    spans.push(Span::styled("·", Style::default().fg(if is_bull { BB_GREEN } else if is_bear { BB_RED } else { BB_AMBER })));
+                } else {
+                    spans.push(Span::styled(ch.to_string(), Style::default().fg(c)));
+                }
+            } else if is_bull || is_bear || is_center {
+                spans.push(Span::styled("·", Style::default().fg(if is_bull { BB_GREEN } else if is_bear { BB_RED } else { BB_AMBER })));
+            } else {
+                spans.push(Span::styled(" ", Style::default()));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Time axis labels
+    let n = sampled.len();
+    let mut axis_spans = vec![Span::styled("        ", Style::default())];
+    let tick_interval = if n > 40 { n / 8 } else { n / 4 };
+    for x in (0..n).step_by(tick_interval.max(1)) {
+        let mut label_str = if x == 0 { format!("{:<tick_interval$}T-{}", "", n-x) }
+            else { format!("{:<tick_interval$}T-{}", "", n-x) };
+        // Truncate to fit
+        if label_str.len() > tick_interval { label_str.truncate(tick_interval); }
+        axis_spans.push(Span::styled(label_str, Style::default().fg(BB_DIM)));
+    }
+    lines.push(Line::from(axis_spans));
+
+    // Current value
+    let cur = history.last().copied().unwrap_or(1.0);
+    let cur_label = if cur > 1.15 { "▲ BULLISH" } else if cur < 0.85 { "▼ BEARISH" } else { "— NEUTRAL" };
+    let cur_color = if cur > 1.15 { BB_GREEN } else if cur < 0.85 { BB_RED } else { BB_AMBER };
+    lines.push(Line::from(vec![
+        Span::styled("  OBI ", Style::default().fg(BB_DIM)),
+        Span::styled(format!("{:.3}x ", cur), Style::default().fg(BB_WHITE).add_modifier(Modifier::BOLD)),
+        Span::styled(cur_label, Style::default().fg(cur_color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  N={}  rango[{:.2},{:.2}]", history.len(), min_v, max_v),
+            Style::default().fg(BB_DIM)),
+    ]));
+
     f.render_widget(Paragraph::new(lines).block(
-        Block::default().borders(Borders::ALL).title("Histograma")), area);
+        Block::default().borders(Borders::ALL).title("OBI OSCILLATOR — Order Book Imbalance")
+            .border_style(Style::default().fg(BB_AMBER))), area);
+}
+
+fn draw_obi_updn(f: &mut Frame, area: Rect, s: &State) {
+    let chart_w = (area.width as usize).saturating_sub(12).max(10);
+
+    let up_h: Vec<f64> = s.up_imb_history.iter().copied().collect();
+    let dn_h: Vec<f64> = s.dn_imb_history.iter().copied().collect();
+    let combined: Vec<f64> = s.imb_history.iter().copied().collect();
+
+    let n = up_h.len().min(dn_h.len()).min(combined.len());
+    if n < 2 {
+        let lines = vec![Line::from(Span::styled("  esperando...", Style::default().fg(BB_DIM)))];
+        f.render_widget(Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title("UP vs DN IMBALANCE")
+                .border_style(Style::default().fg(BB_BORDER))), area);
+        return;
+    }
+
+    let step = if n > chart_w { (n as f64 / chart_w as f64).max(1.0) } else { 1.0 };
+
+    let all_vals: Vec<f64> = up_h.iter().chain(dn_h.iter()).copied().collect();
+    let min_v = all_vals.iter().cloned().fold(f64::INFINITY, f64::min).min(0.5);
+    let max_v = all_vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max).max(2.0);
+    let range = (max_v - min_v).max(0.01);
+    let h = (area.height as usize).saturating_sub(3).max(3);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Draw two lines: UP (green ▀) and DN (red ▄) per row
+    for row in 0..h {
+        let val_lo = max_v - ((row as f64 + 1.0) / h as f64) * range;
+        let val_hi = max_v - (row as f64 / h as f64) * range;
+
+        let mut spans = vec![];
+        let label = if row == 0 {
+            Span::styled(format!("{:<7.2} ", max_v), Style::default().fg(BB_DIM))
+        } else if row == h / 2 {
+            Span::styled(format!("{:<7.2} ", (max_v + min_v) / 2.0), Style::default().fg(BB_DIM))
+        } else if row == h - 1 {
+            Span::styled(format!("{:<7.2} ", min_v), Style::default().fg(BB_DIM))
+        } else {
+            Span::styled("        ", Style::default())
+        };
+        spans.push(label);
+
+        let mut idx_f = 0.0;
+        while idx_f < n as f64 && spans.len() < 12 + chart_w {
+            let i = idx_f as usize;
+            let up = up_h[i];
+            let dn = dn_h[i];
+            let up_in = up >= val_lo && up < val_hi;
+            let dn_in = dn >= val_lo && dn < val_hi;
+            let ch = if up_in && dn_in { "█" }
+                else if up_in { "▀" }
+                else if dn_in { "▄" }
+                else { " " };
+            let color = if up_in && dn_in { BB_AMBER }
+                else if up_in { BB_GREEN }
+                else if dn_in { BB_RED }
+                else { Color::Reset };
+            spans.push(Span::styled(ch, Style::default().fg(color)));
+            idx_f += step;
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Legend
+    let cur_up = up_h.last().copied().unwrap_or(1.0);
+    let cur_dn = dn_h.last().copied().unwrap_or(1.0);
+    lines.push(Line::from(vec![
+        Span::styled(" ▀ UP ", Style::default().fg(BB_GREEN).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{:.2}x  ", cur_up), Style::default().fg(if cur_up > 1.0 { BB_GREEN } else { BB_RED })),
+        Span::styled("▄ DN ", Style::default().fg(BB_RED).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{:.2}x  ", cur_dn), Style::default().fg(if cur_dn > 1.0 { BB_GREEN } else { BB_RED })),
+        Span::styled("█ BOTH", Style::default().fg(BB_AMBER)),
+        Span::styled(format!("  N={n}", ), Style::default().fg(BB_DIM)),
+    ]));
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("UP vs DN IMBALANCE")
+            .border_style(Style::default().fg(BB_BORDER))), area);
+}
+
+fn draw_obi_stats(f: &mut Frame, area: Rect, s: &State) {
+    let b = Modifier::BOLD;
+    let h: Vec<f64> = s.imb_history.iter().copied().collect();
+    let n = h.len();
+
+    // Current values
+    let cur = h.last().copied().unwrap_or(1.0);
+    let cur_dir = if cur > 1.15 { "▲ BULL" } else if cur < 0.85 { "▼ BEAR" } else { "— NEUTRAL" };
+    let cur_c = if cur > 1.15 { BB_GREEN } else if cur < 0.85 { BB_RED } else { BB_AMBER };
+
+    // Stats over the history
+    let (mean, min_val, max_val) = if n > 1 {
+        let sum: f64 = h.iter().sum();
+        let mn = h.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mx = h.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        (sum / n as f64, mn, mx)
+    } else { (cur, cur, cur) };
+
+    // Cross count: how many times crossed 1.0
+    let crosses: usize = h.windows(2).filter(|w| (w[0] - 1.0).signum() != (w[1] - 1.0).signum()).count();
+
+    // Time above/below 1.0
+    let above = h.iter().filter(|&&v| v >= 1.0).count();
+    let above_pct = if n > 0 { above as f64 / n as f64 * 100.0 } else { 50.0 };
+
+    // Wall flags
+    let wall_on = s.hft.ask_wall > 0;
+    let spoof_on = s.hft.spoof > 0;
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("OBI ", Style::default().fg(BB_AMBER).add_modifier(b)),
+            Span::styled(format!("{:.3}x", cur), Style::default().fg(BB_WHITE).add_modifier(b)),
+            Span::styled(format!(" {cur_dir}  "), Style::default().fg(cur_c).add_modifier(b)),
+            Span::styled(format!("avg {:.3}", mean), Style::default().fg(BB_DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("rango [{:.3}, {:.3}]  ", min_val, max_val), Style::default().fg(BB_DIM)),
+            Span::styled(format!("bull↑ {:.0}% ", above_pct), Style::default().fg(BB_GREEN)),
+            Span::styled(format!("bear↓ {:.0}%  ", 100.0 - above_pct), Style::default().fg(BB_RED)),
+            Span::styled(format!("x1.0:{}", crosses), Style::default().fg(BB_CYAN)),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("N={n} muestras  ", ), Style::default().fg(BB_DIM)),
+            Span::styled(if wall_on { "█ ASK WALL " } else { "— no wall " },
+                Style::default().fg(if wall_on { BB_RED } else { BB_GREEN }).add_modifier(b)),
+            Span::styled(if spoof_on { "⚠ SPOOF" } else { "" },
+                Style::default().fg(BB_RED).add_modifier(b)),
+        ]),
+    ];
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("OBI STATS")
+            .border_style(Style::default().fg(BB_BORDER))), area);
 }
 
 

@@ -159,6 +159,10 @@ struct State {
     pub prev_bid_dn: f64, pub prev_ask_dn: f64,
     pub abs_up: f64, pub abs_dn: f64,  // net absorption %
     pub last_btc_vel: f64,
+    pub imb_history: VecDeque<f64>,        // last ~200 combined imbalance values for oscillator
+    pub up_imb_history: VecDeque<f64>,     // UP imbalance history for chart
+    pub dn_imb_history: VecDeque<f64>,     // DN imbalance history for chart
+    pub prev_comb_imb: f64,                // previous combined imbalance for delta
 
     // Gemini
     pub gemini_active: bool,
@@ -279,6 +283,10 @@ impl State {
             prev_bid_dn: 0.0, prev_ask_dn: 0.0,
             abs_up: 0.0, abs_dn: 0.0,
             last_btc_vel: 0.0,
+            imb_history: VecDeque::with_capacity(200),
+            up_imb_history: VecDeque::with_capacity(200),
+            dn_imb_history: VecDeque::with_capacity(200),
+            prev_comb_imb: 1.0,
             gemini_active: false,
             gemini_budget: 0.0,
             gemini_target: 0.0,
@@ -428,6 +436,26 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     s.odi_filters = s.hft.od83_filters;
 
     s.session_vol_cum += new_hft.clob_trade_up_vol + new_hft.clob_trade_dn_vol;
+
+    // Track combined imbalance for trend analysis
+    {
+        let up_bid_v: f64 = new_hft.depth_up_bids.iter().map(|(_, s)| s).sum();
+        let up_ask_v: f64 = new_hft.depth_up_asks.iter().map(|(_, s)| s).sum();
+        let dn_bid_v: f64 = new_hft.depth_dn_bids.iter().map(|(_, s)| s).sum();
+        let dn_ask_v: f64 = new_hft.depth_dn_asks.iter().map(|(_, s)| s).sum();
+        let up_imb_val = if up_ask_v > 0.0 { up_bid_v / up_ask_v } else { 1.0 };
+        let dn_imb_val = if dn_ask_v > 0.0 { dn_bid_v / dn_ask_v } else { 1.0 };
+        let total_bull = up_bid_v + dn_ask_v;
+        let total_bear = up_ask_v + dn_bid_v;
+        let comb_imb = if total_bear > 0.0 { total_bull / total_bear } else { 1.0 };
+        s.prev_comb_imb = if s.imb_history.is_empty() { comb_imb } else { *s.imb_history.back().unwrap_or(&1.0) };
+        s.imb_history.push_back(comb_imb);
+        s.up_imb_history.push_back(up_imb_val);
+        s.dn_imb_history.push_back(dn_imb_val);
+        if s.imb_history.len() > 200 { s.imb_history.pop_front(); }
+        if s.up_imb_history.len() > 200 { s.up_imb_history.pop_front(); }
+        if s.dn_imb_history.len() > 200 { s.dn_imb_history.pop_front(); }
+    }
 
     let secs = new_hft.secs_left;
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
