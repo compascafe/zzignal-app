@@ -144,6 +144,14 @@ pub struct HftState {
     pub depth_up_asks: Vec<(f64,f64)>,
     pub depth_dn_bids: Vec<(f64,f64)>,
     pub depth_dn_asks: Vec<(f64,f64)>,
+    #[serde(default)]
+    pub ofi_up: f64,
+    #[serde(default)]
+    pub ofi_dn: f64,
+    #[serde(default)]
+    pub micro_price_up: f64,
+    #[serde(default)]
+    pub micro_price_dn: f64,
 }
 
 #[derive(Debug, Deserialize, Default)]

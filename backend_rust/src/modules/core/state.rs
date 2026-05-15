@@ -73,6 +73,12 @@ pub struct LatestHftState {
     pub depth_up_asks: Vec<(f64,f64)>,  // top 10 UP asks
     pub depth_dn_bids: Vec<(f64,f64)>,  // top 10 DN bids
     pub depth_dn_asks: Vec<(f64,f64)>,  // top 10 DN asks
+    /// OFI: Order Flow Imbalance — Δbid_q - Δask_q at best level per tick
+    pub ofi_up: f64,                   // UP book OFI (positive = buying pressure)
+    pub ofi_dn: f64,                   // DN book OFI
+    /// Micro-price — imbalance-weighted fair price
+    pub micro_price_up: f64,           // UP weighted mid: (bid*ask_v + ask*bid_v)/(bid_v+ask_v)
+    pub micro_price_dn: f64,           // DN weighted mid
 }
 
 pub struct AppState {

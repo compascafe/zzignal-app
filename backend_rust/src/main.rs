@@ -979,14 +979,50 @@ async fn capture_combined(
         {
             let up = state.book_up.read().await;
             let dn = state.book_down.read().await;
-            if let Some(ref b) = *up {
-                hft.depth_up_bids = b.bids.iter().take(10).map(|l| (l.price, l.size)).collect();
-                hft.depth_up_asks = b.asks.iter().take(10).map(|l| (l.price, l.size)).collect();
-            }
-            if let Some(ref b) = *dn {
-                hft.depth_dn_bids = b.bids.iter().take(10).map(|l| (l.price, l.size)).collect();
-                hft.depth_dn_asks = b.asks.iter().take(10).map(|l| (l.price, l.size)).collect();
-            }
+
+            // Track previous best sizes for OFI (Order Flow Imbalance)
+            use std::sync::atomic::AtomicU64;
+            static PREV_UP_BEST_BID: AtomicU64 = AtomicU64::new(0);
+            static PREV_UP_BEST_ASK: AtomicU64 = AtomicU64::new(0);
+            static PREV_DN_BEST_BID: AtomicU64 = AtomicU64::new(0);
+            static PREV_DN_BEST_ASK: AtomicU64 = AtomicU64::new(0);
+
+            let (up_best_bid_sz, up_best_ask_sz, dn_best_bid_sz, dn_best_ask_sz, up_bid_px, up_ask_px, dn_bid_px, dn_ask_px) =
+            {
+                let mut ubb: f64 = 0.0; let mut ubp: f64 = 0.0;
+                let mut uba: f64 = 0.0; let mut uap: f64 = 0.0;
+                let mut dbb: f64 = 0.0; let mut dbp: f64 = 0.0;
+                let mut dba: f64 = 0.0; let mut dap: f64 = 0.0;
+                if let Some(ref b) = *up {
+                    hft.depth_up_bids = b.bids.iter().take(10).map(|l| (l.price, l.size)).collect();
+                    hft.depth_up_asks = b.asks.iter().take(10).map(|l| (l.price, l.size)).collect();
+                    if let Some(bb) = b.bids.first() { ubb = bb.size; ubp = bb.price; }
+                    if let Some(ba) = b.asks.first() { uba = ba.size; uap = ba.price; }
+                }
+                if let Some(ref b) = *dn {
+                    hft.depth_dn_bids = b.bids.iter().take(10).map(|l| (l.price, l.size)).collect();
+                    hft.depth_dn_asks = b.asks.iter().take(10).map(|l| (l.price, l.size)).collect();
+                    if let Some(bb) = b.bids.first() { dbb = bb.size; dbp = bb.price; }
+                    if let Some(ba) = b.asks.first() { dba = ba.size; dap = ba.price; }
+                }
+                (ubb, uba, dbb, dba, ubp, uap, dbp, dap)
+            };
+
+            // OFI: Δbid_size - Δask_size at best level (positive = buying pressure)
+            let prev_ubb = f64::from_bits(PREV_UP_BEST_BID.swap(up_best_bid_sz.to_bits(), std::sync::atomic::Ordering::Relaxed));
+            let prev_uba = f64::from_bits(PREV_UP_BEST_ASK.swap(up_best_ask_sz.to_bits(), std::sync::atomic::Ordering::Relaxed));
+            let prev_dbb = f64::from_bits(PREV_DN_BEST_BID.swap(dn_best_bid_sz.to_bits(), std::sync::atomic::Ordering::Relaxed));
+            let prev_dba = f64::from_bits(PREV_DN_BEST_ASK.swap(dn_best_ask_sz.to_bits(), std::sync::atomic::Ordering::Relaxed));
+            hft.ofi_up = (up_best_bid_sz - prev_ubb) - (up_best_ask_sz - prev_uba);
+            hft.ofi_dn = (dn_best_bid_sz - prev_dbb) - (dn_best_ask_sz - prev_dba);
+
+            // Micro-price: imbalance-weighted fair price
+            hft.micro_price_up = if up_best_bid_sz + up_best_ask_sz > 0.0 && up_bid_px > 0.0 && up_ask_px > 0.0 {
+                (up_bid_px * up_best_ask_sz + up_ask_px * up_best_bid_sz) / (up_best_bid_sz + up_best_ask_sz)
+            } else { up_bid_px.max(up_ask_px).max(0.0) };
+            hft.micro_price_dn = if dn_best_bid_sz + dn_best_ask_sz > 0.0 && dn_bid_px > 0.0 && dn_ask_px > 0.0 {
+                (dn_bid_px * dn_best_ask_sz + dn_ask_px * dn_best_bid_sz) / (dn_best_bid_sz + dn_best_ask_sz)
+            } else { dn_bid_px.max(dn_ask_px).max(0.0) };
         }
     }
     // ─── Broadcast HFT state in real-time via WebSocket ────────────────

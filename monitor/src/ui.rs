@@ -4,10 +4,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use std::collections::VecDeque;
+
 use crate::InputMode;
 use crate::State;
 
-const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY", "GRAFICOS"];
+const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY", "GRAFICOS", "MICRO", "OFI"];
 
 // ─── Bloomberg Terminal Palette ────────────────────────────────────
 const BB_BG:       Color = Color::Reset;           // terminal default dark
@@ -77,7 +79,9 @@ pub fn draw(f: &mut Frame, s: &State) {
             match i {
                 0 => (BB_WHITE, BB_RED),
                 1 => (BB_WHITE, BB_GREEN),
-                _ => (BB_WHITE, BB_CYAN),
+                2 => (BB_WHITE, BB_CYAN),
+                3 => (BB_WHITE, BB_MAGENTA),
+                _ => (BB_WHITE, BB_AMBER),
             }
         } else {
             (BB_GRAY, Color::Reset)
@@ -99,6 +103,10 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── MAIN ─────────────────────────────────────────────────────────
     if s.tab == 2 {
         draw_graficos(f, chunks[ci], s);
+    } else if s.tab == 3 {
+        draw_microestructura(f, chunks[ci], s);
+    } else if s.tab == 4 {
+        draw_ofi(f, chunks[ci], s);
     } else {
         draw_dashboard(f, chunks[ci], s);
     }
@@ -1254,6 +1262,569 @@ fn draw_obi_stats(f: &mut Frame, area: Rect, s: &State) {
     f.render_widget(Paragraph::new(lines).block(
         Block::default().borders(Borders::ALL).title("OBI STATS")
             .border_style(Style::default().fg(BB_BORDER))), area);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB 3: MARKET MICROSTRUCTURE — session indicators
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_microestructura(f: &mut Frame, area: Rect, s: &State) {
+    let vert = Layout::default().direction(Direction::Vertical)
+        .constraints([Constraint::Ratio(2,5), Constraint::Ratio(1,5), Constraint::Ratio(2,5)])
+        .split(area);
+
+    let top = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(vert[0]);
+    draw_micro_price(f, top[0], s, "UP", &s.sess_up_prices, &s.sess_mids, BB_GREEN);
+    draw_micro_price(f, top[1], s, "DN", &s.sess_dn_prices, &s.sess_mids, BB_RED);
+
+    draw_micro_depth(f, vert[1], s);
+
+    let bot = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(vert[2]);
+    draw_micro_spread(f, bot[0], s);
+    draw_micro_metrics(f, bot[1], s);
+}
+
+fn draw_micro_price(f: &mut Frame, area: Rect, _s: &State, label: &str,
+                     prices: &VecDeque<f64>, mids: &VecDeque<f64>, color: Color) {
+    let chart_h = (area.height as usize).saturating_sub(3).max(3);
+    let chart_w = (area.width as usize).saturating_sub(10).max(8);
+    let vals: Vec<f64> = prices.iter().copied().collect();
+    let mid_vals: Vec<f64> = mids.iter().copied().collect();
+
+    if vals.len() < 2 {
+        let lines = vec![Line::from(Span::styled("  esperando...", Style::default().fg(BB_DIM)))];
+        f.render_widget(Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title(format!("PRICE {label}"))
+                .border_style(Style::default().fg(color))), area);
+        return;
+    }
+
+    let n = vals.len().min(mid_vals.len());
+    let step = if n > chart_w { (n as f64 / chart_w as f64).max(1.0) } else { 1.0 };
+    let mut px: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut md: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut idx = 0.0f64;
+    while idx < n as f64 && px.len() < chart_w {
+        let i = idx as usize;
+        px.push(vals[i]);
+        md.push(if i < mid_vals.len() { mid_vals[i] } else { vals[i] });
+        idx += step;
+    }
+
+    let all_max = px.iter().chain(md.iter()).cloned().fold(f64::NEG_INFINITY, f64::max);
+    let all_min = px.iter().chain(md.iter()).cloned().fold(f64::INFINITY, f64::min);
+    let margin = (all_max - all_min) * 0.1;
+    let min_v = (all_min - margin).max(0.0);
+    let max_v = all_max + margin;
+    let range = (max_v - min_v).max(0.0001);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for row in 0..chart_h {
+        let val_at = max_v - (row as f64 / (chart_h - 1) as f64) * range;
+        let mut spans = vec![
+            Span::styled(format!("{:<6.4} ", val_at), Style::default().fg(if row % 3 == 0 { BB_DIM } else { Color::Reset })),
+        ];
+        for x in 0..px.len() {
+            let p = px[x];
+            let m = md[x];
+            let p_y = ((max_v - p) / range * (chart_h - 1) as f64).round() as usize;
+            let m_y = ((max_v - m) / range * (chart_h - 1) as f64).round() as usize;
+            let ch = if p_y == row && m_y == row { "█" }
+                else if p_y == row { "▀" }
+                else if m_y == row { "·" }
+                else { " " };
+            let c = if p_y == row { color } else if m_y == row { BB_DIM } else { Color::Reset };
+            spans.push(Span::styled(ch, Style::default().fg(c)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let cur = vals.last().copied().unwrap_or(0.0);
+    let open = *vals.first().unwrap_or(&cur);
+    let delta = cur - open;
+    let delta_pct = if open > 0.0 { (cur / open - 1.0) * 100.0 } else { 0.0 };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  cur {:.4}", cur), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  open {:.4}", open), Style::default().fg(BB_DIM)),
+        Span::styled(format!("  Δ{:+.1}%", delta_pct), Style::default().fg(if delta >= 0.0 { BB_GREEN } else { BB_RED }).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  N={}", vals.len()), Style::default().fg(BB_DIM)),
+    ]));
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title(format!("PRICE {label}  ▀=trade ·=mid"))
+            .border_style(Style::default().fg(color))), area);
+}
+
+fn draw_micro_depth(f: &mut Frame, area: Rect, s: &State) {
+    let avail_w = (area.width as usize).saturating_sub(14).max(20);
+    let half_w = avail_w / 2;
+
+    // UP book depth
+    let up_bids: Vec<(f64, f64)> = s.book_up.bids.iter().map(|l| (l.price, l.size)).collect();
+    let up_asks: Vec<(f64, f64)> = s.book_up.asks.iter().map(|l| (l.price, l.size)).collect();
+    // DN book depth
+    let dn_bids: Vec<(f64, f64)> = s.book_dn.bids.iter().map(|l| (l.price, l.size)).collect();
+    let dn_asks: Vec<(f64, f64)> = s.book_dn.asks.iter().map(|l| (l.price, l.size)).collect();
+
+    let all_sizes: Vec<f64> = up_bids.iter().chain(up_asks.iter()).chain(dn_bids.iter()).chain(dn_asks.iter())
+        .map(|&(_, s)| s).collect();
+    let max_sz = all_sizes.iter().cloned().fold(0.0f64, f64::max).max(1.0);
+
+    // Build combined price list (sorted descending)
+    let mut all_prices: Vec<f64> = Vec::new();
+    for &(p, _) in &up_bids { all_prices.push(p); }
+    for &(p, _) in &up_asks { all_prices.push(p); }
+    for &(p, _) in &dn_bids { all_prices.push(p); }
+    for &(p, _) in &dn_asks { all_prices.push(p); }
+    all_prices.sort_unstable_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    all_prices.dedup_by(|a, b| (*a - *b).abs() < 0.0001);
+
+    let chart_h = (area.height as usize).saturating_sub(3).max(4);
+    let step = if all_prices.len() > chart_h {
+        (all_prices.len() as f64 / chart_h as f64).max(1.0)
+    } else { 1.0 };
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut idx = 0.0;
+    while idx < all_prices.len() as f64 && lines.len() < chart_h {
+        let i = idx as usize;
+        let p = all_prices[i];
+
+        let up_bid_cum: f64 = up_bids.iter().filter(|&&(bp, _)| bp >= p).map(|&(_, s)| s).sum();
+        let up_ask_cum: f64 = up_asks.iter().filter(|&&(ap, _)| ap <= p).map(|&(_, s)| s).sum();
+        let dn_bid_cum: f64 = dn_bids.iter().filter(|&&(bp, _)| bp >= p).map(|&(_, s)| s).sum();
+        let dn_ask_cum: f64 = dn_asks.iter().filter(|&&(ap, _)| ap <= p).map(|&(_, s)| s).sum();
+
+        let up_bid_w = ((up_bid_cum / max_sz) * half_w as f64) as usize;
+        let dn_bid_w = ((dn_bid_cum / max_sz) * half_w as f64) as usize;
+        let up_ask_w = ((up_ask_cum / max_sz) * half_w as f64) as usize;
+        let dn_ask_w = ((dn_ask_cum / max_sz) * half_w as f64) as usize;
+
+        let total_w = up_bid_w + dn_bid_w + up_ask_w + dn_ask_w;
+        let scale = if total_w > 0 && total_w > avail_w {
+            avail_w as f64 / total_w as f64
+        } else { 1.0 };
+
+        let up_bid_w = ((up_bid_w as f64 * scale) as usize).min(half_w);
+        let dn_bid_w = ((dn_bid_w as f64 * scale) as usize).min(half_w);
+        let up_ask_w = ((up_ask_w as f64 * scale) as usize).min(half_w);
+        let dn_ask_w = ((dn_ask_w as f64 * scale) as usize).min(half_w);
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<7.4} ", p), Style::default().fg(BB_DIM)),
+            Span::styled("█".repeat(up_bid_w), Style::default().fg(BB_GREEN)),
+            Span::styled("▓".repeat(dn_bid_w), Style::default().fg(Color::Rgb(0, 150, 70))),
+            Span::styled("▐".repeat(up_ask_w), Style::default().fg(BB_RED)),
+            Span::styled("░".repeat(dn_ask_w), Style::default().fg(Color::Rgb(200, 40, 40))),
+        ]));
+
+        idx += step;
+    }
+
+    let up_bid_total: f64 = up_bids.iter().map(|&(_, s)| s).sum();
+    let up_ask_total: f64 = up_asks.iter().map(|&(_, s)| s).sum();
+    let dn_bid_total: f64 = dn_bids.iter().map(|&(_, s)| s).sum();
+    let dn_ask_total: f64 = dn_asks.iter().map(|&(_, s)| s).sum();
+    lines.insert(0, Line::from(vec![
+        Span::styled(format!("UPbid{:.0}k", up_bid_total / 1000.0),
+            Style::default().fg(BB_GREEN)),
+        Span::styled(format!(" DNbid{:.0}k", dn_bid_total / 1000.0),
+            Style::default().fg(Color::Rgb(0, 150, 70))),
+        Span::styled(format!(" UPask{:.0}k", up_ask_total / 1000.0),
+            Style::default().fg(BB_RED)),
+        Span::styled(format!(" DNask{:.0}k", dn_ask_total / 1000.0),
+            Style::default().fg(Color::Rgb(200, 40, 40))),
+    ]));
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("DEPTH PROFILE  █UPbid ▓DNbid ▐UPask ░DNask")
+            .border_style(Style::default().fg(BB_BORDER))), area);
+}
+
+fn draw_micro_spread(f: &mut Frame, area: Rect, s: &State) {
+    let chart_h = (area.height as usize).saturating_sub(3).max(3);
+    let chart_w = (area.width as usize).saturating_sub(10).max(8);
+    let vals: Vec<f64> = s.sess_spreads.iter().copied().collect();
+
+    if vals.len() < 2 {
+        let lines = vec![Line::from(Span::styled("  esperando...", Style::default().fg(BB_DIM)))];
+        f.render_widget(Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title("SPREAD EVOLUTION")
+                .border_style(Style::default().fg(BB_BORDER))), area);
+        return;
+    }
+
+    let step = if vals.len() > chart_w { (vals.len() as f64 / chart_w as f64).max(1.0) } else { 1.0 };
+    let mut sampled: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut idx = 0.0;
+    while idx < vals.len() as f64 && sampled.len() < chart_w {
+        sampled.push(vals[idx as usize]);
+        idx += step;
+    }
+
+    let max_v = sampled.iter().cloned().fold(f64::NEG_INFINITY, f64::max).max(0.01);
+    let range = max_v.max(0.0001);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for row in 0..chart_h {
+        let thresh = max_v - (row as f64 / (chart_h - 1) as f64) * range;
+        let mut spans = vec![
+            Span::styled(format!("{:<6.4} ", thresh), Style::default().fg(if row % 3 == 0 { BB_DIM } else { Color::Reset })),
+        ];
+        for x in 0..sampled.len() {
+            let v = sampled[x];
+            let c = if v >= thresh {
+                if v > 0.008 { BB_RED } else if v > 0.003 { BB_AMBER } else { BB_GREEN }
+            } else { Color::Reset };
+            spans.push(Span::styled(if v >= thresh { "█" } else { " " }, Style::default().fg(c)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let cur = vals.last().copied().unwrap_or(0.0);
+    let label = if cur < 0.003 { "TIGHT" } else if cur < 0.008 { "MED" } else { "WIDE" };
+    let label_c = if cur < 0.003 { BB_GREEN } else if cur < 0.008 { BB_AMBER } else { BB_RED };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  spread {:.4}  ", cur), Style::default().fg(label_c).add_modifier(Modifier::BOLD)),
+        Span::styled(label, Style::default().fg(label_c).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  max{:.4} min{:.4}", s.sess_max_spread, s.sess_min_spread),
+            Style::default().fg(BB_DIM)),
+    ]));
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("SPREAD EVOLUTION")
+            .border_style(Style::default().fg(BB_BORDER))), area);
+}
+
+fn draw_micro_metrics(f: &mut Frame, area: Rect, s: &State) {
+    let b = Modifier::BOLD;
+
+    let total_trades = s.sess_trades_up + s.sess_trades_dn;
+    let total_vol = s.sess_vol_up + s.sess_vol_dn;
+    let up_ratio = if total_trades > 0 { s.sess_trades_up as f64 / total_trades as f64 * 100.0 } else { 50.0 };
+    let vol_ratio = if total_vol > 0.0 { s.sess_vol_up / total_vol * 100.0 } else { 50.0 };
+    let avg_spread: f64 = if !s.sess_spreads.is_empty() {
+        s.sess_spreads.iter().sum::<f64>() / s.sess_spreads.len() as f64
+    } else { 0.0 };
+
+    let eff_spread = if s.sess_up_prices.len() > 1 && s.sess_mids.len() > 0 {
+        let last_price = *s.sess_up_prices.back().unwrap_or(&0.0);
+        let last_mid = *s.sess_mids.back().unwrap_or(&0.0);
+        if last_mid > 0.0 { ((last_price - last_mid).abs() / last_mid) * 100.0 } else { 0.0 }
+    } else { 0.0 };
+
+    let up_color = if up_ratio > 55.0 { BB_GREEN } else if up_ratio < 45.0 { BB_RED } else { BB_AMBER };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Trades  ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("UP {}  ", s.sess_trades_up), Style::default().fg(BB_GREEN).add_modifier(b)),
+            Span::styled(format!("DN {}  ", s.sess_trades_dn), Style::default().fg(BB_RED).add_modifier(b)),
+            Span::styled(format!("total {}", total_trades), Style::default().fg(BB_WHITE)),
+        ]),
+        Line::from(vec![
+            Span::styled("Volume  ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("UP {:.0}  ", s.sess_vol_up), Style::default().fg(BB_GREEN)),
+            Span::styled(format!("DN {:.0}  ", s.sess_vol_dn), Style::default().fg(BB_RED)),
+            Span::styled(format!("tot {:.0}", total_vol), Style::default().fg(BB_WHITE)),
+        ]),
+        Line::from(vec![
+            Span::styled("Ratio   ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("UP {:.0}% ", up_ratio), Style::default().fg(up_color).add_modifier(b)),
+            Span::styled(format!("vol {:.0}% UP", vol_ratio), Style::default().fg(BB_DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled("Spread  ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("avg {:.4}  ", avg_spread), Style::default().fg(BB_WHITE)),
+            Span::styled(format!("eff {:.2}%", eff_spread), Style::default().fg(BB_CYAN).add_modifier(b)),
+        ]),
+        Line::from(vec![
+            Span::styled("Sesión  ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("{} ticks", s.sess_mids.len()), Style::default().fg(BB_AMBER)),
+            Span::styled(format!("  imb {:.2}x", s.hft.imbalance), Style::default().fg(BB_WHITE).add_modifier(b)),
+        ]),
+    ];
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("SESSION METRICS")
+            .border_style(Style::default().fg(BB_BORDER))), area);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB 4: OFI (Order Flow Imbalance) + Micro-Price
+// ═══════════════════════════════════════════════════════════════════
+
+fn draw_ofi(f: &mut Frame, area: Rect, s: &State) {
+    let vert = Layout::default().direction(Direction::Vertical)
+        .constraints([Constraint::Ratio(2,5), Constraint::Ratio(1,5), Constraint::Ratio(2,5)])
+        .split(area);
+
+    let top = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(vert[0]);
+    draw_ofi_bar(f, top[0], s, "UP", &s.ofi_up_history, BB_GREEN);
+    draw_ofi_bar(f, top[1], s, "DN", &s.ofi_dn_history, BB_RED);
+
+    draw_ofi_cross(f, vert[1], s);
+
+    let bot = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
+        .split(vert[2]);
+    draw_micro_price_ofi(f, bot[0], s, "UP", &s.micro_up_history, BB_GREEN);
+    draw_micro_price_ofi(f, bot[1], s, "DN", &s.micro_dn_history, BB_RED);
+}
+
+/// OFI bar chart: green above zero (buying), red below (selling)
+fn draw_ofi_bar(f: &mut Frame, area: Rect, s: &State, label: &str,
+                history: &VecDeque<f64>, color: Color) {
+    let chart_h = (area.height as usize).saturating_sub(3).max(3);
+    let chart_w = (area.width as usize).saturating_sub(10).max(8);
+    let vals: Vec<f64> = history.iter().copied().collect();
+
+    if vals.len() < 2 {
+        let lines = vec![Line::from(Span::styled("  esperando...", Style::default().fg(BB_DIM)))];
+        f.render_widget(Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title(format!("OFI {label}"))
+                .border_style(Style::default().fg(color))), area);
+        return;
+    }
+
+    let step = if vals.len() > chart_w { (vals.len() as f64 / chart_w as f64).max(1.0) } else { 1.0 };
+    let mut sampled: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut idx = 0.0;
+    while idx < vals.len() as f64 && sampled.len() < chart_w {
+        sampled.push(vals[idx as usize]);
+        idx += step;
+    }
+
+    let abs_max = sampled.iter().map(|v| v.abs()).fold(0.0f64, f64::max).max(1.0);
+    let range = abs_max * 2.0; // total range from -abs_max to +abs_max
+    let zero_row = chart_h / 2;
+
+    let mut lines: Vec<Line> = Vec::new();
+    for row in 0..chart_h {
+        let val_at = if row < zero_row {
+            abs_max - (row as f64 / zero_row as f64) * abs_max
+        } else if row > zero_row {
+            -(row as f64 - zero_row as f64) / (chart_h - 1 - zero_row) as f64 * abs_max
+        } else { 0.0 };
+
+        let is_zero = row == zero_row;
+        let mut spans = vec![
+            Span::styled(if is_zero {
+                format!("─0────── ")
+            } else if row == 0 {
+                format!("{:<+.0}      ", abs_max)
+            } else if row == chart_h - 1 {
+                format!("{:<+.0}      ", -abs_max)
+            } else {
+                format!("         ")
+            }, Style::default().fg(if is_zero { BB_AMBER } else { BB_DIM })),
+        ];
+
+        for x in 0..sampled.len() {
+            let v = sampled[x];
+            let fills = if v >= 0.0 {
+                let top = zero_row.saturating_sub(((v / abs_max) * zero_row as f64) as usize);
+                row >= top && row <= zero_row
+            } else {
+                let bot = zero_row + (((-v) / abs_max) * (chart_h - 1 - zero_row) as f64) as usize;
+                row >= zero_row && row <= bot
+            };
+            let ch = if fills { "█" } else if is_zero { "·" } else { " " };
+            let c = if fills {
+                if v >= 0.0 { BB_GREEN } else { BB_RED }
+            } else if is_zero { BB_AMBER } else { Color::Reset };
+            spans.push(Span::styled(ch, Style::default().fg(c)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let cur = vals.last().copied().unwrap_or(0.0);
+    let label_c = if cur > 0.0 { BB_GREEN } else if cur < 0.0 { BB_RED } else { BB_AMBER };
+    let sum: f64 = vals.iter().sum();
+    lines.push(Line::from(vec![
+        Span::styled(format!("  OFI {label} "), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{cur:+.0}  "), Style::default().fg(label_c).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("sum {sum:+.0}  N={}", vals.len()), Style::default().fg(BB_DIM)),
+        Span::styled(format!("  |max|={:.0}", abs_max), Style::default().fg(BB_DIM)),
+    ]));
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title(format!("OFI {label}  ■=buy ■=sell"))
+            .border_style(Style::default().fg(color))), area);
+}
+
+/// Cross-book OFI: UP vs DN superimposed
+fn draw_ofi_cross(f: &mut Frame, area: Rect, s: &State) {
+    let chart_w = (area.width as usize).saturating_sub(12).max(10);
+    let up_vals: Vec<f64> = s.ofi_up_history.iter().copied().collect();
+    let dn_vals: Vec<f64> = s.ofi_dn_history.iter().copied().collect();
+    let n = up_vals.len().min(dn_vals.len());
+
+    if n < 2 {
+        let lines = vec![Line::from(Span::styled("  esperando...", Style::default().fg(BB_DIM)))];
+        f.render_widget(Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title("OFI CROSS-BOOK")
+                .border_style(Style::default().fg(BB_AMBER))), area);
+        return;
+    }
+
+    let step = if n > chart_w { (n as f64 / chart_w as f64).max(1.0) } else { 1.0 };
+    let mut up_s: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut dn_s: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut idx = 0.0;
+    while idx < n as f64 && up_s.len() < chart_w {
+        let i = idx as usize;
+        up_s.push(up_vals[i]);
+        dn_s.push(dn_vals[i]);
+        idx += step;
+    }
+
+    let all: Vec<f64> = up_s.iter().chain(dn_s.iter()).copied().collect();
+    let min_v = all.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_v = all.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let abs_max = min_v.abs().max(max_v.abs()).max(1.0);
+    let chart_h = (area.height as usize).saturating_sub(3).max(3);
+    let zero_row = chart_h / 2;
+
+    // Cumulative flow (area between UP and DN OFI)
+    let up_sum: f64 = up_vals.iter().sum();
+    let dn_sum: f64 = dn_vals.iter().sum();
+    let net_flow = up_sum - dn_sum;
+    let net_label = if net_flow > 0.0 { "▲UP NET" } else if net_flow < 0.0 { "▼DN NET" } else { "—FLAT" };
+    let net_c = if net_flow > 0.0 { BB_GREEN } else if net_flow < 0.0 { BB_RED } else { BB_AMBER };
+
+    let mut lines: Vec<Line> = Vec::new();
+    for row in 0..chart_h {
+        let val_at = if row < zero_row {
+            abs_max - (row as f64 / zero_row as f64) * abs_max
+        } else if row > zero_row {
+            -(row as f64 - zero_row as f64) / (chart_h - 1 - zero_row) as f64 * abs_max
+        } else { 0.0 };
+
+        let is_zero = row == zero_row;
+        let mut spans = vec![
+            Span::styled(if is_zero {
+                format!("─0─────── ")
+            } else if row % 3 == 0 {
+                format!("{:<+.0}       ", val_at)
+            } else { format!("          ") },
+                Style::default().fg(if is_zero { BB_AMBER } else { BB_DIM })),
+        ];
+
+        for x in 0..up_s.len() {
+            let up = up_s[x];
+            let dn = dn_s[x];
+            let up_y = if up >= 0.0 {
+                zero_row.saturating_sub(((up / abs_max) * zero_row as f64) as usize)
+            } else {
+                zero_row + (((-up) / abs_max) * (chart_h - 1 - zero_row) as f64) as usize
+            };
+            let dn_y = if dn >= 0.0 {
+                zero_row.saturating_sub(((dn / abs_max) * zero_row as f64) as usize)
+            } else {
+                zero_row + (((-dn) / abs_max) * (chart_h - 1 - zero_row) as f64) as usize
+            };
+
+            let up_fill = (up >= 0.0 && row <= zero_row && row >= up_y) || (up < 0.0 && row >= zero_row && row <= up_y);
+            let dn_fill = (dn >= 0.0 && row <= zero_row && row >= dn_y) || (dn < 0.0 && row >= zero_row && row <= dn_y);
+
+            let ch = if up_fill && dn_fill { "█" }
+                else if up_fill { "▀" }
+                else if dn_fill { "▄" }
+                else if is_zero { "·" }
+                else { " " };
+            let c = if up_fill && dn_fill { BB_AMBER }
+                else if up_fill { BB_GREEN }
+                else if dn_fill { BB_RED }
+                else if is_zero { BB_AMBER }
+                else { Color::Reset };
+            spans.push(Span::styled(ch, Style::default().fg(c)));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled(" ▀OFI UP ", Style::default().fg(BB_GREEN).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("sum {up_sum:+.0}  "), Style::default().fg(if up_sum > 0.0 { BB_GREEN } else { BB_RED })),
+        Span::styled("▄OFI DN ", Style::default().fg(BB_RED).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("sum {dn_sum:+.0}  "), Style::default().fg(if dn_sum > 0.0 { BB_GREEN } else { BB_RED })),
+        Span::styled(format!("{net_label} {net_flow:+.0}"), Style::default().fg(net_c).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  N={n}"), Style::default().fg(BB_DIM)),
+    ]));
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title("OFI CROSS-BOOK  ▀UP ▄DN █BOTH")
+            .border_style(Style::default().fg(BB_AMBER))), area);
+}
+
+/// Micro-price line chart: trade price vs mid vs micro-price
+fn draw_micro_price_ofi(f: &mut Frame, area: Rect, _s: &State, label: &str,
+                        micros: &VecDeque<f64>, color: Color) {
+    let chart_h = (area.height as usize).saturating_sub(3).max(3);
+    let chart_w = (area.width as usize).saturating_sub(10).max(8);
+    let vals: Vec<f64> = micros.iter().copied().collect();
+
+    if vals.len() < 2 {
+        let lines = vec![Line::from(Span::styled("  esperando...", Style::default().fg(BB_DIM)))];
+        f.render_widget(Paragraph::new(lines).block(
+            Block::default().borders(Borders::ALL).title(format!("MICRO {label}"))
+                .border_style(Style::default().fg(color))), area);
+        return;
+    }
+
+    let step = if vals.len() > chart_w { (vals.len() as f64 / chart_w as f64).max(1.0) } else { 1.0 };
+    let mut sampled: Vec<f64> = Vec::with_capacity(chart_w);
+    let mut idx = 0.0;
+    while idx < vals.len() as f64 && sampled.len() < chart_w {
+        sampled.push(vals[idx as usize]);
+        idx += step;
+    }
+
+    let min_v = sampled.iter().cloned().fold(f64::INFINITY, f64::min).max(0.0);
+    let max_v = sampled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let margin = (max_v - min_v) * 0.1;
+    let min_v = (min_v - margin).max(0.0);
+    let max_v = max_v + margin;
+    let range = (max_v - min_v).max(0.0001);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for row in 0..chart_h {
+        let val_at = max_v - (row as f64 / (chart_h - 1) as f64) * range;
+        let mut spans = vec![
+            Span::styled(format!("{:<6.4} ", val_at),
+                Style::default().fg(if row % 3 == 0 { BB_DIM } else { Color::Reset })),
+        ];
+        for x in 0..sampled.len() {
+            let v = sampled[x];
+            let v_y = ((max_v - v) / range * (chart_h - 1) as f64).round() as usize;
+            let ch = if v_y == row { "█" } else { " " };
+            spans.push(Span::styled(ch, Style::default().fg(if v_y == row { color } else { Color::Reset })));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let cur = vals.last().copied().unwrap_or(0.0);
+    let first = *vals.first().unwrap_or(&cur);
+    let delta = if first > 0.0 { (cur / first - 1.0) * 100.0 } else { 0.0 };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  μ-price {:.4}", cur), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  Δ{:+.2}%", delta),
+            Style::default().fg(if delta >= 0.0 { BB_GREEN } else { BB_RED }).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  rango[{:.4},{:.4}]", min_v, max_v),
+            Style::default().fg(BB_DIM)),
+    ]));
+
+    f.render_widget(Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).title(format!("MICRO-PRICE {label}"))
+            .border_style(Style::default().fg(color))), area);
 }
 
 

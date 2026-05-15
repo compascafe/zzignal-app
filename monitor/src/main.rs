@@ -164,6 +164,22 @@ struct State {
     pub dn_imb_history: VecDeque<f64>,     // DN imbalance history for chart
     pub prev_comb_imb: f64,                // previous combined imbalance for delta
 
+    // Session microstructure tracking (reset each new session)
+    pub sess_up_prices: VecDeque<f64>,     // clob_trade_up history (200 ticks)
+    pub sess_dn_prices: VecDeque<f64>,     // clob_trade_dn history
+    pub sess_mids: VecDeque<f64>,          // mid price history
+    pub sess_spreads: VecDeque<f64>,       // spread history
+    pub sess_trades_up: u64,               // # trades UP this session
+    pub sess_trades_dn: u64,               // # trades DN this session
+    pub sess_vol_up: f64,                  // cumulative UP volume
+    pub sess_vol_dn: f64,                  // cumulative DN volume
+    pub sess_max_spread: f64,              // max spread this session
+    pub sess_min_spread: f64,              // min spread this session
+    pub ofi_up_history: VecDeque<f64>,     // OFI UP history for chart
+    pub ofi_dn_history: VecDeque<f64>,     // OFI DN history
+    pub micro_up_history: VecDeque<f64>,   // micro-price UP history
+    pub micro_dn_history: VecDeque<f64>,   // micro-price DN history
+
     // Gemini
     pub gemini_active: bool,
     pub gemini_budget: f64,
@@ -287,6 +303,17 @@ impl State {
             up_imb_history: VecDeque::with_capacity(200),
             dn_imb_history: VecDeque::with_capacity(200),
             prev_comb_imb: 1.0,
+            sess_up_prices: VecDeque::with_capacity(200),
+            sess_dn_prices: VecDeque::with_capacity(200),
+            sess_mids: VecDeque::with_capacity(200),
+            sess_spreads: VecDeque::with_capacity(200),
+            sess_trades_up: 0, sess_trades_dn: 0,
+            sess_vol_up: 0.0, sess_vol_dn: 0.0,
+            sess_max_spread: 0.0, sess_min_spread: 1.0,
+            ofi_up_history: VecDeque::with_capacity(200),
+            ofi_dn_history: VecDeque::with_capacity(200),
+            micro_up_history: VecDeque::with_capacity(200),
+            micro_dn_history: VecDeque::with_capacity(200),
             gemini_active: false,
             gemini_budget: 0.0,
             gemini_target: 0.0,
@@ -437,6 +464,38 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
 
     s.session_vol_cum += new_hft.clob_trade_up_vol + new_hft.clob_trade_dn_vol;
 
+    // Session microstructure tracking
+    {
+        let up = new_hft.clob_trade_up;
+        let dn = new_hft.clob_trade_dn;
+        if up > 0.0 { s.sess_up_prices.push_back(up); }
+        if dn > 0.0 { s.sess_dn_prices.push_back(dn); }
+        s.sess_mids.push_back(new_hft.mid);
+        s.sess_spreads.push_back(new_hft.spread);
+        if up > 0.0 || dn > 0.0 {
+            if new_hft.clob_trade_up_vol > 0.0 { s.sess_trades_up += 1; s.sess_vol_up += new_hft.clob_trade_up_vol; }
+            if new_hft.clob_trade_dn_vol > 0.0 { s.sess_trades_dn += 1; s.sess_vol_dn += new_hft.clob_trade_dn_vol; }
+        }
+        if new_hft.spread > s.sess_max_spread { s.sess_max_spread = new_hft.spread; }
+        if new_hft.spread > 0.0 && new_hft.spread < s.sess_min_spread { s.sess_min_spread = new_hft.spread; }
+        while s.sess_up_prices.len() > 200 { s.sess_up_prices.pop_front(); }
+        while s.sess_dn_prices.len() > 200 { s.sess_dn_prices.pop_front(); }
+        while s.sess_mids.len() > 200 { s.sess_mids.pop_front(); }
+        while s.sess_spreads.len() > 200 { s.sess_spreads.pop_front(); }
+    }
+
+    // OFI + micro-price tracking
+    {
+        s.ofi_up_history.push_back(new_hft.ofi_up);
+        s.ofi_dn_history.push_back(new_hft.ofi_dn);
+        s.micro_up_history.push_back(new_hft.micro_price_up);
+        s.micro_dn_history.push_back(new_hft.micro_price_dn);
+        while s.ofi_up_history.len() > 200 { s.ofi_up_history.pop_front(); }
+        while s.ofi_dn_history.len() > 200 { s.ofi_dn_history.pop_front(); }
+        while s.micro_up_history.len() > 200 { s.micro_up_history.pop_front(); }
+        while s.micro_dn_history.len() > 200 { s.micro_dn_history.pop_front(); }
+    }
+
     // Track combined imbalance for trend analysis
     {
         let up_bid_v: f64 = new_hft.depth_up_bids.iter().map(|(_, s)| s).sum();
@@ -476,6 +535,14 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
             s.add_trade_log("SESSION RESET — posicion manual cerrada".to_string(), Color::Yellow);
             s.reset_manual();
         }
+        // Reset session microstructure tracking
+        s.sess_up_prices.clear(); s.sess_dn_prices.clear();
+        s.sess_mids.clear(); s.sess_spreads.clear();
+        s.sess_trades_up = 0; s.sess_trades_dn = 0;
+        s.sess_vol_up = 0.0; s.sess_vol_dn = 0.0;
+        s.sess_max_spread = 0.0; s.sess_min_spread = 1.0;
+        s.ofi_up_history.clear(); s.ofi_dn_history.clear();
+        s.micro_up_history.clear(); s.micro_dn_history.clear();
         s.add_log("SESSION RESET — new orderbook".to_string(), Color::Yellow);
     }
     if s.session_open_up == 0.0 && new_hft.clob_trade_up > 0.0 {
