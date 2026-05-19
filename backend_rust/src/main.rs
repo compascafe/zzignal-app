@@ -1,6 +1,7 @@
-//! Polymarket BTC 15-min — Backend Service
+//! zzignal-core — BTC 15-min Polymarket Trading Engine
 //!
-//! Pipeline HFT unificado: BOOK_UPDATE | TRADE | BINANCE_TICK → CSV
+//! Bootstrap: wires all modules together and starts the Axum + Tokio runtime.
+//! The MVC architecture is declared in lib.rs.
 
 use mimalloc::MiMalloc;
 #[global_allocator]
@@ -8,7 +9,20 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use std::time::Duration;
 
-mod modules;
+// Module declarations shared with lib.rs (binary crate root)
+mod models;
+#[cfg(feature = "tui")]
+mod views;
+mod controllers;
+mod services;
+mod db;
+mod utils;
+#[cfg(any(
+    feature = "premium-collector",
+    feature = "premium-patterns",
+    feature = "premium-executor"
+))]
+mod premium;
 
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -16,18 +30,17 @@ use chrono::Utc;
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
-use crate::modules::core::worker::{AppMsg, BtcPriceProvider, CandleInterval, CmdMsg, ConnStatus};
-use crate::modules::core::credentials::ClobCredentials;
-use crate::modules::core::state::AppState;
-use crate::modules::core::persistence as db;
-use crate::modules::hft::types::{BinanceDepth, CsvRecord, EventType, PolyDepthFrame};
-use crate::modules::hft::odiseo_filters::FilterContext;
-use crate::modules::hft::ring_buffer::PriceRingBuffer;
-use crate::modules::hft::metrics::{self, TrackingState};
-use crate::modules::analysis::metrics as analysis_metrics;
-use crate::modules::hft::binance_depth::BinanceTickEvent;
-use crate::modules::hft::adaptive_risk_engine::warmup_fetch_and_compute;
-use crate::modules::hft::perf;
+use crate::controllers::worker::{AppMsg, BtcPriceProvider, CandleInterval, CmdMsg, ConnStatus};
+use crate::models::credentials::ClobCredentials;
+use crate::models::state::AppState;
+use crate::utils::persistence;
+use crate::models::hft::{BinanceDepth, CsvRecord, EventType, PolyDepthFrame};
+use crate::services::strategies::filters::FilterContext;
+use crate::utils::ring_buffer::PriceRingBuffer;
+use crate::services::metrics::{self, TrackingState};
+use crate::services::binance::BinanceTickEvent;
+use crate::services::risk::warmup_fetch_and_compute;
+use crate::services::perf;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = match std::env::var("DATABASE_URL") {
         Ok(url) => match sqlx::PgPool::connect(&url).await {
             Ok(pool) => {
-                if let Err(e) = db::run_migrations(&pool).await {
+                if let Err(e) = persistence::run_migrations(&pool).await {
                     tracing::warn!("Migraciones DB fallaron: {e}");
                 } else { info!("PostgreSQL OK — migraciones aplicadas"); }
                 Some(pool)
@@ -145,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .spawn(move || {
                 tokio::runtime::Builder::new_multi_thread()
                     .enable_all().build().expect("tokio runtime worker")
-                    .block_on(crate::modules::core::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
+                    .block_on(crate::controllers::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
             })
             .expect("spawn worker");
     }
@@ -177,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let track2    = Arc::clone(&tracking_state);
         let shutdown2 = shutdown_tx.subscribe();
         tokio::spawn(async move {
-            crate::modules::hft::binance_depth::run_binance_depth_stream(depth2, ring2, tick2, track2, shutdown2).await;
+            crate::services::binance::run_binance_depth_stream(depth2, ring2, tick2, track2, shutdown2).await;
         });
     }
 
@@ -254,9 +267,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Parent is a container — do NOT start recording, just keep as 'scheduled'
                     // The scheduler will auto-generate children and only children record data
                     // Create first child aligned to next boundary
-                    let child_start = crate::modules::db::scheduler::snap_to_next_chunk(parent_start, chunk_min);
+                    let child_start = crate::db::scheduler::snap_to_next_chunk(parent_start, chunk_min);
                     let child_end = child_start + chrono::Duration::minutes(chunk_min as i64);
-                    let child_name = crate::modules::db::api::child_session_name(child_start, chunk_min);
+                    let child_name = crate::db::api::child_session_name(child_start, chunk_min);
                     if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
                         state3.recording_sessions.write().await.push(child_id);
                         state3.session_manager.start_session(child_id, &child_name).ok();
@@ -275,7 +288,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         tokio::spawn(async move {
             info!("[SCHEDULER] Task started");
-            crate::modules::db::scheduler::run_scheduler(state3).await;
+            crate::db::scheduler::run_scheduler(state3).await;
             warn!("[SCHEDULER] Task exited unexpectedly");
         });
     }
@@ -284,21 +297,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let state4 = Arc::clone(&state);
         tokio::spawn(async move {
-            crate::modules::premium::collector::scheduler::run_collector(state4).await;
+            crate::premium::collector::scheduler::run_collector(state4).await;
         });
     }
     #[cfg(feature = "premium-patterns")]
     {
         let state5 = Arc::clone(&state);
         tokio::spawn(async move {
-            crate::modules::premium::patterns::scheduler::run_detector(state5).await;
+            crate::premium::patterns::scheduler::run_detector(state5).await;
         });
     }
     #[cfg(feature = "premium-executor")]
     {
         let state6 = Arc::clone(&state);
         tokio::spawn(async move {
-            crate::modules::premium::executor::scheduler::run_executor(state6).await;
+            crate::premium::executor::scheduler::run_executor(state6).await;
         });
     }
 
@@ -325,7 +338,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let addr = "0.0.0.0:8080";
-    let app  = crate::modules::core::api::router(Arc::clone(&state));
+    let app  = crate::controllers::api::router(Arc::clone(&state));
 
     // ─── Wisdom Checkpoint — save wisdom_state.json every hour ───────────────
     {
@@ -544,7 +557,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
 
             let n = BTC_TICK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if n % 10 == 0 {
-                if let Err(e) = db::insert_btc_tick(state.db.as_ref(), *price).await {
+                if let Err(e) = persistence::insert_btc_tick(state.db.as_ref(), *price).await {
                     warn!("DB btc_tick: {e}");
                 }
             }
@@ -562,7 +575,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             if !is_same {
                 *state.recent_fills.write().await = fills.clone();
                 for fill in fills.iter() {
-                    if let Err(e) = db::insert_fill(state.db.as_ref(), fill).await {
+                    if let Err(e) = persistence::insert_fill(state.db.as_ref(), fill).await {
                         warn!("DB insert_fill: {e}");
                     }
                 }
@@ -573,7 +586,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         AppMsg::Candles { interval, candles } => {
             *state.candles.write().await = candles.clone();
             for c in candles {
-                if let Err(e) = db::upsert_candle(state.db.as_ref(), interval, c).await {
+                if let Err(e) = persistence::upsert_candle(state.db.as_ref(), interval, c).await {
                     warn!("DB upsert_candle: {e}");
                 }
             }
@@ -588,7 +601,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                 _ => candles.push(c.clone()),
             }
             drop(candles);
-            if let Err(e) = db::upsert_candle(state.db.as_ref(), &interval, c).await {
+            if let Err(e) = persistence::upsert_candle(state.db.as_ref(), &interval, c).await {
                 warn!("DB upsert_candle update: {e}");
             }
         }
@@ -598,8 +611,8 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
 
 // ─── CSV Pipeline Unificado (20 columnas) ─────────────────────────────────────
 
-use crate::modules::core::worker::PriceLevel;
-use crate::modules::db::repository as session_repo;
+use crate::controllers::worker::PriceLevel;
+use crate::db::repository as session_repo;
 use serde_json::json;
 
 async fn capture_book_db(state: &AppState, side: &str, bids: &[PriceLevel], asks: &[PriceLevel]) {
@@ -703,11 +716,6 @@ async fn capture_combined(
         .or_else(|| state.session_manager.active_ids().last().copied())
         .unwrap_or(0);
     rec.session_id = active_sid;
-
-    // ─── Market Pressure: compute only (fields removed from CSV) ──────
-    {
-        let _pressure = analysis_metrics::compute_pressure(poly_bids, poly_asks, rec.poly_mid, 10.0);
-    }
 
     let t_start = std::time::Instant::now();
 
@@ -842,7 +850,7 @@ async fn capture_combined(
             static ASK_WALL_COUNT: AtomicU8 = AtomicU8::new(0);
             let is_wall = rec.poly_ask_vol_all > 0.0 && rec.poly_ask_vol_all > rec.poly_bid_vol_all * 3.0;
             if is_wall {
-                let c = ASK_WALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let c = ASK_WALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed).saturating_add(1);
                 rec.ask_wall = if c >= 3 { 1 } else { 0 };
             } else {
                 ASK_WALL_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -862,7 +870,7 @@ async fn capture_combined(
             static IMB_COUNT: AtomicU64 = AtomicU64::new(0);
             let bits = rec.poly_imbalance.to_bits();
             let prev_sum = IMB_SUM.fetch_add(bits, Ordering::Relaxed);
-            let count = IMB_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            let count = IMB_COUNT.fetch_add(1, Ordering::Relaxed).saturating_add(1);
             if count >= 3 {
                 let avg_bits = (prev_sum + bits) / 3;
                 rec.poly_imbalance = f64::from_bits(avg_bits);
@@ -879,7 +887,7 @@ async fn capture_combined(
             use std::sync::atomic::AtomicU8;
             static SPOOF_COUNT: AtomicU8 = AtomicU8::new(0);
             if rec.spoofing_flag == 1 {
-                let c = SPOOF_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let c = SPOOF_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed).saturating_add(1);
                 rec.spoofing_flag = if c >= 3 { 1 } else { 0 };
             } else {
                 SPOOF_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -1079,7 +1087,7 @@ async fn capture_combined(
     }
 }
 
-async fn capture_fills_csv(state: &AppState, fills: &[crate::modules::core::worker::RecentFill]) {
+async fn capture_fills_csv(state: &AppState, fills: &[crate::controllers::worker::RecentFill]) {
     let up_book   = state.book_up.read().await.clone();
     let down_book = state.book_down.read().await.clone();
 
@@ -1096,8 +1104,8 @@ async fn capture_fills_csv(state: &AppState, fills: &[crate::modules::core::work
         };
 
         let trade_side = match fill.side {
-            crate::modules::core::worker::OrderSide::Buy => "BUY",
-            crate::modules::core::worker::OrderSide::Sell => "SELL",
+            crate::controllers::worker::OrderSide::Buy => "BUY",
+            crate::controllers::worker::OrderSide::Sell => "SELL",
         };
 
         capture_combined(

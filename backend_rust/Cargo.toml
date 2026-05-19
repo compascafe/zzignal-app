@@ -7,6 +7,7 @@ default-run = "polymarket-backend"
 
 [features]
 default = []
+tui = ["ratatui", "crossterm"]
 premium-collector = []
 premium-patterns  = ["premium-collector"]
 premium-executor  = ["premium-patterns"]
@@ -64,6 +65,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # System metrics for health endpoint
 sysinfo = "0.33"
 
+# Terminal UI (optional — compiled only with --features tui)
+ratatui   = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+
 # Allocator optimizado para 2GB Lightsail
 mimalloc = "0.1"
 
@@ -78,6 +83,11 @@ path = "src/setup.rs"
 [[bin]]
 name = "license-gen"
 path = "src/bin/license-gen.rs"
+
+[[bin]]
+name = "zzignal-monitor"
+path = "src/bin/monitor.rs"
+required-features = ["tui"]
 
 [profile.release]
 opt-level     = 2

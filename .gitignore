@@ -1,12 +1,42 @@
-.claude/
+# Build artifacts
 target/
+
+# Secrets & credentials
 .env
-CLAUDE.md
-*.log
+*.pem
+*.key
+credentials.json
+CLOB_API_KEY=*
+CLOB_API_SECRET=*
+POLYMARKET_PRIVATE_KEY=*
+
+# IDE
+.claude/
+.idea/
 .DS_Store
 *.swp
 *.swo
 *~
+
+# Logs
+*.log
+
+# Documentation & session logs (local only)
+*.md
+!AGENTS.md
+notes/
+
+# Sessions (large binary data)
+backend_rust/sessions/
+backend_rust/*_state.json
+backend_rust/hydra_noreturn_state.json
+
+# Legacy frontend (excluded from open-source)
 frontend_java/
-frontend_react/node_modules/
+frontend_react/
+
+# Java-classes
 *.class
+
+# Node
+node_modules/
