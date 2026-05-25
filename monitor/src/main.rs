@@ -955,7 +955,7 @@ async fn main() -> io::Result<()> {
                     terminal.show_cursor()?;
                     return Ok(());
                 }
-                KeyCode::Tab => { s.tab = (s.tab + 1) % 3; }
+                KeyCode::Tab => { s.tab = (s.tab + 1) % 2; }
                 KeyCode::Char('/') => { s.input_mode = InputMode::Command; s.input_buf.clear(); }
                 KeyCode::Char('s') => {
                     s.add_log("Starting 15-min session...".to_string(), Color::Green);
