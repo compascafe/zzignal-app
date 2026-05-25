@@ -21,8 +21,6 @@ use crate::services::risk::MacroContext;
 use crate::services::strategies::t5::T5Manager;
 use crate::services::strategies::t3::T3Manager;
 use crate::services::strategies::pnr::PnrManager;
-use crate::services::strategies::insight::InsightManager;
-use crate::services::strategies::fenix::FenixTradingManager;
 use crate::services::strategies::odiseo::OdiseoTradingManager;
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -158,11 +156,6 @@ pub struct AppState {
     /// PNR Analysis — Wisdom v4 (Hydra No Return)
     pub pnr_manager: Arc<PnrManager>,
 
-    /// Insight Strategies — Cerbero & Fenix families
-    pub insight_manager: Arc<InsightManager>,
-
-    /// Fenix Trading — paper-trading simulation ($20 per strategy)
-    pub fenix_trading: Arc<FenixTradingManager>,
     /// Odiseo Trading — bid-floor momentum paper-trading (bidirectional, 3-layer SL)
     pub odiseo_trading: Arc<OdiseoTradingManager>,
 
@@ -249,8 +242,6 @@ impl AppState {
             t5_manager:        Arc::new(T5Manager::new()),
             t3_manager:        Arc::new(T3Manager::new()),
             pnr_manager:       Arc::new(PnrManager::new()),
-            insight_manager:   Arc::new(InsightManager::new()),
-            fenix_trading:     Arc::new(FenixTradingManager::new()),
             odiseo_trading:    Arc::new(OdiseoTradingManager::new(Some(cmd_tx_clone))),
             poly_depth_history: RwLock::new(VecDeque::with_capacity(300)),
             diagnostic_mode: AtomicBool::new(false),

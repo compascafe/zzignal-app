@@ -323,7 +323,7 @@ impl StrategyEngine {
     // ─── Session close ─────────────────────────────────────────────────────
 
     pub fn on_session_close(&self, session_id: i32, actual_outcome: &str, final_poly: f64) -> Option<StrategySession> {
-        let (mut cs, resolved) = {
+        let (cs, resolved) = {
             let mut sessions = self.sessions.lock().unwrap();
             let s = match sessions.get_mut(&session_id) {
                 Some(v) => v, None => return None,
@@ -409,7 +409,7 @@ impl StrategyEngine {
     }
 
     fn close_trade(&self, trade: &mut StrategyTrade, s: &mut StrategySession, mid: f64, bid: f64, ask: f64) {
-        let (tp, stopped) = self.check_exit(trade, mid, bid, ask);
+        let (tp, _stopped) = self.check_exit(trade, mid, bid, ask);
         let exit_price = match trade.direction {
             Direction::Up if tp => bid,
             Direction::Up => bid.max(0.0),
@@ -474,7 +474,7 @@ impl StrategyEngine {
 
     fn rl_update(&self, correct: bool) {
         let mut w = self.wisdom.lock().unwrap();
-        let delta = if correct { 0.005 } else { -0.01 }; // reward < punishment
+        let _delta = if correct { 0.005 } else { -0.01 }; // reward < punishment
 
         if correct && w.accuracy > 0.70 && w.predictions_made >= 5 {
             // Tighten thresholds: raise UP bar, lower DOWN bar

@@ -149,7 +149,6 @@ fn write_column_metadata(w: &mut BufWriter<File>) {
 /// Called outside the writer lock — only the final `write_all` is inside the mutex.
 #[inline]
 /// Delegates to `CsvRecord::to_csv_line()` (single source of truth in types.rs).
-#[inline]
 fn fast_format_csv_line(r: &CsvRecord) -> String {
     r.to_csv_line()
 }

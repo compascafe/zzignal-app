@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use alloy::primitives::Address as AlloyAddress;
 use alloy::providers::ProviderBuilder;
-use alloy::signers::{Signer, local::PrivateKeySigner};
+use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Timelike, Utc};
@@ -22,11 +22,10 @@ use polymarket_client_sdk_v2::clob::types::request::{
 use polymarket_client_sdk_v2::clob::types::Side as ClobSideType;
 use polymarket_client_sdk_v2::clob::types::{Amount, OrderType, Side as ClobSide, SignatureType};
 use polymarket_client_sdk_v2::clob::{Client, Config};
-use polymarket_client_sdk_v2::types::Address;
 use polymarket_client_sdk_v2::gamma;
-use polymarket_client_sdk_v2::gamma::types::request::{EventBySlugRequest, MarketsRequest, PublicProfileRequest};
+use polymarket_client_sdk_v2::gamma::types::request::{EventBySlugRequest, MarketsRequest};
 use polymarket_client_sdk_v2::types::{Decimal, U256};
-use polymarket_client_sdk_v2::{POLYGON, contract_config, ContractConfig};
+use polymarket_client_sdk_v2::{POLYGON, contract_config};
 use reqwest::Client as HttpClient;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc as tokio_mpsc};

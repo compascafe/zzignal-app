@@ -3,15 +3,12 @@
 //! Architecture: MVC (Model-View-Controller)
 //!
 //! - `models/`       — Data types, state, credentials
-//! - `views/`        — Terminal UI (ratatui, optional via "tui" feature)
 //! - `controllers/`  — REST API, WebSocket handlers, worker loop
 //! - `services/`     — Business logic: Binance, Polymarket, metrics, strategies
 //! - `db/`           — PostgreSQL persistence layer
 //! - `utils/`        — Ring buffer, persistence helpers
 
 pub mod models;
-#[cfg(feature = "tui")]
-pub mod views;
 pub mod controllers;
 pub mod services;
 pub mod db;

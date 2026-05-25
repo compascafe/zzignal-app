@@ -17,45 +17,34 @@ pub const REGISTRY: &[CmdDef] = &[
     CmdDef { syntax: "/l<usd>up<cents>        ", desc: "BUY UP limit: $X a precio Y", category: "ABRIR" },
     CmdDef { syntax: "/l<usd>d<cents>         ", desc: "BUY DOWN limit", category: "ABRIR" },
     CmdDef { syntax: "/l<usd>up<cents>e<cents> ", desc: "BUY UP + exit automático", category: "ABRIR" },
-    CmdDef { syntax: "/l<usd>d<cents>e<cents>s<cents>", desc: "BUY + exit + SL bracket", category: "ABRIR" },
-    CmdDef { syntax: "/<usd>up<cents>          ", desc: "(legacy) BUY UP limit", category: "ABRIR" },
-    // ── ALIAS ──
-    CmdDef { syntax: "/b<usd>up<cents>         ", desc: "Alias: BUY (igual que /l)", category: "ALIAS" },
-    CmdDef { syntax: "/k                      ", desc: "Alias: CANCEL (igual que /c)", category: "ALIAS" },
-    CmdDef { syntax: "/x /xu70 /xd70          ", desc: "Alias: EXIT (liq a mercado o límite)", category: "ALIAS" },
+    CmdDef { syntax: "/l<usd>d<cents>e<cents> ", desc: "BUY DOWN + exit automático", category: "ABRIR" },
+    CmdDef { syntax: "/l<usd>up<cents>e<cents>s<cents>", desc: "BUY + exit + SL bracket", category: "ABRIR" },
+    // ── SALIR ──
+    CmdDef { syntax: "/x                      ", desc: "Vender a MERCADO", category: "SALIR" },
+    CmdDef { syntax: "/xu<cents>              ", desc: "Vender UP a precio límite", category: "SALIR" },
+    CmdDef { syntax: "/xd<cents>              ", desc: "Vender DOWN a precio límite", category: "SALIR" },
     // ── CANCELAR ──
-    CmdDef { syntax: "/c                      ", desc: "Cancelar orden activa + SL + TSL", category: "CANCELAR" },
-    CmdDef { syntax: "/c<id>                  ", desc: "Cancelar orden por ID", category: "CANCELAR" },
-    // ── LIQUIDAR ──
-    CmdDef { syntax: "/lup<cents>             ", desc: "Vender UP a precio límite", category: "LIQUIDAR" },
-    CmdDef { syntax: "/ld<cents>              ", desc: "Vender DOWN a precio límite", category: "LIQUIDAR" },
-    CmdDef { syntax: "/lm                     ", desc: "Vender a MERCADO", category: "LIQUIDAR" },
-    // ── CANC+LIQ ──
-    CmdDef { syntax: "/clup<cents>            ", desc: "Cancelar todo + vender UP límite", category: "CANC+LIQ" },
-    CmdDef { syntax: "/cld<cents>             ", desc: "Cancelar todo + vender DOWN límite", category: "CANC+LIQ" },
-    CmdDef { syntax: "/clm                    ", desc: "Cancelar todo + vender MERCADO", category: "CANC+LIQ" },
+    CmdDef { syntax: "/c                      ", desc: "Cancelar todo", category: "CANCELAR" },
+    CmdDef { syntax: "/clm                    ", desc: "Cancelar + vender MERCADO", category: "CANCELAR" },
     // ── SL / TSL ──
-    CmdDef { syntax: "/sl                     ", desc: "Alternar SL MARKET/LIMIT (OFF por defecto)", category: "SL / TSL" },
+    CmdDef { syntax: "/sl                     ", desc: "Alternar SL MARKET/LIMIT", category: "SL / TSL" },
     CmdDef { syntax: "/sl<X>                  ", desc: "SL al X% (1–50)", category: "SL / TSL" },
     CmdDef { syntax: "/nsl                    ", desc: "Desactivar SL", category: "SL / TSL" },
     CmdDef { syntax: "/tsl<X>                 ", desc: "Trailing stop al X%", category: "SL / TSL" },
-    CmdDef { syntax: "/ntsl                   ", desc: "Desactivar trailing stop", category: "SL / TSL" },
+    CmdDef { syntax: "/ntsl                   ", desc: "Desactivar TSL", category: "SL / TSL" },
     // ── EMERGENCIA ──
-    CmdDef { syntax: "/p                      ", desc: "PANIC: liquidar todo", category: "EMERGENCIA" },
-    CmdDef { syntax: "/co                     ", desc: "CASH OUT: market sell + PANIC — todo a USD", category: "EMERGENCIA" },
+    CmdDef { syntax: "/p                      ", desc: "PANIC: cancelar todo + vender + liquidar", category: "EMERGENCIA" },
     // ── GEMINI ──
     CmdDef { syntax: "/<usd>g<cents>          ", desc: "Gemini $X target Y, trigger Y−0.05", category: "GEMINI" },
     CmdDef { syntax: "/<usd>g<cents>e<cents>  ", desc: "Gemini + exit automático", category: "GEMINI" },
     // ── PROVIDER ──
-    CmdDef { syntax: "/provider binance       ", desc: "Cambiar BTC provider (binance/coinbase/kraken)", category: "PROVIDER" },
+    CmdDef { syntax: "/provider binance       ", desc: "BTC provider: binance/coinbase/kraken", category: "PROVIDER" },
     // ── INFO ──
-    CmdDef { syntax: "/pos                    ", desc: "Ver posición actual (tamaño, entry, P&L)", category: "INFO" },
-    CmdDef { syntax: "/alert up 0.70          ", desc: "Alerta visual+sonido al tocar precio", category: "INFO" },
-    CmdDef { syntax: "/alert clear            ", desc: "Borrar todas las alertas", category: "INFO" },
+    CmdDef { syntax: "/pos                    ", desc: "Ver posición actual", category: "INFO" },
+    CmdDef { syntax: "/alert up 0.70          ", desc: "Alerta al tocar precio (up/down/clear)", category: "INFO" },
     // ── META ──
     CmdDef { syntax: "/u                      ", desc: "Undo: cancelar última orden", category: "META" },
-    CmdDef { syntax: "/man                    ", desc: "Ver página de ayuda", category: "META" },
-    CmdDef { syntax: "/quit                   ", desc: "Salir de /man", category: "META" },
+    CmdDef { syntax: "/man                    ", desc: "Ayuda", category: "META" },
 ];
 
 // ═══════════════════════════════════════════════════════════════════
@@ -66,7 +55,6 @@ enum Parsed {
     BuyManual { amount: f64, side: String, price: f64, exit: Option<f64>, sl: Option<f64> },
     CancelActive,
     CancelId(String),
-    CancelLiquidateLimit { outcome: String, price: f64 },
     CancelLiquidateMarket,
     LiquidateLimit { outcome: String, price: f64 },
     LiquidateMarket,
@@ -82,7 +70,6 @@ enum Parsed {
     AlertSet { outcome: String, price: f64 },
     AlertClear,
     Undo,
-    CashOut,
     Gemini { budget: f64, target: f64, exit: Option<f64> },
     Provider(String),
     Unknown(String),
@@ -102,44 +89,33 @@ fn parse(input: &str) -> Parsed {
     let first = input.chars().next().unwrap();
     let rest = &input[1..];
 
-    // ─── ALIASES ────────────────────────────────────────────────
-    match first {
-        'b' => return parse(&format!("l{rest}")),      // /b → /l
-        'k' if rest.is_empty() => return Parsed::CancelActive,
-        'k' => return parse(&format!("cl{rest}")),     // /kup65 → /clup65
-        'x' if rest.is_empty() => return Parsed::LiquidateMarket,
-        'x' => {
-            // /xu70 /xd70 → exit limit. Also /x70 = shorthand (interpret as need context)
-            let liq_rest = rest;
-            if liq_rest.starts_with("up") {
-                if let Some((price, _)) = parse_cents(&liq_rest[2..]) {
-                    return Parsed::LiquidateLimit { outcome: "up".into(), price };
-                }
-            } else if liq_rest.starts_with('u') {
-                if let Some((price, _)) = parse_cents(&liq_rest[1..]) {
-                    return Parsed::LiquidateLimit { outcome: "up".into(), price };
-                }
-            } else if liq_rest.starts_with('d') {
-                let after = &liq_rest[1..];
-                let ps = if after.starts_with("own") { &after[3..] } else { after };
-                if let Some((price, _)) = parse_cents(ps) {
-                    return Parsed::LiquidateLimit { outcome: "down".into(), price };
-                }
+    // ─── /x — exit (market + limit) ──────────────────────────────
+    if first == 'x' {
+        if rest.is_empty() { return Parsed::LiquidateMarket; }
+        let liq_rest = rest;
+        if liq_rest.starts_with('u') {
+            let after = if liq_rest.starts_with("up") { &liq_rest[2..] } else { &liq_rest[1..] };
+            if let Some((price, _)) = parse_cents(after) {
+                return Parsed::LiquidateLimit { outcome: "up".into(), price };
+            }
+        } else if liq_rest.starts_with('d') {
+            let after = &liq_rest[1..];
+            let ps = if after.starts_with("own") { &after[3..] } else { after };
+            if let Some((price, _)) = parse_cents(ps) {
+                return Parsed::LiquidateLimit { outcome: "down".into(), price };
             }
         }
-        _ => {}
+        return Parsed::Unknown(input.to_string());
     }
 
     match first {
         'p' if rest.is_empty() => Parsed::Panic,
-        'c' if rest == "o" => Parsed::CashOut,
         'c' => parse_c_group(rest),
         's' if input.len() >= 2 && input.as_bytes()[1] == b'l' => parse_sl(&input[2..]),
         'n' if input == "nsl" => Parsed::SlOff,
         'n' if input == "ntsl" => Parsed::TrailingStopOff,
-        'l' => parse_l_group(rest),
+        'l' => parse_l_group(rest),   // buy only (exit is /x now)
         'm' if input == "man" => Parsed::ShowMan,
-        'm' if rest == "an" => Parsed::ShowMan,
         'q' if input == "quit" => Parsed::QuitMan,
         'p' if rest == "os" => Parsed::ShowPosition,
         't' if rest.starts_with("sl") => {
@@ -151,7 +127,6 @@ fn parse(input: &str) -> Parsed {
             }
         }
         'a' if rest.starts_with("lert") => {
-            // /alert up 0.70  or  /alert clear
             let alert_rest = rest[4..].trim();
             if alert_rest == "clear" || alert_rest.is_empty() {
                 Parsed::AlertClear
@@ -176,8 +151,7 @@ fn parse(input: &str) -> Parsed {
             }
         }
         _ if first.is_ascii_digit() => {
-            if let Some(gemini) = try_parse_gemini(input) { gemini }
-            else { parse_buy_legacy(input) }
+            try_parse_gemini(input).unwrap_or_else(|| Parsed::Unknown(input.to_string()))
         }
         _ => Parsed::Unknown(input.to_string()),
     }
@@ -190,25 +164,10 @@ fn parse(input: &str) -> Parsed {
 fn parse_c_group(rest: &str) -> Parsed {
     if rest.is_empty() { return Parsed::CancelActive; }
 
-    // /clup65 /cld70 /clm
-    if rest.starts_with('l') {
-        let liq = &rest[1..];
-        if liq.starts_with("up") {
-            if let Some((price, _)) = parse_cents(&liq[2..]) {
-                return Parsed::CancelLiquidateLimit { outcome: "up".into(), price };
-            }
-        } else if liq.starts_with('d') {
-            let after = &liq[1..];
-            let ps = if after.starts_with("own") { &after[3..] } else { after };
-            if let Some((price, _)) = parse_cents(ps) {
-                return Parsed::CancelLiquidateLimit { outcome: "down".into(), price };
-            }
-        } else if liq == "m" {
-            return Parsed::CancelLiquidateMarket;
-        }
-    }
+    // /clm — cancel + liquidate market
+    if rest == "lm" { return Parsed::CancelLiquidateMarket; }
 
-    // /c<id>
+    // /c<id> — cancel by ID
     if rest.len() >= 10 {
         Parsed::CancelId(rest.to_string())
     } else {
@@ -217,42 +176,15 @@ fn parse_c_group(rest: &str) -> Parsed {
 }
 
 fn parse_l_group(rest: &str) -> Parsed {
-    if rest.is_empty() { return Parsed::Unknown("l".into()); }
-
-    // /lup70
-    if rest.starts_with("up") {
-        if let Some((price, _)) = parse_cents(&rest[2..]) {
-            return Parsed::LiquidateLimit { outcome: "up".into(), price };
-        }
-        return Parsed::Unknown(rest.to_string());
-    }
-
-    // /ld70 or /ldown70
-    if rest.starts_with('d') {
-        let after = &rest[1..];
-        let ps = if after.starts_with("own") { &after[3..] } else { after };
-        if let Some((price, _)) = parse_cents(ps) {
-            return Parsed::LiquidateLimit { outcome: "down".into(), price };
-        }
-        return Parsed::Unknown(rest.to_string());
-    }
-
-    // /lm
-    if rest == "m" { return Parsed::LiquidateMarket; }
-
-    // /l10up65e70 → buy with exit
+    // /l10up65[e70][s50] — buy limit (only buy; use /x for exit)
     parse_buy_with_prefix(rest, "l")
 }
 
-fn parse_buy_legacy(input: &str) -> Parsed {
-    parse_buy_inner(input, "")
-}
-
 fn parse_buy_with_prefix(input: &str, _prefix: &str) -> Parsed {
-    parse_buy_inner(input, _prefix)
+    parse_buy_inner(input)
 }
 
-fn parse_buy_inner(input: &str, _prefix: &str) -> Parsed {
+fn parse_buy_inner(input: &str) -> Parsed {
     let (amount, rem) = match parse_amount(input) {
         Some(v) => v,
         None => return Parsed::Unknown(input.to_string()),
@@ -345,8 +277,7 @@ async fn execute(cmd: Parsed, s: &mut State) {
         Parsed::BuyManual { amount, side, price, exit, sl } => {
             place_manual_buy(amount, &side, price, exit, sl, s).await;
         }
-        Parsed::CancelLiquidateLimit { outcome, price } => exec_cancel_liq(outcome, Some(price), false, s).await,
-        Parsed::CancelLiquidateMarket => exec_cancel_liq(String::new(), None, true, s).await,
+        Parsed::CancelLiquidateMarket => exec_cancel_liq_market(s).await,
         Parsed::LiquidateLimit { outcome, price } => exec_liq_limit(&outcome, price, s).await,
         Parsed::LiquidateMarket => exec_liq_market(s).await,
         Parsed::SlToggle => exec_sl_toggle(s).await,
@@ -360,7 +291,6 @@ async fn execute(cmd: Parsed, s: &mut State) {
         Parsed::AlertSet { outcome, price } => exec_alert_set(outcome, price, s),
         Parsed::AlertClear => exec_alert_clear(s),
         Parsed::Undo => exec_undo(s).await,
-        Parsed::CashOut => exec_cashout(s).await,
         Parsed::Gemini { budget, target, exit } => exec_gemini(budget, target, exit, s).await,
         Parsed::Provider(prov) => exec_provider(&prov, s).await,
         Parsed::Unknown(input) => {
@@ -600,7 +530,83 @@ async fn exec_liq_market(s: &mut State) {
 async fn exec_panic(s: &mut State) {
     s.add_log("PANIC — liquidando TODO".to_string(), Color::Red);
     s.add_trade_log("PANIC — liquidando todo".to_string(), Color::Red);
+
+    // Cancel Gemini
+    s.gemini_active = false;
+    s.gemini_budget = 0.0;
+    s.gemini_target = 0.0;
+    s.gemini_trigger = 0.0;
+    s.gemini_exit = 0.0;
+    s.gemini_outcome.clear();
+    s.gemini_triggered = false;
+
+    // Cancel ALL orders first
+    let ids: Vec<String> = {
+        let mut v = Vec::new();
+        if !s.mt_order_id.is_empty() { v.push(s.mt_order_id.clone()); }
+        if !s.mt_exit_order_id.is_empty() { v.push(s.mt_exit_order_id.clone()); }
+        if !s.mt_sl_order_id.is_empty() { v.push(s.mt_sl_order_id.clone()); }
+        v
+    };
+    if !ids.is_empty() {
+        for id in &ids {
+            let _ = http_delete(&format!("/api/orders/{}", id)).await;
+        }
+    }
+    let _ = http_delete("/api/orders").await;
+    s.mt_order_id.clear();
+    s.mt_exit_order_id.clear();
+    s.mt_sl_order_id.clear();
+
+    // Handle pending buy
+    if s.mt_state == 1 {
+        s.add_log("  ✓ Compra pendiente cancelada".to_string(), Color::Green);
+        s.reset_manual();
+    }
+
+    // Market sell active position
+    if s.mt_state >= 2 {
+        let outcome = s.mt_outcome.clone();
+        let current_px = if outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
+        let pnl = s.mt_size * (current_px - s.mt_entry);
+        let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
+            outcome, s.mt_size);
+        match http_post("/api/orders/market", &body).await {
+            Ok(()) => {
+                s.mt_pnl_cum += pnl;
+                s.mt_trades += 1;
+                s.add_log(format!("  ✓ MARKET SELL {} P&L={:.2}", outcome, pnl), Color::Green);
+                s.add_trade_log(format!("PANIC SELL {} P&L={:.2}", outcome, pnl), Color::Red);
+            }
+            Err(e) => {
+                s.add_log(format!("  ✗ MARKET SELL FAIL: {}", e), Color::Red);
+                return;
+            }
+        }
+    }
+
     s.reset_manual();
+
+    // Market sell strategy positions
+    {
+        let strat_pos: Vec<(&str, &str, f64, f64)> = {
+            let mut v = Vec::new();
+            if s.pos_h65_up && s.h65_budget > 0.0 { v.push(("H65", "up", s.h65_budget, s.pos_h65_entry_up)); }
+            if s.pos_h65_dn && s.h65_budget > 0.0 { v.push(("H65", "down", s.h65_budget, s.pos_h65_entry_dn)); }
+            if s.pos_odi_up && s.odi_budget > 0.0 { v.push(("ODI", "up", s.odi_budget, s.pos_odi_entry_up)); }
+            if s.pos_odi_dn && s.odi_budget > 0.0 { v.push(("ODI", "down", s.odi_budget, s.pos_odi_entry_dn)); }
+            if s.pos_sen_up && s.sen_budget > 0.0 { v.push(("SEN", "up", s.sen_budget, s.pos_sen_entry_up)); }
+            if s.pos_sen_dn && s.sen_budget > 0.0 { v.push(("SEN", "down", s.sen_budget, s.pos_sen_entry_dn)); }
+            v
+        };
+        for (strat, outcome, budget, entry) in &strat_pos {
+            let shares = if *entry > 0.0 { (budget / entry).floor().max(1.0) } else { *budget };
+            let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#, outcome, shares);
+            let _ = http_post("/api/orders/market", &body).await.ok();
+        }
+    }
+
+    // PANIC on backend
     if let Err(e) = http_post("/api/panic", "{}").await {
         s.add_log(format!("PANIC FAIL: {}", e), Color::Red);
     } else {
@@ -612,44 +618,23 @@ async fn exec_panic(s: &mut State) {
 // EXECUTORS: CANCEL + LIQUIDATE
 // ═══════════════════════════════════════════════════════════════════
 
-async fn exec_cancel_liq(outcome: String, price_opt: Option<f64>, market: bool, s: &mut State) {
-    // Save position info BEFORE cancel
+async fn exec_cancel_liq_market(s: &mut State) {
+    let saved_state = s.mt_state;
     let saved_outcome = s.mt_outcome.clone();
     let saved_size = s.mt_size;
     let saved_budget = s.mt_budget;
     let saved_entry = s.mt_entry;
-    let saved_state = s.mt_state;
 
-    // Cancel everything
     cancel_all_manual(s).await;
 
-    if market {
-        // Restore position info for market sell
-        if saved_state >= 2 {
-            s.mt_outcome = saved_outcome;
-            s.mt_size = saved_size;
-            s.mt_budget = saved_budget;
-            s.mt_entry = saved_entry;
-            s.mt_state = 2;
-        }
-        exec_liq_market(s).await;
-        return;
+    if saved_state >= 2 {
+        s.mt_outcome = saved_outcome;
+        s.mt_size = saved_size;
+        s.mt_budget = saved_budget;
+        s.mt_entry = saved_entry;
+        s.mt_state = 2;
     }
-
-    if let Some(price) = price_opt {
-        // Determine outcome: use saved, or infer from command context
-        let liq_outcome = if !outcome.is_empty() { outcome } else { saved_outcome.clone() };
-
-        if saved_state >= 2 && saved_outcome == liq_outcome {
-            // Restore position tracking for the liquidation
-            s.mt_outcome = liq_outcome.clone();
-            s.mt_size = saved_size;
-            s.mt_budget = saved_budget;
-            s.mt_entry = saved_entry;
-            s.mt_state = 2;
-        }
-        exec_liq_limit(&liq_outcome, price, s).await;
-    }
+    exec_liq_market(s).await;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1140,130 +1125,6 @@ async fn exec_undo(s: &mut State) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// CASH OUT — /co
-// ═══════════════════════════════════════════════════════════════════
-
-async fn exec_cashout(s: &mut State) {
-    s.add_log("💰 CASH OUT — liquidando todo...".to_string(), Color::Yellow);
-    s.add_trade_log("💰 CASH OUT iniciado".to_string(), Color::Yellow);
-
-    // 1) Cancel Gemini
-    s.gemini_active = false;
-    s.gemini_budget = 0.0;
-    s.gemini_target = 0.0;
-    s.gemini_trigger = 0.0;
-    s.gemini_exit = 0.0;
-    s.gemini_outcome.clear();
-    s.gemini_triggered = false;
-
-    // 2) Cancel ALL existing orders FIRST — before market sell
-    //    This clears pending buys, exit orders, SL orders.
-    //    CRITICAL: do NOT cancel after market sell — it would cancel the market order itself.
-    let ids: Vec<String> = {
-        let mut v = Vec::new();
-        if !s.mt_order_id.is_empty() { v.push(s.mt_order_id.clone()); }
-        if !s.mt_exit_order_id.is_empty() { v.push(s.mt_exit_order_id.clone()); }
-        if !s.mt_sl_order_id.is_empty() { v.push(s.mt_sl_order_id.clone()); }
-        v
-    };
-    if !ids.is_empty() {
-        for id in &ids {
-            let _ = http_delete(&format!("/api/orders/{}", id)).await;
-        }
-        s.add_log(format!("  ✓ {} órdenes canceladas", ids.len()), Color::Green);
-    }
-    // Safety net: cancel-all on backend
-    match http_delete("/api/orders").await {
-        Ok(()) => {}
-        Err(e) => s.add_log(format!("⚠ Cancel ALL orders: {}", e), Color::Red),
-    }
-
-    // Clear local order tracking (orders are already cancelled)
-    s.mt_order_id.clear();
-    s.mt_exit_order_id.clear();
-    s.mt_sl_order_id.clear();
-
-    // 3) Handle pending buy (mt_state == 1) — just cancel & reset, no position yet
-    if s.mt_state == 1 {
-        s.add_log("  ✓ Compra pendiente cancelada".to_string(), Color::Green);
-        s.add_trade_log("✓ CASH OUT: compra pendiente cancelada".to_string(), Color::Yellow);
-        s.reset_manual();
-    }
-
-    // 4) Market sell active position
-    let mut mkt_failed = false;
-    if s.mt_state >= 2 {
-        let outcome = s.mt_outcome.clone();
-        let current_px = if outcome == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
-        let pnl = s.mt_size * (current_px - s.mt_entry);
-        let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#,
-            outcome, s.mt_size);
-        s.add_log(format!("▶ MARKET SELL {} sz={:.0} ${:.2}", outcome.to_uppercase(), s.mt_size, s.mt_budget), Color::Yellow);
-        match http_post("/api/orders/market", &body).await {
-            Ok(()) => {
-                s.mt_pnl_cum += pnl;
-                s.mt_trades += 1;
-                if pnl >= 0.0 { s.mt_wins += 1; }
-                let pnl_c = if pnl >= 0.0 { Color::Green } else { Color::Red };
-                s.add_log(format!("  ✓ Vendido {} PnL:{:+.2} Σ{:+.2}", outcome.to_uppercase(), pnl, s.mt_pnl_cum), pnl_c);
-                s.add_trade_log(format!("💰 CASH OUT {} sz={:.0} PnL:{:+.2}", outcome.to_uppercase(), s.mt_size, pnl), pnl_c);
-            }
-            Err(e) => {
-                mkt_failed = true;
-                s.add_log(format!("❌ Market sell FAIL: {}", e), Color::Red);
-                s.add_trade_log(format!("✗ CASH OUT: market sell FAIL ({})", e), Color::Red);
-            }
-        }
-    }
-
-    // 5) Market sell each active strategy position individually
-    {
-        let strat_pos: Vec<(&str, &str, f64, f64)> = {
-            let mut v = Vec::new();
-            if s.pos_h65_up && s.h65_budget > 0.0 { v.push(("H65", "up", s.h65_budget, s.pos_h65_entry_up)); }
-            if s.pos_h65_dn && s.h65_budget > 0.0 { v.push(("H65", "down", s.h65_budget, s.pos_h65_entry_dn)); }
-            if s.pos_odi_up && s.odi_budget > 0.0 { v.push(("ODI", "up", s.odi_budget, s.pos_odi_entry_up)); }
-            if s.pos_odi_dn && s.odi_budget > 0.0 { v.push(("ODI", "down", s.odi_budget, s.pos_odi_entry_dn)); }
-            if s.pos_sen_up && s.sen_budget > 0.0 { v.push(("SEN", "up", s.sen_budget, s.pos_sen_entry_up)); }
-            if s.pos_sen_dn && s.sen_budget > 0.0 { v.push(("SEN", "down", s.sen_budget, s.pos_sen_entry_dn)); }
-            v
-        };
-        for (strat, outcome, budget, entry) in &strat_pos {
-            let shares = if *entry > 0.0 { (budget / entry).floor().max(1.0) } else { *budget };
-            let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#, outcome, shares);
-            s.add_log(format!("▶ MARKET SELL {} {} sz={:.0} ${:.0}", strat, outcome.to_uppercase(), shares, budget), Color::Yellow);
-            match http_post("/api/orders/market", &body).await {
-                Ok(()) => {
-                    s.add_log(format!("  ✓ {} {} vendido", strat, outcome.to_uppercase()), Color::Green);
-                    s.add_trade_log(format!("💰 CASH OUT {} {} budget={:.0}", strat, outcome.to_uppercase(), budget), Color::Green);
-                }
-                Err(e) => {
-                    mkt_failed = true;
-                    s.add_log(format!("❌ {} {} market sell FAIL: {}", strat, outcome.to_uppercase(), e), Color::Red);
-                    s.add_trade_log(format!("✗ CASH OUT: {} {} FAIL ({})", strat, outcome.to_uppercase(), e), Color::Red);
-                }
-            }
-        }
-    }
-
-    // 6) PANIC — cancel remaining orders + disable all strategies (safety net)
-    match http_post("/api/panic", "{}").await {
-        Ok(()) => s.add_log("  ✓ Estrategias desactivadas".to_string(), Color::Green),
-        Err(e) => s.add_log(format!("⚠ PANIC strategies FAIL: {}", e), Color::Red),
-    }
-
-    // 7) Reset manual state (do NOT cancel orders again — market sell must survive)
-    if mkt_failed {
-        s.add_log("⚠ CASH OUT parcial: reintenta /lm o /x".to_string(), Color::Red);
-        s.add_trade_log("⚠ Cash out parcial — reintenta /lm o /x".to_string(), Color::Red);
-    } else {
-        s.reset_manual();
-        s.add_log("✅ CASH OUT completado — todo en USD".to_string(), Color::Green);
-        s.add_trade_log("✅ Cash out completado".to_string(), Color::Green);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════
 // ALERT STRUCT (re-exported for State)
 // ═══════════════════════════════════════════════════════════════════
 
@@ -1288,8 +1149,6 @@ mod tests {
                 format!("BUY ${amount:.0} {side} @{price:.4} exit={:?} sl={:?}", exit, sl),
             Parsed::CancelActive => "CANCEL".into(),
             Parsed::CancelId(id) => format!("CANCEL-ID({id})"),
-            Parsed::CancelLiquidateLimit { outcome, price } =>
-                format!("CANCEL+LIQ {outcome} @{price:.4}"),
             Parsed::CancelLiquidateMarket => "CANCEL+LIQ MKT".into(),
             Parsed::LiquidateLimit { outcome, price } =>
                 format!("LIQ {outcome} @{price:.4}"),
@@ -1306,7 +1165,6 @@ mod tests {
             Parsed::AlertSet { outcome, price } => format!("ALERT {outcome} @{price:.4}"),
             Parsed::AlertClear => "ALERT-CLEAR".into(),
             Parsed::Undo => "UNDO".into(),
-            Parsed::CashOut => "CASHOUT".into(),
             Parsed::Gemini { budget, target, exit } =>
                 format!("GEMINI ${:.0} @{:.4} exit={:?}", budget, target, exit),
             Parsed::Provider(p) => format!("PROVIDER:{p}"),
@@ -1328,29 +1186,16 @@ mod tests {
     }
 
     #[test]
-    fn buy_bracket() {
+    fn bracket_sl_commands() {
         assert_eq!(parsed("l10up65e70s50"), "BUY $10 up @0.6500 exit=Some(0.7) sl=Some(0.5)");
         assert_eq!(parsed("l20d50e60s40"),  "BUY $20 down @0.5000 exit=Some(0.6) sl=Some(0.4)");
     }
 
     #[test]
-    fn buy_legacy_format() {
-        assert_eq!(parsed("10up65"),     "BUY $10 up @0.6500 exit=None sl=None");
-        assert_eq!(parsed("15d40"),      "BUY $15 down @0.4000 exit=None sl=None");
-        assert_eq!(parsed("10up65e70"),  "BUY $10 up @0.6500 exit=Some(0.7) sl=None");
-    }
-
-    #[test]
-    fn aliases() {
-        assert_eq!(parsed("b10up65"),     "BUY $10 up @0.6500 exit=None sl=None");
-        assert_eq!(parsed("b10up65e70"),  "BUY $10 up @0.6500 exit=Some(0.7) sl=None");
-        assert_eq!(parsed("k"),           "CANCEL");
-        assert_eq!(parsed("kup65"),       "CANCEL+LIQ up @0.6500");
-        assert_eq!(parsed("kd70"),        "CANCEL+LIQ down @0.7000");
-        assert_eq!(parsed("km"),          "CANCEL+LIQ MKT");
-        assert_eq!(parsed("x"),           "LIQ MKT");
-        assert_eq!(parsed("xu70"),        "LIQ up @0.7000");
-        assert_eq!(parsed("xd70"),        "LIQ down @0.7000");
+    fn exit_commands() {
+        assert_eq!(parsed("x"),    "LIQ MKT");
+        assert_eq!(parsed("xu70"), "LIQ up @0.7000");
+        assert_eq!(parsed("xd70"), "LIQ down @0.7000");
     }
 
     #[test]
@@ -1395,11 +1240,10 @@ mod tests {
     }
 
     #[test]
-    fn liquidate_commands() {
-        assert_eq!(parsed("lup70"), "LIQ up @0.7000");
-        assert_eq!(parsed("ld70"),  "LIQ down @0.7000");
-        assert_eq!(parsed("ldown70"), "LIQ down @0.7000");
-        assert_eq!(parsed("lm"),    "LIQ MKT");
+    fn exit_liq_commands() {
+        assert_eq!(parsed("xu70"), "LIQ up @0.7000");
+        assert_eq!(parsed("xd70"),  "LIQ down @0.7000");
+        assert_eq!(parsed("x"),    "LIQ MKT");
     }
 
     #[test]
@@ -1410,9 +1254,6 @@ mod tests {
 
     #[test]
     fn cancel_liq_commands() {
-        assert_eq!(parsed("clup65"),  "CANCEL+LIQ up @0.6500");
-        assert_eq!(parsed("cld70"),   "CANCEL+LIQ down @0.7000");
-        assert_eq!(parsed("cldown70"), "CANCEL+LIQ down @0.7000");
         assert_eq!(parsed("clm"),     "CANCEL+LIQ MKT");
     }
 
@@ -1962,17 +1803,7 @@ mod tests {
         assert_eq!(parsed("man"),  "MAN");
         assert_eq!(parsed("quit"), "QUIT");
         assert_eq!(parsed("p"),    "PANIC");
-        assert_eq!(parsed("co"),   "CASHOUT");
-    }
 
-    #[test]
-    fn edge_cases() {
-        assert!(parsed("").starts_with("UNKNOWN"));
-        assert!(parsed(" ").starts_with("UNKNOWN"));
-        assert!(parsed("xyz").starts_with("UNKNOWN"));
-        assert!(parsed("l").starts_with("UNKNOWN"));
-        assert_eq!(parsed("c123"), "CANCEL");
-        assert_eq!(parsed("co"), "CASHOUT");
     }
 
     #[test]
@@ -2102,13 +1933,14 @@ mod tests {
 
     #[test]
     fn cashout_parse() {
-        assert_eq!(parsed("co"), "CASHOUT");
+        // /co → cancel (parsed as c + "o" → CancelActive)
+        assert_eq!(parsed("co"), "CANCEL");
     }
 
     #[test]
     fn cashout_not_confused_with_cancel() {
-        // "co" is cashout, not cancel
-        assert_eq!(parsed("co"), "CASHOUT");
+        // "co" is cancel active (c prefix, "o" too short for ID)
+        assert_eq!(parsed("co"), "CANCEL");
         // "c" alone is cancel
         assert_eq!(parsed("c"), "CANCEL");
         // "c" + digits (>=10 chars) is cancel by id
@@ -2119,31 +1951,23 @@ mod tests {
 
     #[test]
     fn cashout_not_confused_with_cancel_liq() {
-        // "cl" + up/down/m is cancel+liq
-        assert_eq!(parsed("clup65"), "CANCEL+LIQ up @0.6500");
-        assert_eq!(parsed("cld70"), "CANCEL+LIQ down @0.7000");
+        // "clm" is cancel+mkt
         assert_eq!(parsed("clm"), "CANCEL+LIQ MKT");
-        // "co" is cashout (not cancel-liq with "o" outcome)
-        assert_eq!(parsed("co"), "CASHOUT");
-        // Also test "co" with trailing chars (should still be cashout)
-        // Actually "co" + anything would be routed to parse_c_group which handles "c"...
-        // but "co" is special-cased first in parse()
+        // "co" is cancel active (c + "o" < 10 chars)
+        assert_eq!(parsed("co"), "CANCEL");
     }
 
     #[test]
     fn cashout_vs_panic() {
-        // /p  = PANIC (liquidate all)
+        // /p = PANIC (full cash out + strategies off + market sell)
         assert_eq!(parsed("p"), "PANIC");
-        // /co = CASH OUT (liquidate + cancel + strategies off)
-        assert_eq!(parsed("co"), "CASHOUT");
-        // Verify they are different commands
-        assert_ne!(parsed("p"), parsed("co"));
+        // /co → cancel (no longer separate cashout)
+        assert_eq!(parsed("co"), "CANCEL");
     }
 
     #[test]
     fn cashout_in_comprehensive_matrix() {
-        // This is part of the comprehensive matrix below
-        assert_eq!(parsed("co"), "CASHOUT");
+        assert_eq!(parsed("co"), "CANCEL");
     }
 
     // ─── LOGIC / STATE MACHINE TESTS ────────────────────────────
@@ -2505,11 +2329,11 @@ mod tests {
 
     #[test]
     fn cashout_concurrent_market_buy_not_confused() {
-        // Regression: "co" should NOT be parsed as a cancel-order with ID "o"
-        assert_eq!(parsed("co"), "CASHOUT");
+        // "co" → CancelActive (c prefix, "o" < 10 chars)
+        assert_eq!(parsed("co"), "CANCEL");
         assert_eq!(parsed("c0000000000"), "CANCEL-ID(0000000000)");
-        // "co" is short (<10 chars), which cancels active... but we special-case "co"
-        assert_eq!(parsed("co5up"), "CANCEL"); // 5up is target, but "co" prefix pattern
+        // "co5up" → CancelActive (c prefix, "o5up" < 10 chars)
+        assert_eq!(parsed("co5up"), "CANCEL");
     }
 
     #[test]
@@ -3028,11 +2852,10 @@ mod tests {
 
     #[test]
     fn cashout_parser_isolated_from_cancel() {
-        assert_eq!(parsed("co"), "CASHOUT");
+        // /co → CancelActive (c + "o" < 10)
+        assert_eq!(parsed("co"), "CANCEL");
         assert_eq!(parsed("c"), "CANCEL");
         assert_eq!(parsed("clm"), "CANCEL+LIQ MKT");
-        assert_ne!(parsed("co"), parsed("c"));
-        assert_ne!(parsed("co"), parsed("clm"));
     }
 
     #[test]
@@ -3050,20 +2873,11 @@ mod tests {
             ("l10up65",     "BUY $10 up @0.6500 exit=None sl=None"),
             ("l10up65e70",  "BUY $10 up @0.6500 exit=Some(0.7) sl=None"),
             ("l10up65e70s50", "BUY $10 up @0.6500 exit=Some(0.7) sl=Some(0.5)"),
-            ("10up65",      "BUY $10 up @0.6500 exit=None sl=None"),
-            ("15d40e50",    "BUY $15 down @0.4000 exit=Some(0.5) sl=None"),
-            ("b10up65",     "BUY $10 up @0.6500 exit=None sl=None"),
-            ("k",           "CANCEL"),
+            ("l15d40e50",   "BUY $15 down @0.4000 exit=Some(0.5) sl=None"),
             ("x",           "LIQ MKT"),
             ("xu70",        "LIQ up @0.7000"),
-            ("lup70",       "LIQ up @0.7000"),
-            ("ld70",        "LIQ down @0.7000"),
-            ("ldown70",     "LIQ down @0.7000"),
-            ("lm",          "LIQ MKT"),
+            ("xd70",        "LIQ down @0.7000"),
             ("c",           "CANCEL"),
-            ("clup65",      "CANCEL+LIQ up @0.6500"),
-            ("cld70",       "CANCEL+LIQ down @0.7000"),
-            ("cldown80",    "CANCEL+LIQ down @0.8000"),
             ("clm",         "CANCEL+LIQ MKT"),
             ("sl",          "SL-TOGGLE"),
             ("sl10",        "SL-10%"),
@@ -3075,7 +2889,7 @@ mod tests {
             ("pos",         "POS"),
             ("u",           "UNDO"),
             ("p",           "PANIC"),
-            ("co",          "CASHOUT"),
+            ("co",          "CANCEL"),
             ("man",         "MAN"),
             ("quit",        "QUIT"),
             ("5g70",        "GEMINI $5 @0.7000 exit=None"),

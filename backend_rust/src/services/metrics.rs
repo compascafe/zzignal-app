@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use chrono::{FixedOffset, Utc};
-use chrono::TimeZone;
 use tracing::info;
 
 use crate::controllers::worker::PriceLevel;
@@ -442,7 +441,7 @@ pub fn build_book_update(
     };
 
     // Look-back en ring buffer
-    let (lag_ms, mic_at_t, bn_vol_100) = if let Some(hist) = ring.get_closest_to(poly_event_ts as u64) {
+    let (lag_ms, _mic_at_t, bn_vol_100) = if let Some(hist) = ring.get_closest_to(poly_event_ts as u64) {
         (poly_event_ts - hist.timestamp as i64, hist.micro_price, hist.binance_vol_100ms)
     } else {
         (0, bb_mic, 0.0)
@@ -474,14 +473,14 @@ pub fn build_book_update(
     if gap_flag > 0 { check_gap_alert(gap_pct); }
 
     // ─── Bollinger Bands & Signals ────────────────────────────────────────
-    let (bb_sma, bb_upper, bb_lower, bb_std, realized_vol, bb_pos) = tracking.bollinger_bands_full(bb_mid);
+    let (bb_sma, _bb_upper, _bb_lower, bb_std, _realized_vol, _bb_pos) = tracking.bollinger_bands_full(bb_mid);
     tracking.push_session_volatility(bb_std);
-    let high_vol = tracking.is_high_volatility(bb_std);
+    let _high_vol = tracking.is_high_volatility(bb_std);
 
     // ─── Conformal Prediction: gate signals with risk validation ──────────
     let abs_err = (bb_mid - bb_sma).abs();
     tracking.push_calibration_error(abs_err);
-    let (cp_range, cp_valid) = tracking.conformal_validate(abs_err, 0.05);
+    let (_cp_range, cp_valid) = tracking.conformal_validate(abs_err, 0.05);
 
     let (mr_signal, mut signal_label) = tracking.mean_reversion_signal(bb_mid, bb_imb);
     tracking.push_tps_sample(trades_ps);
@@ -501,9 +500,10 @@ pub fn build_book_update(
     if master_sig > 0 {
         signal_label = if signal_label.is_empty() { master_label } else { format!("{}|{}", signal_label, master_label) };
     }
-    let trend_dir = if bb_sma > 0.0 {
+    let _trend_dir = if bb_sma > 0.0 {
         if bb_mid > bb_sma * 1.001 { 1i8 } else if bb_mid < bb_sma * 0.999 { -1i8 } else { 0i8 }
     } else { 0i8 };
+    let _ = signal_label;
 
     // Lazy-init session baselines on first poly event
     tracking.init_session_baselines(bb_mid, pb_mid);
@@ -528,7 +528,6 @@ pub fn build_book_update(
         poly_ask_vol_all:    pb_ask_vol,
         poly_imbalance:      if pb_imb.is_finite() { pb_imb } else { 0.0 },
         price_velocity:      price_vel,
-        poly_liquidity_delta: liq_delta,
         spoofing_flag:       spoof_flag,
         ..Default::default()
     }
@@ -542,9 +541,9 @@ pub fn build_trade_record(
     poly_asks:     &[PriceLevel],
     tracking:      &TrackingState,
     trade_ts:      i64,
-    trade_side:    &str,
-    trade_price:   f64,
-    trade_size:    f64,
+    _trade_side:    &str,
+    _trade_price:   f64,
+    _trade_size:    f64,
 ) -> CsvRecord {
     let mut rec = build_book_update(binance, ring, poly_bids, poly_asks, tracking, trade_ts);
     rec.event_type  = EventType::Trade;
@@ -554,7 +553,6 @@ pub fn build_trade_record(
         (b.price + a.price) / 2.0
     } else { 0.0 };
     let (_delta, spoof) = compute_liquidity_delta(pb_ask_vol, tracking, true);
-    rec.poly_liquidity_delta = _delta;
     rec.spoofing_flag = spoof;
     // Store current state for next tick
     tracking.set_last_poly_ask_vol(pb_ask_vol);
@@ -584,7 +582,7 @@ pub fn build_binance_tick(
     let bb_ask_vol_5  = sum_vol(&binance.asks, 5);
     let bb_bid_vol_20 = sum_vol(&binance.bids, 20);
     let bb_ask_vol_20 = sum_vol(&binance.asks, 20);
-    let bb_mic = micro_price(bb_bid, bb_ask, bb_bid_vol_5, bb_ask_vol_5);
+    let _bb_mic = micro_price(bb_bid, bb_ask, bb_bid_vol_5, bb_ask_vol_5);
     let bb_imb = {
         let total = bb_bid_vol_20 + bb_ask_vol_20;
         if total > 0.0 { ((bb_bid_vol_20 - bb_ask_vol_20) / total) as f32 } else { 0.0 }

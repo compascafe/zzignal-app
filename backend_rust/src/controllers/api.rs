@@ -56,11 +56,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         // ─── Wisdom v4: Hydra No Return ────────────────────────────────────
         .route("/api/wisdom4",         get(get_wisdom4))
 
-        // ─── Insight Strategies: Cerbero + Fenix ───────────────────────────
-        .route("/api/insights",        get(get_insights))
-
-        // ─── Fenix Trading ─────────────────────────────────────────────────
-        .route("/api/fenix",           get(get_fenix))
         // ─── Odiseo Trading ────────────────────────────────────────────────
         .route("/api/odiseo",          get(get_odiseo))
         .route("/api/odiseo/live",     post(post_odiseo_live))
@@ -428,18 +423,6 @@ async fn get_wisdom3(State(s): State<Arc<AppState>>) -> Json<Value> {
 
 async fn get_wisdom4(State(s): State<Arc<AppState>>) -> Json<Value> {
     let json_str = s.pnr_manager.export_json();
-    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
-    Json(value)
-}
-
-async fn get_insights(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let json_str = s.insight_manager.export_json();
-    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
-    Json(value)
-}
-
-async fn get_fenix(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let json_str = s.fenix_trading.export_json();
     let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
     Json(value)
 }

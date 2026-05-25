@@ -197,10 +197,6 @@ async fn process_sessions(state: Arc<AppState>) {
         }
         // ─── Hydra No Return: flush PNR data ────────────────────────────────
         state.pnr_manager.flush_session(session.id, &actual_outcome);
-        // ─── Insight Strategies: Cerbero + Fenix ────────────────────────────
-        state.insight_manager.on_session_close(session.id, &actual_outcome);
-        // ─── Fenix Trading: settle paper trades ─────────────────────────────
-        state.fenix_trading.on_session_close(session.id, &actual_outcome);
         // ─── Odiseo Trading: settle paper trades ────────────────────────────
         state.odiseo_trading.on_session_close(session.id, &actual_outcome);
 
