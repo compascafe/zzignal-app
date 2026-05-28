@@ -261,13 +261,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Err(e) = state3.session_manager.recover_session(sid) {
                                 warn!("Failed to recover session #{}: {}", sid, e);
                             }
-                            // Use now+15min to avoid countdown mismatch from misaligned scheduled_end
-                            let real_end = chrono::Utc::now() + chrono::Duration::minutes(15);
-                            state3.t5_manager.on_session_start(sid, real_end);
-                            state3.t3_manager.on_session_start(sid, real_end);
-                            info!("[RECOVERY] Session #{} ({}→{}) t5/t3 restored (adjusted end: {})", sid,
+                            // Use actual scheduled_end if still in future, capped at now+15min
+                            let now = chrono::Utc::now();
+                            let cap = now + chrono::Duration::minutes(15);
+                            let t5_end = if sess.scheduled_end > now {
+                                sess.scheduled_end.min(cap)
+                            } else {
+                                cap
+                            };
+                            state3.t5_manager.on_session_start(sid, t5_end);
+                            state3.t3_manager.on_session_start(sid, t5_end);
+                            info!("[RECOVERY] Session #{} ({}→{}) t5/t3 restored (countdown end: {})", sid,
                                 sess.scheduled_start.format("%H:%M"), sess.scheduled_end.format("%H:%M"),
-                                real_end.format("%H:%M:%S"));
+                                t5_end.format("%H:%M:%S"));
                         }
                     }
                     Ok(None) => warn!("[RECOVERY] Session #{} not found in DB — skipping", sid),
@@ -306,10 +312,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
                         state3.recording_sessions.write().await.push(child_id);
                         state3.session_manager.start_session(child_id, &child_name).ok();
-                        // Session starts NOW (not at scheduled_start), so countdown = now + 15min
-                        let real_end = now + chrono::Duration::minutes(15);
-                        state3.t5_manager.on_session_start(child_id, real_end);
-                        state3.t3_manager.on_session_start(child_id, real_end);
+                        // Session starts NOW, countdown = now+15min cap (never show >15min)
+                        let t5_end = child_end.min(now + chrono::Duration::minutes(15));
+                        state3.t5_manager.on_session_start(child_id, t5_end);
+                        state3.t3_manager.on_session_start(child_id, t5_end);
                         // Reset trade prices to avoid stale triggers from previous session
                         state3.trade_window_up.write().await.clear();
                         state3.trade_window_dn.write().await.clear();
