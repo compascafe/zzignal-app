@@ -190,11 +190,19 @@ pub fn session_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn list_sessions(State(s): State<Arc<AppState>>) -> Json<Value> {
-    match repository::list_sessions(&s, 100).await {
+async fn list_sessions(State(s): State<Arc<AppState>>, Query(q): Query<SessionListQuery>) -> Json<Value> {
+    let status = q.status.as_deref().unwrap_or("recording");
+    // Support "all" to bypass filter
+    let filter = if status == "all" { None } else { Some(status) };
+    match repository::list_sessions_with_status(&s, filter, 100).await {
         Ok(rows) => Json(json!(rows)),
         Err(e)   => Json(json!({"error": e.to_string()})),
     }
+}
+
+#[derive(Deserialize)]
+struct SessionListQuery {
+    status: Option<String>,
 }
 
 async fn get_active_session(State(s): State<Arc<AppState>>) -> Json<Value> {
@@ -214,9 +222,34 @@ async fn start_session(
     let now = Utc::now();
     let depth = body.depth_levels.max(5).min(50);
 
+    // ── BTC 15-min HARD LOCK: este proyecto es solo para BTC 15 minutos ──
+    let chunk_min: i32 = 15; // siempre 15 minutos
+    let requested = body.duration_min.max(1);
+    if requested != 15 {
+        info!("[SESSION] duration_min={} recibido → forzado a 15 (BTC 15-min lock)", requested);
+    }
+
     // ── Indefinite mode: parent + auto-generated children ────────────────────
     if body.indefinite.unwrap_or(false) {
-        let chunk_min = body.duration_min.max(1); // chunk size: 5, 15, etc. Default 15
+        // chunk_min always 15 (hard-locked above)
+        // Guard: do not create duplicate indefinite session if one is already recording
+        if let Ok(Some(active)) = repository::get_active_session(&s).await {
+            return Json(json!({
+                "ok": true,
+                "id": active.id,
+                "name": active.name,
+                "status": "recording",
+                "indefinite": true,
+                "chunk_min": active.duration_min,
+                "scheduled_start": active.scheduled_start.to_rfc3339(),
+                "scheduled_end": active.scheduled_end.to_rfc3339(),
+                "message": format!("Sesion indefinida YA activa: #{} '{}' ({}→{})",
+                    active.id, active.name,
+                    active.scheduled_start.format("%H:%M"),
+                    active.scheduled_end.format("%H:%M")),
+            }));
+        }
+
         let parent_start = body.scheduled_start.unwrap_or(now);
         let parent_end = parent_start + Duration::days(365);
         let parent_name = if body.name.is_empty() {
@@ -297,88 +330,48 @@ async fn start_session(
         }));
     }
 
-    // ── Non-indefinite (existing logic) ──────────────────────────────────────
-    let (scheduled_start, scheduled_end, effective_dur) = if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
-        let dur = ((end - start).num_seconds() / 60).max(1) as i32;
-        (start, end, dur)
+    // ── Non-indefinite: always BTC 15-min ───────────────────────────────────
+    let (scheduled_start, scheduled_end) = if let (Some(start), Some(end)) = (body.scheduled_start, body.scheduled_end) {
+        (start, end)
     } else if let Some(start) = body.scheduled_start {
-        let dur = body.duration_min.max(1);
-        let end = start + Duration::minutes(dur as i64);
-        (start, end, dur)
+        let end = start + Duration::minutes(15);
+        (start, end)
     } else {
+        // Snap to next UTC 15-min boundary
         let minute = now.minute();
-        let requested = body.duration_min.max(1);
-
-        // ── Smart grid alignment ───────────────────────────────────────────
-        // 15-min sessions only start at :00, :15, :30, :45.
-        // If we're not on a 15-min boundary, fall back to 5-min session.
-        let dur = if requested == 15 && minute % 15 != 0 {
-            info!("[SESSION ALIGN] {}min requested at :{:02} — not on 15-min grid, falling back to 5-min session", requested, minute);
-            5i32
-        } else {
-            requested
-        };
-        let grid = if dur == 5 { 5 } else { 15 };
-
-        let next_min = ((minute / grid) + 1) * grid;
+        let next_min = ((minute / 15u32) + 1) * 15;
         let start = if next_min >= 60 {
             now.with_minute(0).unwrap() + chrono::Duration::hours(1)
         } else {
             now.with_minute(next_min).unwrap().with_second(0).unwrap().with_nanosecond(0).unwrap()
         };
-        let end = start + chrono::Duration::minutes(dur as i64);
-        (start, end, dur)
+        let end = start + chrono::Duration::minutes(15);
+        (start, end)
     };
 
     let name = if body.name.is_empty() {
-        format!("BTC-{}", scheduled_start.format("%H%M"))
+        format!("BTC15-{}", scheduled_start.format("%H%M"))
     } else {
         body.name
     };
-    let total_duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
+    let duration = ((scheduled_end - scheduled_start).num_seconds() / 60).max(1) as i32;
 
-    if total_duration > 15 {
-        let chunk_min = effective_dur.max(1);
-        match repository::create_session_batch(&s, &name, scheduled_start, total_duration, depth, chunk_min).await {
-            Ok((parent_id, child_ids)) => {
-                let children = repository::list_session_children(&s, parent_id).await.unwrap_or_default();
-                Json(json!({
-                    "ok": true,
-                    "id": parent_id,
-                    "status": "scheduled",
-                    "scheduled_start": scheduled_start.to_rfc3339(),
-                    "scheduled_end": scheduled_end.to_rfc3339(),
-                    "child_ids": child_ids,
-                    "children": children,
-                    "total_duration_min": total_duration,
-                    "chunk_duration_min": chunk_min,
-                    "message": format!("Sesión de {}min creada con {} bloques de {}min cada uno. Programada para {} → {}",
-                        total_duration, child_ids.len(), chunk_min, scheduled_start.format("%H:%M"), scheduled_end.format("%H:%M"))
-                }))
-            }
-            Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
-        }
-    } else {
-        let duration = total_duration.max(1);
-        match repository::create_session(&s, &name, scheduled_start, scheduled_end, duration, depth, None).await {
-            Ok(id) => Json(json!({
-                "ok": true,
-                "id": id,
-                "status": "scheduled",
-                "scheduled_start": scheduled_start.to_rfc3339(),
-                "scheduled_end": scheduled_end.to_rfc3339(),
-                "indefinite": false,
-                "child_ids": [],
-                "children": [],
-                "message": format!("Sesión {}min programada para {} → {}{}",
-                    effective_dur,
-                    scheduled_start.format("%H:%M"),
-                    scheduled_end.format("%H:%M"),
-                    if effective_dur != body.duration_min { " (auto-ajustado de 15→5min: fuera de grid 15min)" } else { "" }
-                )
-            })),
-            Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
-        }
+    // BTC 15-min HARD LOCK: always single 15-min session, no batches
+    match repository::create_session(&s, &name, scheduled_start, scheduled_end, duration, depth, None).await {
+        Ok(id) => Json(json!({
+            "ok": true,
+            "id": id,
+            "status": "scheduled",
+            "scheduled_start": scheduled_start.to_rfc3339(),
+            "scheduled_end": scheduled_end.to_rfc3339(),
+            "indefinite": false,
+            "child_ids": [],
+            "children": [],
+            "message": format!("Sesion BTC 15min programada para {} → {}",
+                scheduled_start.format("%H:%M"),
+                scheduled_end.format("%H:%M"))
+        })),
+        Err(e) => Json(json!({"ok": false, "error": e.to_string() })),
     }
 }
 

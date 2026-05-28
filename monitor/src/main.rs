@@ -958,11 +958,16 @@ async fn main() -> io::Result<()> {
                 KeyCode::Tab => { s.tab = (s.tab + 1) % 2; }
                 KeyCode::Char('/') => { s.input_mode = InputMode::Command; s.input_buf.clear(); }
                 KeyCode::Char('s') => {
-                    s.add_log("Starting 15-min session...".to_string(), Color::Green);
-                    let now = chrono::Utc::now();
-                    let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
-                    if let Err(e) = http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await {
-                        s.add_log(format!("Session start FAIL: {}", e), Color::Red);
+                    let has_active = s.sessions.iter().any(|sess| sess.status == "recording");
+                    if has_active {
+                        s.add_log("Session 15-min YA activa — conectado a sesion existente".to_string(), Color::Cyan);
+                    } else {
+                        s.add_log("Starting 15-min session...".to_string(), Color::Green);
+                        let now = chrono::Utc::now();
+                        let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
+                        if let Err(e) = http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await {
+                            s.add_log(format!("Session start FAIL: {}", e), Color::Red);
+                        }
                     }
                 }
                 _ => {}

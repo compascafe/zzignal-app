@@ -405,6 +405,38 @@ pub async fn list_sessions(state: &AppState, limit: i64) -> Result<Vec<Recording
     Ok(result)
 }
 
+pub async fn list_sessions_with_status(state: &AppState, status_filter: Option<&str>, limit: i64) -> Result<Vec<RecordingSession>> {
+    if let Some(pool) = state.db.as_ref() {
+        let rows = if let Some(status) = status_filter {
+            sqlx::query_as::<_, RecordingSession>(
+                &format!("{SESS_COLS} WHERE rs.status = $1 ORDER BY rs.scheduled_start DESC LIMIT $2")
+            )
+            .bind(status)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, RecordingSession>(
+                &format!("{SESS_COLS} ORDER BY rs.scheduled_start DESC LIMIT $1")
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        };
+        return Ok(rows);
+    }
+
+    let sessions = state.mem_sessions.read().await;
+    let mut result: Vec<_> = sessions.iter()
+        .filter(|s| status_filter.map_or(true, |st| s.status == st))
+        .cloned()
+        .collect();
+    result.sort_by(|a, b| b.scheduled_start.cmp(&a.scheduled_start));
+    let limit = limit.max(0) as usize;
+    if result.len() > limit { result.truncate(limit); }
+    Ok(result)
+}
+
 pub async fn get_sessions_to_start(state: &AppState) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
         // Exclude parent containers: they have children and should never start recording
