@@ -21,6 +21,8 @@ cd "$SCRIPT_DIR"
 echo ""
 echo "=== 3/3 Build Monitor ==="
 cd "$SCRIPT_DIR/monitor"
+# Touch build.rs to force re-run and embed latest git hash in TUI commit bar
+touch build.rs
 cargo build --release
 cd "$SCRIPT_DIR"
 
