@@ -201,9 +201,20 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
         else { s.btc };
     let btc_delta = s.btc - btc_ref;
     let btc_delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
-    let btc_up = btc_delta >= 0.0;
-    let btc_c = if btc_up { BB_GREEN } else { BB_RED };
-    let arrow = if btc_up { "▲" } else { "▼" };
+    let btc_up = btc_delta > 0.0001;
+    let btc_dn = btc_delta < -0.0001;
+    let btc_c = if btc_up { BB_GREEN } else if btc_dn { BB_RED } else { BB_AMBER };
+    let arrow = if btc_up { "▲" } else if btc_dn { "▼" } else { "─" };
+    let delta_str = if btc_delta.abs() < 1.0 {
+        format!("${:.0}", btc_delta)
+    } else {
+        format!("${:+.0}", btc_delta)
+    };
+    let pct_str = if btc_delta_pct.abs() < 0.05 {
+        format!("{:.1}%", btc_delta_pct)
+    } else {
+        format!("{:+.1}%", btc_delta_pct)
+    };
 
     f.render_widget(
         Paragraph::new(vec![
@@ -225,11 +236,11 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(format!("{arrow} "), Style::default().fg(delta_fg).add_modifier(big)),
-                Span::styled(format!("${:+.0}", btc_delta), Style::default().fg(delta_fg).add_modifier(big)),
+                Span::styled(&delta_str, Style::default().fg(delta_fg).add_modifier(big)),
             ]),
-            Line::from(Span::styled(format!("{:+.1}%", btc_delta_pct),
+            Line::from(Span::styled(&pct_str,
                 Style::default().fg(delta_fg).add_modifier(big))),
-            Line::from(Span::styled(if btc_up {"▲ UP"} else {"▼ DN"},
+            Line::from(Span::styled(if btc_up {"▲ UP"} else if btc_dn {"▼ DN"} else {"─ FLAT"},
                 Style::default().fg(delta_fg))),
         ]).block(Block::default().borders(Borders::ALL).title("BTC Δ")
             .border_style(Style::default().fg(btc_c))
