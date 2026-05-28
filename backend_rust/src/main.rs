@@ -277,6 +277,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state3.recording_sessions.write().await.extend(&valid_ids);
             }
         }
+        // Cleanup: cancel ALL non-15-min scheduled sessions (stale DB entries)
+        if state3.db.is_some() {
+            let cancelled = session_repo::cancel_non_15min_scheduled(state3.db.as_ref()).await;
+            if cancelled > 0 {
+                info!("[CLEANUP] Cancelled {} stale non-15-min scheduled sessions", cancelled);
+            }
+        }
         // Auto-start: if nothing is recording, create indefinite 15-min session now
         if state3.recording_sessions.read().await.is_empty() && state3.db.is_some() {
             info!("No active recording sessions — auto-starting 15-min indefinite...");

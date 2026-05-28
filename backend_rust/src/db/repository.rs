@@ -439,9 +439,10 @@ pub async fn list_sessions_with_status(state: &AppState, status_filter: Option<&
 
 pub async fn get_sessions_to_start(state: &AppState) -> Result<Vec<RecordingSession>> {
     if let Some(pool) = state.db.as_ref() {
-        // Exclude parent containers: they have children and should never start recording
+        // Exclude parent containers + BTC 15-min HARD LOCK
         let rows = sqlx::query_as::<_, RecordingSession>(
             &format!("{SESS_COLS} WHERE status = 'scheduled' AND scheduled_start <= NOW() + INTERVAL '5 seconds' \
+                      AND duration_min = 15 \
                       AND (parent_id IS NOT NULL \
                            OR NOT EXISTS (SELECT 1 FROM recording_sessions c WHERE c.parent_id = rs.id)) \
                       ORDER BY scheduled_start ASC")
@@ -455,9 +456,22 @@ pub async fn get_sessions_to_start(state: &AppState) -> Result<Vec<RecordingSess
     let threshold = now + chrono::Duration::seconds(5);
     let sessions = state.mem_sessions.read().await;
     Ok(sessions.iter()
-        .filter(|s| s.status == "scheduled" && s.scheduled_start <= threshold)
+        .filter(|s| s.status == "scheduled" && s.scheduled_start <= threshold && s.duration_min == 15)
         .cloned()
         .collect())
+}
+
+/// Cancel all scheduled sessions with duration != 15 (BTC 15-min HARD LOCK cleanup)
+pub async fn cancel_non_15min_scheduled(pool: Option<&PgPool>) -> u64 {
+    if let Some(p) = pool {
+        sqlx::query(
+            "UPDATE recording_sessions SET status = 'cancelled' WHERE status = 'scheduled' AND duration_min != 15"
+        )
+        .execute(p)
+        .await
+        .map(|r| r.rows_affected())
+        .unwrap_or(0)
+    } else { 0 }
 }
 
 pub async fn start_session_recording(state: &AppState, id: i32, btc_price: Option<f64>) -> Result<()> {
