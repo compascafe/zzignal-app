@@ -330,7 +330,7 @@ async fn process_sessions(state: Arc<AppState>) {
 }
 
 /// Crea el siguiente hijo para un padre indefinido si no tiene hijos activos.
-/// La duración del chunk se lee de parent.duration_min.
+/// BTC 15-min HARD LOCK: siempre chunks de 15 minutos.
 async fn auto_generate_child(state: &AppState, parent_id: i32) {
     let parent = match repository::get_session_by_id(state, parent_id).await {
         Ok(Some(p)) => p,
@@ -339,7 +339,7 @@ async fn auto_generate_child(state: &AppState, parent_id: i32) {
     if parent.status != "recording" {
         return;
     }
-    let chunk_min = parent.duration_min.max(1);
+    let chunk_min: i32 = 15; // BTC 15-min HARD LOCK — ignora parent.duration_min
     let children = repository::list_session_children(state, parent_id).await.unwrap_or_default();
     let has_active = children.iter().any(|c| c.status == "recording" || c.status == "scheduled");
     if has_active {
@@ -375,7 +375,7 @@ async fn recover_orphaned_parents(state: &AppState) {
         if parent.status != "recording" || parent.parent_id.is_some() {
             continue;
         }
-        let chunk_min = parent.duration_min.max(1);
+        let chunk_min: i32 = 15; // BTC 15-min HARD LOCK — ignora parent.duration_min
         let children = repository::list_session_children(state, parent.id).await.unwrap_or_default();
         let has_active = children.iter().any(|c| c.status == "recording" || c.status == "scheduled");
         if has_active {

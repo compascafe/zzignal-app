@@ -243,14 +243,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state3 = Arc::clone(&state);
         // Recover recording sessions from DB after restart
         let recovered = session_repo::list_recording_session_ids(state3.db.as_ref()).await;
+        let mut valid_ids: Vec<i32> = Vec::new();
         if !recovered.is_empty() {
-            info!("Recovered {} recording sessions from DB", recovered.len());
+            info!("Recovered {} recording sessions from DB — validating...", recovered.len());
             for &sid in &recovered {
-                if let Err(e) = state3.session_manager.recover_session(sid) {
-                    warn!("Failed to recover session #{}: {}", sid, e);
+                match session_repo::get_session_by_id(&state3, sid).await {
+                    Ok(Some(sess)) => {
+                        if sess.duration_min != 15 {
+                            // Stop non-15-min stale sessions immediately
+                            warn!("[RECOVERY] Stopping stale session #{} (duration={}min, not BTC 15-min)", sid, sess.duration_min);
+                            let btc_price = *state3.btc_price.read().await;
+                            if let Err(e) = session_repo::stop_session(&state3, sid, btc_price, btc_price).await {
+                                warn!("Failed to stop stale session #{}: {}", sid, e);
+                            }
+                        } else {
+                            valid_ids.push(sid);
+                            if let Err(e) = state3.session_manager.recover_session(sid) {
+                                warn!("Failed to recover session #{}: {}", sid, e);
+                            }
+                            // Recover t5/t3 state
+                            state3.t5_manager.on_session_start(sid, sess.scheduled_end);
+                            state3.t3_manager.on_session_start(sid, sess.scheduled_end);
+                            info!("[RECOVERY] Session #{} ({}→{}) t5/t3 restored", sid,
+                                sess.scheduled_start.format("%H:%M"), sess.scheduled_end.format("%H:%M"));
+                        }
+                    }
+                    Ok(None) => warn!("[RECOVERY] Session #{} not found in DB — skipping", sid),
+                    Err(e) => warn!("[RECOVERY] Session #{} query failed: {}", sid, e),
                 }
             }
-            state3.recording_sessions.write().await.extend(&recovered);
+            if !valid_ids.is_empty() {
+                info!("[RECOVERY] {} valid 15-min sessions restored", valid_ids.len());
+                state3.recording_sessions.write().await.extend(&valid_ids);
+            }
         }
         // Auto-start: if nothing is recording, create indefinite 15-min session now
         if state3.recording_sessions.read().await.is_empty() && state3.db.is_some() {
