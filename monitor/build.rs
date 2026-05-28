@@ -1,7 +1,4 @@
 fn main() {
-    println!("cargo:rerun-if-changed=../.git/HEAD");
-    println!("cargo:rerun-if-changed=../.git/refs/heads/main");
-
     let git_hash = std::process::Command::new("git")
         .args(["rev-parse", "--short=7", "HEAD"])
         .output()

@@ -19,8 +19,15 @@ cargo build --release
 cd "$SCRIPT_DIR"
 
 echo ""
-echo "=== 3/3 Symlink + Restart ==="
+echo "=== 3/3 Build Monitor ==="
+cd "$SCRIPT_DIR/monitor"
+cargo build --release
+cd "$SCRIPT_DIR"
+
+echo ""
+echo "=== 4/4 Symlink + Restart ==="
 ln -sf backend_rust/target/release/polymarket-backend polymarket-backend
+ln -sf monitor/target/release/zzignal-monitor zzignal-monitor
 sudo systemctl restart zzignal-app
 
 sleep 5
