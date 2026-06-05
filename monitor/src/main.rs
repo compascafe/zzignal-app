@@ -812,9 +812,14 @@ async fn main() -> io::Result<()> {
                     if nc != s.orders { s.add_log(format!("Orders: {} -> {}", s.orders, nc), Color::Cyan); }
                     s.orders = nc;
                     s.open_orders = orders;
-                    // Fill tracking + SL check only on fresh order data, timeout-guarded
-                    let _ = tokio::time::timeout(Duration::from_secs(3), commands::track_manual_fills(&mut s)).await;
-                    let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
+                    // Fill tracking: only when actively trading (pending/exit), 1s timeout
+                    if s.mt_state == 1 || s.mt_state == 3 {
+                        let _ = tokio::time::timeout(Duration::from_secs(1), commands::track_manual_fills(&mut s)).await;
+                    }
+                    // SL trigger: only when position active and SL set, 1s timeout
+                    if s.mt_state == 2 && s.mt_sl_price > 0.0 {
+                        let _ = tokio::time::timeout(Duration::from_secs(1), commands::check_sl_trigger(&mut s)).await;
+                    }
                 }
                 PollUpdate::Sessions(data) => { s.sessions = data; }
             }
@@ -870,7 +875,7 @@ async fn main() -> io::Result<()> {
                             if s.command_history.len() > 50 { s.command_history.pop_back(); }
                             s.history_cursor = None;
                         }
-                        let _ = tokio::time::timeout(Duration::from_secs(5), commands::dispatch(&c, &mut s)).await;
+                        let _ = tokio::time::timeout(Duration::from_secs(2), commands::dispatch(&c, &mut s)).await;
                         s.input_mode = InputMode::Normal; s.input_buf.clear();
                     }
                     KeyCode::Up => {
@@ -918,7 +923,7 @@ async fn main() -> io::Result<()> {
                         let now = chrono::Utc::now();
                         let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
                         let body = format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name);
-                        let result = tokio::time::timeout(Duration::from_secs(5), http_post("/api/sessions/start", &body)).await;
+                        let result = tokio::time::timeout(Duration::from_secs(2), http_post("/api/sessions/start", &body)).await;
                         match result {
                             Ok(Err(e)) => s.add_log(format!("Session start FAIL: {}", e), Color::Red),
                             Err(_) => s.add_log("Session start TIMEOUT".to_string(), Color::Red),
