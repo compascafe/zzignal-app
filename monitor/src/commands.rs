@@ -736,22 +736,6 @@ async fn exec_gemini(budget: f64, target: f64, exit: Option<f64>, s: &mut State)
     s.add_trade_log(format!("⚡ GEMINI @{:.2}→{:.2} ${:.0}", trigger, target, budget), Color::Magenta);
 }
 
-pub async fn trigger_gemini_buy(s: &mut State) {
-    if !s.gemini_triggered || s.mt_state != 0 { return; }
-    let outcome = s.gemini_outcome.clone();
-    let budget = s.gemini_budget;
-    let target = s.gemini_target;
-    let exit = if s.gemini_exit > 0.0 { Some(s.gemini_exit) } else { None };
-
-    // Clear trigger flag before placing to avoid loop
-    s.gemini_triggered = false;
-    s.gemini_active = false;
-
-    place_manual_buy(budget, &outcome, target, exit, None, s).await;
-    s.add_log(format!("🚀 GEMINI BUY {} @{:.4} ${:.0}", outcome.to_uppercase(), target, budget), Color::Magenta);
-    s.add_trade_log(format!("🚀 GEMINI BUY {} @{:.4} ${:.0}", outcome.to_uppercase(), target, budget), Color::Magenta);
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // FILL TRACKER — called from main.rs on each orders poll
 // ═══════════════════════════════════════════════════════════════════

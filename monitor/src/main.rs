@@ -804,12 +804,17 @@ async fn main() -> io::Result<()> {
                     s.prev_bid_up = deep_bid_up; s.prev_ask_up = deep_ask_up;
                     s.prev_bid_dn = deep_bid_dn; s.prev_ask_dn = deep_ask_dn;
                     commands::check_alerts(&mut s);
+                    // TSL update: pure math, no I/O — safe in poll handler
+                    commands::update_trailing_stop(&mut s).await;
                 }
                 PollUpdate::Orders(orders) => {
                     let nc = orders.len() as i64;
                     if nc != s.orders { s.add_log(format!("Orders: {} -> {}", s.orders, nc), Color::Cyan); }
                     s.orders = nc;
                     s.open_orders = orders;
+                    // Fill tracking + SL check only on fresh order data, timeout-guarded
+                    let _ = tokio::time::timeout(Duration::from_secs(3), commands::track_manual_fills(&mut s)).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
                 }
                 PollUpdate::Sessions(data) => { s.sessions = data; }
             }
@@ -925,16 +930,23 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // ── Gemini trigger (guarded by timeout) ──
+        // ── Gemini trigger → place buy (spawned, non-blocking) ──
         if s.gemini_triggered && s.mt_state == 0 {
-            let _ = tokio::time::timeout(Duration::from_secs(5), commands::trigger_gemini_buy(&mut s)).await;
-        }
-
-        // ── Manual trade tracking (SL/TSL/fills — only with timeout, from polled order data) ──
-        if !s.open_orders.is_empty() || s.mt_state > 0 {
-            let _ = tokio::time::timeout(Duration::from_secs(3), commands::update_trailing_stop(&mut s)).await;
-            let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
-            let _ = tokio::time::timeout(Duration::from_secs(3), commands::track_manual_fills(&mut s)).await;
+            let (budget, target, exit, outcome) = (
+                s.gemini_budget, s.gemini_target, s.gemini_exit, s.gemini_outcome.clone(),
+            );
+            s.gemini_triggered = false;
+            s.gemini_active = false;
+            tokio::spawn(async move {
+                use crate::api::{http_post_result, OrderPlaced};
+                let size = (budget / target).floor().max(1.0);
+                let body = format!(r#"{{"side":"buy","outcome":"{}","price":{},"size":{}}}"#, outcome, target, size);
+                let _ = http_post_result::<OrderPlaced>("/api/orders/limit", &body).await;
+                if exit > 0.0 {
+                    let ex_body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, exit, size);
+                    let _ = http_post_result::<OrderPlaced>("/api/orders/limit", &ex_body).await;
+                }
+            });
         }
 
         // ── Render ──
