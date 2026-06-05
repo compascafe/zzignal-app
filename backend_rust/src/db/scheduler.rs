@@ -336,7 +336,8 @@ async fn auto_generate_child(state: &AppState, parent_id: i32) {
         Ok(Some(p)) => p,
         _ => return,
     };
-    if parent.status != "recording" {
+    // Container parents stay 'scheduled'; only children become 'recording'
+    if parent.status != "recording" && parent.status != "scheduled" {
         return;
     }
     let chunk_min: i32 = 15; // BTC 15-min HARD LOCK — ignora parent.duration_min
@@ -372,7 +373,8 @@ async fn recover_orphaned_parents(state: &AppState) {
         Err(_) => return,
     };
     for parent in &parents {
-        if parent.status != "recording" || parent.parent_id.is_some() {
+        // Container parents stay 'scheduled'; only children become 'recording'
+        if (parent.status != "recording" && parent.status != "scheduled") || parent.parent_id.is_some() {
             continue;
         }
         let chunk_min: i32 = 15; // BTC 15-min HARD LOCK — ignora parent.duration_min
