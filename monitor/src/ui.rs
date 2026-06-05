@@ -469,7 +469,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
             .style(Style::default().bg(BB_CARD))),
         cols[3]);
 
-    // ── S5: ORDER BOOK IMBALANCE ──
+    // ── S5: ORDER BOOK IMBALANCE (visual bar) ──
     let up_bid_v: f64 = s.hft.depth_up_bids.iter().map(|(_,s)| s).sum();
     let up_ask_v: f64 = s.hft.depth_up_asks.iter().map(|(_,s)| s).sum();
     let dn_bid_v: f64 = s.hft.depth_dn_bids.iter().map(|(_,s)| s).sum();
@@ -479,23 +479,48 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let total_bull = up_bid_v + dn_ask_v;
     let total_bear = up_ask_v + dn_bid_v;
     let comb_imb = if total_bear > 0.0 { total_bull / total_bear } else { 1.0 };
+    let bull_pct = if total_bull + total_bear > 0.0 {
+        (total_bull / (total_bull + total_bear) * 100.0).clamp(5.0, 95.0)
+    } else { 50.0 };
     let (imb_border, imb_label) = if comb_imb > 1.15 {
-        (BB_GREEN, "▲ UP")
+        (BB_GREEN, "▲")
     } else if comb_imb < 0.85 {
-        (BB_RED, "▼ DN")
+        (BB_RED, "▼")
     } else {
-        (BB_AMBER, "—")
+        (BB_AMBER, "─")
     };
+
+    // Horizontal bar: RED (bears) ← | → GREEN (bulls)
+    let bar_w = (cols[4].width as usize).saturating_sub(4).min(24);
+    let red_w = ((100.0 - bull_pct) / 100.0 * bar_w as f64) as usize;
+    let green_w = bar_w.saturating_sub(red_w);
+    let red_bar = "█".repeat(red_w.min(bar_w));
+    let green_bar = "█".repeat(green_w.min(bar_w));
+    let mid = if red_w > 0 && green_w > 0 { "│" } else { "" };
+
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled("● ", Style::default().fg(imb_border).add_modifier(b)),
                 Span::styled("IMBALANCE", Style::default().fg(BB_AMBER).add_modifier(b)),
             ]),
-            Line::from(Span::styled(format!("UP {up_imb:.2}x"),
-                Style::default().fg(if up_imb>1.1{BB_GREEN}else if up_imb<0.9{BB_RED}else{BB_AMBER}).add_modifier(b))),
-            Line::from(Span::styled(format!("{imb_label}  DN {dn_imb:.2}x"),
-                Style::default().fg(BB_WHITE).add_modifier(b))),
+            Line::from(vec![
+                Span::styled(red_bar, Style::default().fg(BB_RED)),
+                Span::styled(mid, Style::default().fg(BB_DIM)),
+                Span::styled(green_bar, Style::default().fg(BB_GREEN)),
+            ]),
+            Line::from(vec![
+                Span::styled(format!("{imb_label}BEAR "), Style::default().fg(BB_RED).add_modifier(b)),
+                Span::styled(format!("{:.0}%", 100.0 - bull_pct), Style::default().fg(BB_RED)),
+                Span::styled(" │ ", Style::default().fg(BB_DIM)),
+                Span::styled(format!("BULL {:.0}%", bull_pct), Style::default().fg(BB_GREEN)),
+                Span::styled(format!(" {imb_label}"), Style::default().fg(BB_GREEN).add_modifier(b)),
+            ]),
+            Line::from(vec![
+                Span::styled(format!("UP{up_imb:.2}"), Style::default().fg(if up_imb>1.1{BB_GREEN}else if up_imb<0.9{BB_RED}else{BB_AMBER})),
+                Span::styled(" · ", Style::default().fg(BB_DIM)),
+                Span::styled(format!("DN{dn_imb:.2}"), Style::default().fg(if dn_imb>1.1{BB_GREEN}else if dn_imb<0.9{BB_RED}else{BB_AMBER})),
+            ]),
         ]).block(Block::default().borders(Borders::ALL).title("S5 IMB")
             .border_style(Style::default().fg(imb_border))
             .style(Style::default().bg(BB_CARD))),
@@ -577,12 +602,28 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
         (now_v - v1) / 0.5_f64.max(1.0)
     } else { 0.0 };
 
+    // Helper: render mini imbalance bar
+    let mini_bar = |ratio: f64, w: usize| -> Vec<Span> {
+        let bull_pct = if ratio > 0.0 { (ratio / (1.0 + ratio) * 100.0).clamp(5.0, 95.0) } else { 50.0 };
+        let bar_w = w.saturating_sub(2).min(16);
+        let red_w = ((100.0 - bull_pct) / 100.0 * bar_w as f64) as usize;
+        let green_w = bar_w.saturating_sub(red_w);
+        let mid = if red_w > 0 && green_w > 0 { "│" } else { "" };
+        vec![
+            Span::styled("█".repeat(red_w.min(bar_w)), Style::default().fg(BB_RED)),
+            Span::styled(mid, Style::default().fg(BB_DIM)),
+            Span::styled("█".repeat(green_w.min(bar_w)), Style::default().fg(BB_GREEN)),
+        ]
+    };
+
     // ── D10 ──
     let c10 = if d10 > 1.15 { BB_GREEN } else if d10 < 0.85 { BB_RED } else { BB_AMBER };
     let l10 = if d10 > 1.15 { "▲BULL" } else if d10 < 0.85 { "▼BEAR" } else { "—FLAT" };
+    let d10_bar = mini_bar(d10, cols[0].width as usize);
     f.render_widget(Paragraph::new(vec![
         Line::from(vec![Span::styled("● ", Style::default().fg(c10).add_modifier(b)),
             Span::styled("IMB D10", Style::default().fg(BB_AMBER).add_modifier(b))]),
+        Line::from(d10_bar),
         Line::from(Span::styled(format!("{l10} {d10:.2}x"), Style::default().fg(c10).add_modifier(b))),
         Line::from(Span::styled("10 levels", Style::default().fg(BB_DIM))),
     ]).block(Block::default().borders(Borders::ALL).title("D10")
@@ -591,9 +632,11 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     // ── D20 ──
     let c20 = if d20 > 1.15 { BB_GREEN } else if d20 < 0.85 { BB_RED } else { BB_AMBER };
     let l20 = if d20 > 1.15 { "▲BULL" } else if d20 < 0.85 { "▼BEAR" } else { "—FLAT" };
+    let d20_bar = mini_bar(d20, cols[1].width as usize);
     f.render_widget(Paragraph::new(vec![
         Line::from(vec![Span::styled("● ", Style::default().fg(c20).add_modifier(b)),
             Span::styled("IMB D20", Style::default().fg(BB_AMBER).add_modifier(b))]),
+        Line::from(d20_bar),
         Line::from(Span::styled(format!("{l20} {d20:.2}x"), Style::default().fg(c20).add_modifier(b))),
         Line::from(Span::styled("20 levels", Style::default().fg(BB_DIM))),
     ]).block(Block::default().borders(Borders::ALL).title("D20")
@@ -602,9 +645,11 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     // ── D30 ──
     let c30 = if d30 > 1.15 { BB_GREEN } else if d30 < 0.85 { BB_RED } else { BB_AMBER };
     let l30 = if d30 > 1.15 { "▲BULL" } else if d30 < 0.85 { "▼BEAR" } else { "—FLAT" };
+    let d30_bar = mini_bar(d30, cols[2].width as usize);
     f.render_widget(Paragraph::new(vec![
         Line::from(vec![Span::styled("● ", Style::default().fg(c30).add_modifier(b)),
             Span::styled("IMB D30", Style::default().fg(BB_AMBER).add_modifier(b))]),
+        Line::from(d30_bar),
         Line::from(Span::styled(format!("{l30} {d30:.2}x"), Style::default().fg(c30).add_modifier(b))),
         Line::from(Span::styled("30 levels", Style::default().fg(BB_DIM))),
     ]).block(Block::default().borders(Borders::ALL).title("D30")
