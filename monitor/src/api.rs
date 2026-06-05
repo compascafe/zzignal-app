@@ -8,14 +8,6 @@ pub const API_URL: &str = "http://localhost:8080";
 pub struct OrderPlaced {
     #[serde(alias = "order_id", alias = "orderID", default)]
     pub id: String,
-    #[serde(default)]
-    pub price: f64,
-    #[serde(default)]
-    pub size: f64,
-} impl OrderPlaced {
-    pub fn ok_id(&self) -> Option<&str> {
-        if self.id.is_empty() { None } else { Some(&self.id) }
-    }
 }
 
 // ─── Orderbook Depth ──────────────────────────────────────────────
@@ -61,7 +53,7 @@ pub struct WsMsg {
 
 #[derive(Debug, Deserialize)]
 pub struct OdiseoStatus {
-    pub live_mode: bool,
+    #[serde(default)]
     pub reinvest: Option<bool>,
     pub variants: Vec<OdiseoVariant>,
 }
@@ -279,25 +271,6 @@ pub async fn http_post(path: &str, body: &str) -> Result<(), String> {
         Some(result) => result,
         None => Err(format!("POST {path}: timeout")),
     }
-}
-
-pub async fn http_post_json<T: for<'de> Deserialize<'de>>(path: &str, body: &str) -> Option<T> {
-    let url = format!("{API_URL}{path}");
-    with_timeout(
-        async {
-            let resp = client()
-                .post(&url)
-                .header("Content-Type", "application/json")
-                .body(body.to_string())
-                .send().await.ok()?;
-            if resp.status().is_success() {
-                resp.json::<T>().await.ok()
-            } else {
-                None
-            }
-        },
-        path,
-    ).await.flatten()
 }
 
 pub async fn http_post_result<T: for<'de> Deserialize<'de>>(path: &str, body: &str) -> Result<T, String> {

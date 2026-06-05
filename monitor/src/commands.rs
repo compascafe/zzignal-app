@@ -599,7 +599,7 @@ async fn exec_panic(s: &mut State) {
             if s.pos_sen_dn && s.sen_budget > 0.0 { v.push(("SEN", "down", s.sen_budget, s.pos_sen_entry_dn)); }
             v
         };
-        for (strat, outcome, budget, entry) in &strat_pos {
+        for (_strat, outcome, budget, entry) in &strat_pos {
             let shares = if *entry > 0.0 { (budget / entry).floor().max(1.0) } else { *budget };
             let body = format!(r#"{{"side":"sell","outcome":"{}","amount_usdc":{}}}"#, outcome, shares);
             let _ = http_post("/api/orders/market", &body).await.ok();
@@ -750,38 +750,6 @@ pub async fn trigger_gemini_buy(s: &mut State) {
     place_manual_buy(budget, &outcome, target, exit, None, s).await;
     s.add_log(format!("🚀 GEMINI BUY {} @{:.4} ${:.0}", outcome.to_uppercase(), target, budget), Color::Magenta);
     s.add_trade_log(format!("🚀 GEMINI BUY {} @{:.4} ${:.0}", outcome.to_uppercase(), target, budget), Color::Magenta);
-}
-
-pub async fn place_sl_order(s: &mut State) {
-    if s.sl_pct <= 0.0 || s.mt_state != 2 { return; }
-
-    let sl_price = s.mt_entry * (1.0 - s.sl_pct / 100.0);
-    if sl_price <= 0.0 || sl_price >= 1.0 { return; }
-
-    if !s.mt_sl_order_id.is_empty() {
-        let _ = http_delete(&format!("/api/orders/{}", s.mt_sl_order_id)).await;
-        s.mt_sl_order_id.clear();
-    }
-
-    let body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#,
-        s.mt_outcome, sl_price, s.mt_size);
-
-    s.add_log(format!("▶ SL {}:{}% @{:.4} sz={:.0}",
-        if s.sl_market {"MKT"}else{"LMT"}, s.sl_pct, sl_price, s.mt_size),
-        Color::Yellow);
-    s.add_trade_log(format!("🛡 SL {:.0}% @{:.4}  {}",
-        s.sl_pct, sl_price, if s.sl_market {"MARKET"}else{"LIMIT"}), Color::Yellow);
-
-    match http_post_result::<OrderPlaced>("/api/orders/limit", &body).await {
-        Ok(placed) => {
-            let sl_id = placed.id;
-            s.mt_sl_order_id = sl_id.clone();
-            s.add_log(format!("  SL ID: {}", sl_id), Color::Cyan);
-        }
-        Err(e) => {
-            s.add_log(format!("SL FAIL: {}", e), Color::Red);
-        }
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════

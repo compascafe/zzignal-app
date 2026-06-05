@@ -22,4 +22,3 @@ pub mod patterns;
 pub mod executor;
 
 pub mod license;
-pub mod updater;

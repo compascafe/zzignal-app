@@ -4,18 +4,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use std::collections::VecDeque;
-
 use crate::InputMode;
 use crate::State;
 
 const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY"];
 
 // ─── Bloomberg Terminal Palette ────────────────────────────────────
-const BB_BG:       Color = Color::Reset;           // terminal default dark
 const BB_CARD:     Color = Color::Rgb(10, 14, 22); // subtle card bg
 const BB_AMBER:    Color = Color::Rgb(255, 179, 0);
-const BB_AMBER_DIM:Color = Color::Rgb(180, 130, 30);
 const BB_GREEN:    Color = Color::Rgb(0, 210, 90);
 const BB_RED:      Color = Color::Rgb(255, 65, 65);
 const BB_WHITE:    Color = Color::White;

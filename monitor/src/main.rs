@@ -19,6 +19,17 @@ use api::*;
 #[derive(Clone, Copy, PartialEq)]
 pub enum InputMode { Normal, Command }
 
+// ─── Messages from spawned poller task → main loop ─────────────
+enum PollUpdate {
+    Odiseo(OdiseoStatus),
+    Btc(BtcInfo),
+    Health(HealthInfo),
+    Provider(BtcProviderInfo),
+    Hft(HftState),
+    Orders(Vec<OrderInfo>),
+    Sessions(Vec<SessionInfo>),
+}
+
 struct State {
     connected: bool,
     tab: usize,
@@ -27,7 +38,6 @@ struct State {
     btc_provider: String,
     live: bool, reinvest: bool, _paper_mode: bool,
 
-    // Odiseo
     odi_label: String, odi_code: String,
     odi_pnl: f64, odi_bal: f64, odi_budget: f64,
     odi_t_up: i64, odi_t_dn: i64, odi_w_up: i64, odi_w_dn: i64,
@@ -37,7 +47,6 @@ struct State {
     odi_filters: u16,
     last_odi_t_up: i64, last_odi_t_dn: i64,
 
-    // Houdini 65
     h65_pnl: f64, h65_bal: f64, h65_budget: f64,
     h65_t_up: i64, h65_t_dn: i64, h65_w_up: i64, h65_w_dn: i64,
     h65_tp_up: i64, h65_tp_dn: i64, h65_sl_up: i64, h65_sl_dn: i64,
@@ -45,23 +54,15 @@ struct State {
     h65_accuracy: f64, h65_avg_pnl: f64, h65_best: f64, h65_worst: f64,
     last_h65_t_up: i64, last_h65_t_dn: i64,
 
-    // Senna
     sen_pnl: f64, sen_bal: f64, sen_budget: f64,
     sen_t_up: i64, sen_t_dn: i64, sen_w_up: i64, sen_w_dn: i64,
     sen_sessions: i64, sen_enabled: bool,
     last_sen_t_up: i64, last_sen_t_dn: i64,
 
-    // Sessions
     sessions: Vec<SessionInfo>,
-    selected_session: usize,
 
-    // Trading UI
-    selected_variant: usize,
-
-    // HFT live data
     hft: HftState,
 
-    // Position tracking (real-time)
     pos_h65_up: bool, pos_h65_dn: bool,
     pos_h65_entry_up: f64, pos_h65_entry_dn: f64,
     pos_odi_up: bool, pos_odi_dn: bool,
@@ -85,24 +86,17 @@ struct State {
     log: VecDeque<api::LogEntry>,
     trades: VecDeque<api::TradeEntry>,
     warnings: VecDeque<String>,
-    last_poll_odiseo: Instant,
-    last_poll_btc: Instant,
-    last_poll_hft: Instant,
-    last_poll_orders: Instant,
-    last_poll_sessions: Instant,
     last_ws: Instant,
     last_api_ok: Instant,
     ws_pings: VecDeque<u64>,
     api_pings: VecDeque<u64>,
     book_up: api::BookDepth,
     book_dn: api::BookDepth,
-    last_poll_depth: Instant,
     prev_secs_left: i32,
     session_open_up: f64,
     session_open_dn: f64,
     session_open_btc: f64,
 
-    // ─── MANUAL TRADING ─────────────────────────────────────────
     pub mt_outcome: String,
     pub mt_size: f64,
     pub mt_entry: f64,
@@ -113,74 +107,64 @@ struct State {
     pub mt_state: u8,
     pub mt_order_seen: bool,
     pub mt_exit_order_seen: bool,
-    pub mt_order_placed_at: Instant, // to detect fast fills
-    pub mt_exit_placed_at: Instant,  // exit fast-fill detection
+    pub mt_order_placed_at: Instant,
+    pub mt_exit_placed_at: Instant,
     pub mt_pnl_cum: f64,
     pub mt_trades: i64,
     pub mt_wins: i64,
     pub mt_last_fill_pct: f64,
-    pub mt_tsl_pct: f64,        // trailing stop % (0=off)
-    pub mt_tsl_high: f64,       // tracked high for UP trailing
-    pub mt_tsl_low: f64,        // tracked low for DOWN trailing
-    pub mt_fill_avg: f64,       // average fill price (may differ from limit)
-    pub mt_fill_count: i64,     // number of partial fills tracked
+    pub mt_tsl_pct: f64,
+    pub mt_tsl_high: f64,
+    pub mt_tsl_low: f64,
+    pub mt_fill_avg: f64,
+    pub mt_fill_count: i64,
 
-    pub last_order_id: String,   // for /u undo
-    pub last_order_type: String, // "buy"/"sell"/"exit"
+    pub last_order_id: String,
+    pub last_order_type: String,
     pub mt_sl_order_id: String,
-    pub mt_sl_price: f64,        // stop-market trigger price (0=disabled)
+    pub mt_sl_price: f64,
 
-    // Clean trade log
     pub trade_log: VecDeque<TradeLogEntry>,
-
-    // Command history
     pub command_history: VecDeque<String>,
     pub history_cursor: Option<usize>,
-
-    // Alerts
     pub alerts: Vec<commands::Alert>,
 
-    // /man page
     pub show_man: bool,
     pub pulse_tick: u64,
-    pub btc_vol_1m: f64,  // BTC volume in last 60s
+    pub btc_vol_1m: f64,
     pub btc_history: VecDeque<(f64, std::time::Instant)>,
     pub btc_velocity: f64,
     pub btc_acceleration: f64,
     pub session_vol_cum: f64,
-    // 30s CLOB momentum tracking
     pub clob_up_history: VecDeque<(std::time::Instant, f64)>,
     pub clob_dn_history: VecDeque<(std::time::Instant, f64)>,
-    pub clob_up_30s: f64,   // UP price ~30s ago (or earliest sample)
-    pub clob_dn_30s: f64,   // DN price ~30s ago
-    pub btc_price_30s: f64, // BTC price ~30s ago
-    // Depth absorption tracking
+    pub clob_up_30s: f64,
+    pub clob_dn_30s: f64,
+    pub btc_price_30s: f64,
     pub prev_bid_up: f64, pub prev_ask_up: f64,
     pub prev_bid_dn: f64, pub prev_ask_dn: f64,
-    pub abs_up: f64, pub abs_dn: f64,  // net absorption %
+    pub abs_up: f64, pub abs_dn: f64,
     pub last_btc_vel: f64,
-    pub imb_history: VecDeque<f64>,        // last ~200 combined imbalance values for oscillator
-    pub up_imb_history: VecDeque<f64>,     // UP imbalance history for chart
-    pub dn_imb_history: VecDeque<f64>,     // DN imbalance history for chart
-    pub prev_comb_imb: f64,                // previous combined imbalance for delta
+    pub imb_history: VecDeque<f64>,
+    pub up_imb_history: VecDeque<f64>,
+    pub dn_imb_history: VecDeque<f64>,
+    pub prev_comb_imb: f64,
 
-    // Session microstructure tracking (reset each new session)
-    pub sess_up_prices: VecDeque<f64>,     // clob_trade_up history (200 ticks)
-    pub sess_dn_prices: VecDeque<f64>,     // clob_trade_dn history
-    pub sess_mids: VecDeque<f64>,          // mid price history
-    pub sess_spreads: VecDeque<f64>,       // spread history
-    pub sess_trades_up: u64,               // # trades UP this session
-    pub sess_trades_dn: u64,               // # trades DN this session
-    pub sess_vol_up: f64,                  // cumulative UP volume
-    pub sess_vol_dn: f64,                  // cumulative DN volume
-    pub sess_max_spread: f64,              // max spread this session
-    pub sess_min_spread: f64,              // min spread this session
-    pub ofi_up_history: VecDeque<f64>,     // OFI UP history for chart
-    pub ofi_dn_history: VecDeque<f64>,     // OFI DN history
-    pub micro_up_history: VecDeque<f64>,   // micro-price UP history
-    pub micro_dn_history: VecDeque<f64>,   // micro-price DN history
+    pub sess_up_prices: VecDeque<f64>,
+    pub sess_dn_prices: VecDeque<f64>,
+    pub sess_mids: VecDeque<f64>,
+    pub sess_spreads: VecDeque<f64>,
+    pub sess_trades_up: u64,
+    pub sess_trades_dn: u64,
+    pub sess_vol_up: f64,
+    pub sess_vol_dn: f64,
+    pub sess_max_spread: f64,
+    pub sess_min_spread: f64,
+    pub ofi_up_history: VecDeque<f64>,
+    pub ofi_dn_history: VecDeque<f64>,
+    pub micro_up_history: VecDeque<f64>,
+    pub micro_dn_history: VecDeque<f64>,
 
-    // Gemini
     pub gemini_active: bool,
     pub gemini_budget: f64,
     pub gemini_target: f64,
@@ -228,8 +212,7 @@ impl State {
             sen_t_up: 0, sen_t_dn: 0, sen_w_up: 0, sen_w_dn: 0,
             sen_sessions: 0, sen_enabled: false,
             last_sen_t_up: 0, last_sen_t_dn: 0,
-            sessions: Vec::new(), selected_session: 0,
-            selected_variant: 0,
+            sessions: Vec::new(),
             hft: HftState::default(),
             pos_h65_up: false, pos_h65_dn: false,
             pos_h65_entry_up: 0.0, pos_h65_entry_dn: 0.0,
@@ -249,18 +232,12 @@ impl State {
             log: VecDeque::with_capacity(100),
             trades: VecDeque::with_capacity(100),
             warnings: VecDeque::with_capacity(20),
-            last_poll_odiseo: Instant::now(),
-            last_poll_btc: Instant::now(),
-            last_poll_hft: Instant::now(),
-            last_poll_orders: Instant::now(),
-            last_poll_sessions: Instant::now(),
             last_ws: Instant::now(),
             last_api_ok: Instant::now(),
             ws_pings: VecDeque::with_capacity(20),
             api_pings: VecDeque::with_capacity(20),
             book_up: api::BookDepth::default(),
             book_dn: api::BookDepth::default(),
-            last_poll_depth: Instant::now(),
             prev_secs_left: -1,
             session_open_up: 0.0,
             session_open_dn: 0.0,
@@ -363,10 +340,6 @@ impl State {
 // HFT / VARIANT LOGIC
 // ═══════════════════════════════════════════════════════════════════
 
-fn find_variant<'a>(variants: &'a [OdiseoVariant], code: &str) -> Option<&'a OdiseoVariant> {
-    variants.iter().find(|v| v.code.as_deref() == Some(code))
-}
-
 fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     if new_hft.hd65_up == 2 && s.prev_hd65_up != 2 {
         s.pos_h65_up = true;
@@ -464,7 +437,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
 
     s.session_vol_cum += new_hft.clob_trade_up_vol + new_hft.clob_trade_dn_vol;
 
-    // Session microstructure tracking
     {
         let up = new_hft.clob_trade_up;
         let dn = new_hft.clob_trade_dn;
@@ -484,7 +456,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         while s.sess_spreads.len() > 200 { s.sess_spreads.pop_front(); }
     }
 
-    // OFI + micro-price tracking
     {
         s.ofi_up_history.push_back(new_hft.ofi_up);
         s.ofi_dn_history.push_back(new_hft.ofi_dn);
@@ -496,7 +467,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         while s.micro_dn_history.len() > 200 { s.micro_dn_history.pop_front(); }
     }
 
-    // Track combined imbalance for trend analysis
     {
         let up_bid_v: f64 = new_hft.depth_up_bids.iter().map(|(_, s)| s).sum();
         let up_ask_v: f64 = new_hft.depth_up_asks.iter().map(|(_, s)| s).sum();
@@ -518,24 +488,19 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
 
     let secs = new_hft.secs_left;
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
-        // DO NOT clear book_up/book_dn — they stay live from CLOB WS stream
-        // The book is continuous across sessions (same market)
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
         s.session_open_btc = new_hft.btc_price;
-        // Reset all strategy position flags for new session
         s.pos_odi_up = false; s.pos_odi_dn = false;
         s.pos_odi_entry_up = 0.0; s.pos_odi_entry_dn = 0.0;
         s.pos_h65_up = false; s.pos_h65_dn = false;
         s.pos_h65_entry_up = 0.0; s.pos_h65_entry_dn = 0.0;
         s.pos_sen_up = false; s.pos_sen_dn = false;
         s.pos_sen_entry_up = 0.0; s.pos_sen_entry_dn = 0.0;
-        // Clear stale manual position if still active from previous session
         if s.mt_state > 0 {
             s.add_trade_log("SESSION RESET — posicion manual cerrada".to_string(), Color::Yellow);
             s.reset_manual();
         }
-        // Reset session microstructure tracking
         s.sess_up_prices.clear(); s.sess_dn_prices.clear();
         s.sess_mids.clear(); s.sess_spreads.clear();
         s.sess_trades_up = 0; s.sess_trades_dn = 0;
@@ -582,6 +547,10 @@ fn detect_trades(v: &OdiseoVariant, last_t_up: i64, last_t_dn: i64,
     if delta_up < 0 { s.add_log(format!("⬆ EXIT  UP  [{} {}]", label, if s.live{"LIVE"}else{"PAPER"}), Color::Yellow); }
     if delta_dn < 0 { s.add_log(format!("⬇ EXIT  DN  [{} {}]", label, if s.live{"LIVE"}else{"PAPER"}), Color::Yellow); }
     (v.trades_up, v.trades_dn)
+}
+
+fn find_variant<'a>(variants: &'a [OdiseoVariant], code: &str) -> Option<&'a OdiseoVariant> {
+    variants.iter().find(|v| v.code.as_deref() == Some(code))
 }
 
 fn apply_variant(v: &OdiseoVariant, s: &mut State) {
@@ -659,7 +628,42 @@ fn apply_variant(v: &OdiseoVariant, s: &mut State) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// MAIN
+// POLLER TASK — runs independently, never blocks main loop
+// ═══════════════════════════════════════════════════════════════════
+
+async fn run_poller(tx: mpsc::UnboundedSender<PollUpdate>) {
+    loop {
+        let start = Instant::now();
+
+        // Collect all poll results concurrently (each bounded to 2s by api.rs)
+        let (odi, btc, health, prov, hft, orders, sessions) = tokio::join!(
+            http_get::<OdiseoStatus>("/api/odiseo/status"),
+            http_get::<BtcInfo>("/api/btc"),
+            http_get::<HealthInfo>("/api/health"),
+            http_get::<BtcProviderInfo>("/api/btc/provider"),
+            http_get::<HftState>("/api/hft/latest"),
+            http_get::<Vec<OrderInfo>>("/api/orders"),
+            http_get::<Vec<SessionInfo>>("/api/sessions"),
+        );
+
+        if let Some(data) = odi { let _ = tx.send(PollUpdate::Odiseo(data)); }
+        if let Some(data) = btc { let _ = tx.send(PollUpdate::Btc(data)); }
+        if let Some(data) = health { let _ = tx.send(PollUpdate::Health(data)); }
+        if let Some(data) = prov { let _ = tx.send(PollUpdate::Provider(data)); }
+        if let Some(data) = hft { let _ = tx.send(PollUpdate::Hft(data)); }
+        if let Some(data) = orders { let _ = tx.send(PollUpdate::Orders(data)); }
+        if let Some(data) = sessions { let _ = tx.send(PollUpdate::Sessions(data)); }
+
+        // Tick every 500ms — fast enough for HFT, doesn't overload backend
+        let elapsed = start.elapsed();
+        if elapsed < Duration::from_millis(500) {
+            tokio::time::sleep(Duration::from_millis(500) - elapsed).await;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MAIN — pure render loop, zero HTTP I/O
 // ═══════════════════════════════════════════════════════════════════
 
 #[tokio::main]
@@ -671,20 +675,21 @@ async fn main() -> io::Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
-    let (tx, mut rx) = mpsc::channel::<WsMsg>(256);
+    let (ws_tx, mut ws_rx) = mpsc::channel::<WsMsg>(256);
+    let (poll_tx, mut poll_rx) = mpsc::unbounded_channel::<PollUpdate>();
 
     // WebSocket task
     tokio::spawn(async move {
         loop {
             if let Ok((ws, _)) = connect_async(WS_URL).await {
                 let (_, mut read) = ws.split();
-                let _ = tx.send(WsMsg { msg_type: Some("connected".into()), ..Default::default() }).await;
+                let _ = ws_tx.send(WsMsg { msg_type: Some("connected".into()), ..Default::default() }).await;
                 while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) = read.next().await {
                     if let Ok(msg) = serde_json::from_str::<WsMsg>(&text) {
-                        let _ = tx.send(msg).await;
+                        let _ = ws_tx.send(msg).await;
                     } else if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&text) {
                         if raw.get("type").and_then(|v| v.as_str()) == Some("order_result") {
-                            let _ = tx.send(WsMsg {
+                            let _ = ws_tx.send(WsMsg {
                                 msg_type: Some("order_result".into()),
                                 success: raw.get("success").and_then(|v| v.as_bool()),
                                 message: raw.get("message").and_then(|v| v.as_str()).map(|s| s.to_string()),
@@ -698,34 +703,120 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    let (itx, mut irx) = mpsc::channel::<KeyCode>(16);
-    tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = itx.send(k.code).await; } } });
+    // HTTP poller task — runs independently, never blocks the main loop
+    tokio::spawn(run_poller(poll_tx));
+
+    let (kb_tx, mut kb_rx) = mpsc::channel::<KeyCode>(16);
+    tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = kb_tx.send(k.code).await; } } });
 
     let mut s = State::new(paper_mode);
     let mode_label = if s.live { "DINERO REAL" } else { "PAPER MONEY" };
     s.add_log(format!("ZZIGNAL MONITOR — {}", mode_label), Color::Magenta);
 
-    if s.live {
-        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":true}").await {
-            s.add_log(format!("API LIVE FAIL: {}", e), Color::Red);
-        }
-        s.add_log("DINERO REAL — esperando comandos".to_string(), Color::Red);
-    } else {
-        if let Err(e) = http_post("/api/odiseo/live", "{\"enable\":false}").await {
-            s.add_log(format!("API LIVE FAIL: {}", e), Color::Red);
-        }
-        if let Err(e) = http_post("/api/odiseo/variant", "{\"index\":0,\"enable\":true}").await {
-            s.add_log(format!("API O83 FAIL: {}", e), Color::Red);
-        } else { s.odi_enabled = true; }
-        if let Err(e) = http_post("/api/odiseo/variant", "{\"index\":1,\"enable\":true}").await {
-            s.add_log(format!("API H65 FAIL: {}", e), Color::Red);
-        } else { s.h65_enabled = true; }
-        s.add_log("PAPER MONEY — ambas estrategias ON".to_string(), Color::Cyan);
-    }
+    // Startup config — fire and forget with timeout
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            let live = !paper_mode;
+            if live {
+                let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
+            } else {
+                let _ = http_post("/api/odiseo/live", "{\"enable\":false}").await;
+                let _ = http_post("/api/odiseo/variant", "{\"index\":0,\"enable\":true}").await;
+                let _ = http_post("/api/odiseo/variant", "{\"index\":1,\"enable\":true}").await;
+            }
+        }).await;
+    });
 
+    // ═══════════════════════ MAIN LOOP ═══════════════════════
+    // ZERO HTTP I/O — only channel drains, keyboard, and render
     loop {
-        // Drain WS
-        while let Ok(msg) = rx.try_recv() {
+        // ── Drain poll updates ──
+        while let Ok(update) = poll_rx.try_recv() {
+            let api_lat = s.last_api_ok.elapsed().as_millis() as u64;
+            s.api_pings.push_front(api_lat);
+            if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
+            s.last_api_ok = Instant::now();
+
+            match update {
+                PollUpdate::Odiseo(data) => {
+                    s.reinvest = data.reinvest.unwrap_or(false);
+                    let odi_v = data.variants.iter().find(|v| {
+                        let code = v.code.as_deref().unwrap_or("");
+                        code.starts_with("odiseo") && code != "odiseo65"
+                    });
+                    if let Some(v) = odi_v { apply_variant(v, &mut s); }
+                    if let Some(v) = find_variant(&data.variants, "houdini65") { apply_variant(v, &mut s); }
+                    if let Some(v) = find_variant(&data.variants, "scalper") { apply_variant(v, &mut s); }
+                }
+                PollUpdate::Btc(data) => {
+                    s.btc = data.price;
+                    if data.open > 0.0 { s.btc_open = data.open; }
+                    s.btc_history.push_back((data.price, Instant::now()));
+                    if s.btc_history.len() > 5 { s.btc_history.pop_front(); }
+                    if s.btc_history.len() >= 2 {
+                        let (p0, t0) = s.btc_history.front().unwrap();
+                        let (p1, t1) = s.btc_history.back().unwrap();
+                        let dt = t1.duration_since(*t0).as_secs_f64().max(0.1);
+                        let new_vel = (p1 - p0) / dt;
+                        s.btc_acceleration = (new_vel - s.last_btc_vel) / dt;
+                        s.last_btc_vel = new_vel;
+                        s.btc_velocity = new_vel;
+                    }
+                }
+                PollUpdate::Health(data) => { s.bal = data.balance; }
+                PollUpdate::Provider(data) => { s.btc_provider = data.provider; }
+                PollUpdate::Hft(data) => {
+                    apply_hft_state(&data, &mut s);
+                    s.btc_vol_1m = data.btc_vol_1m;
+                    if data.clob_trade_up > 0.0 {
+                        s.clob_up_history.push_back((Instant::now(), data.clob_trade_up));
+                        if s.clob_up_history.len() > 100 { s.clob_up_history.pop_front(); }
+                    }
+                    if data.clob_trade_dn > 0.0 {
+                        s.clob_dn_history.push_back((Instant::now(), data.clob_trade_dn));
+                        if s.clob_dn_history.len() > 100 { s.clob_dn_history.pop_front(); }
+                    }
+                    let cutoff_30s = Instant::now() - Duration::from_secs(30);
+                    s.clob_up_30s = s.clob_up_history.iter()
+                        .find(|(t,_)| *t <= cutoff_30s)
+                        .or_else(|| s.clob_up_history.front())
+                        .map(|(_,p)| *p).unwrap_or(data.clob_trade_up);
+                    s.clob_dn_30s = s.clob_dn_history.iter()
+                        .find(|(t,_)| *t <= cutoff_30s)
+                        .or_else(|| s.clob_dn_history.front())
+                        .map(|(_,p)| *p).unwrap_or(data.clob_trade_dn);
+                    s.btc_price_30s = s.btc_history.iter()
+                        .find(|(_, t)| *t <= cutoff_30s)
+                        .or_else(|| s.btc_history.front())
+                        .map(|(p,_)| *p).unwrap_or(data.btc_price);
+                    let deep_bid_up = data.depth_up_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
+                    let deep_ask_up = data.depth_up_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
+                    let deep_bid_dn = data.depth_dn_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
+                    let deep_ask_dn = data.depth_dn_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
+                    if s.prev_bid_up > 0.0 {
+                        let b_up = (deep_bid_up / s.prev_bid_up - 1.0) * 100.0;
+                        let a_up = (deep_ask_up / s.prev_ask_up - 1.0) * 100.0;
+                        s.abs_up = b_up - a_up;
+                        let b_dn = (deep_bid_dn / s.prev_bid_dn - 1.0) * 100.0;
+                        let a_dn = (deep_ask_dn / s.prev_ask_dn - 1.0) * 100.0;
+                        s.abs_dn = b_dn - a_dn;
+                    }
+                    s.prev_bid_up = deep_bid_up; s.prev_ask_up = deep_ask_up;
+                    s.prev_bid_dn = deep_bid_dn; s.prev_ask_dn = deep_ask_dn;
+                    commands::check_alerts(&mut s);
+                }
+                PollUpdate::Orders(orders) => {
+                    let nc = orders.len() as i64;
+                    if nc != s.orders { s.add_log(format!("Orders: {} -> {}", s.orders, nc), Color::Cyan); }
+                    s.orders = nc;
+                    s.open_orders = orders;
+                }
+                PollUpdate::Sessions(data) => { s.sessions = data; }
+            }
+        }
+
+        // ── Drain WS messages ──
+        while let Ok(msg) = ws_rx.try_recv() {
             let ws_lat = s.last_ws.elapsed().as_millis() as u64;
             s.ws_pings.push_front(ws_lat);
             if s.ws_pings.len() > 20 { s.ws_pings.pop_back(); }
@@ -742,14 +833,9 @@ async fn main() -> io::Result<()> {
                     let ok = msg.success.unwrap_or(false);
                     let txt = msg.message.unwrap_or_default();
                     s.add_log(format!("{} {}", if ok {"OK"}else{"FAIL"}, txt), if ok{Color::Green}else{Color::Red});
-                    if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
                 }
-                    Some("hft_state") => {
-                    if let Some(ref hft) = msg.data {
-                        apply_hft_state(hft, &mut s);
-                        // Guard: timeout prevents SL trigger from blocking render loop
-                        let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
-                    }
+                Some("hft_state") => {
+                    if let Some(ref hft) = msg.data { apply_hft_state(hft, &mut s); }
                 }
                 Some("book") => {
                     if let Some(ref book) = msg.book {
@@ -759,150 +845,16 @@ async fn main() -> io::Result<()> {
                             _ => {}
                         }
                     }
-                    if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
                 }
                 Some("btc_provider") => {
-                    if let Some(ref p) = msg.provider {
-                        s.btc_provider = p.clone();
-                    }
+                    if let Some(ref p) = msg.provider { s.btc_provider = p.clone(); }
                 }
                 _ => {}
             }
         }
 
-        // Poll Odiseo + Orders (2s)
-        if s.last_poll_odiseo.elapsed() > Duration::from_secs(2) {
-            s.last_poll_odiseo = Instant::now();
-            if let Some(data) = http_get::<OdiseoStatus>("/api/odiseo/status").await {
-                let api_lat = s.last_api_ok.elapsed().as_millis() as u64;
-                s.api_pings.push_front(api_lat);
-                if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
-                s.last_api_ok = Instant::now();
-                s.reinvest = data.reinvest.unwrap_or(false);
-                let odi_v = data.variants.iter().find(|v| {
-                    let code = v.code.as_deref().unwrap_or("");
-                    code.starts_with("odiseo") && code != "odiseo65"
-                });
-                if let Some(v) = odi_v { apply_variant(v, &mut s); }
-                if let Some(v) = find_variant(&data.variants, "houdini65") { apply_variant(v, &mut s); }
-                if let Some(v) = find_variant(&data.variants, "scalper") { apply_variant(v, &mut s); }
-            }
-
-            if let Some(orders) = http_get::<Vec<api::OrderInfo>>("/api/orders").await {
-                let nc = orders.len() as i64;
-                if nc != s.orders { s.add_log(format!("Orders: {} -> {}", s.orders, nc), Color::Cyan); }
-                s.orders = nc;
-                s.open_orders = orders;
-            }
-        }
-
-        // Poll BTC (5s)
-        if s.last_poll_btc.elapsed() > Duration::from_secs(5) {
-            s.last_poll_btc = Instant::now();
-            if let Some(data) = http_get::<BtcInfo>("/api/btc").await {
-                s.btc = data.price;
-                if data.open > 0.0 { s.btc_open = data.open; } // backend BTC open from Gamma/Pyth (session-level)
-                // Track BTC price history for velocity/acceleration
-                s.btc_history.push_back((data.price, Instant::now()));
-                if s.btc_history.len() > 5 { s.btc_history.pop_front(); }
-                if s.btc_history.len() >= 2 {
-                    let (p0, t0) = s.btc_history.front().unwrap();
-                    let (p1, t1) = s.btc_history.back().unwrap();
-                    let dt = t1.duration_since(*t0).as_secs_f64().max(0.1);
-                    let new_vel = (p1 - p0) / dt;
-                    s.btc_acceleration = (new_vel - s.last_btc_vel) / dt;
-                    s.last_btc_vel = new_vel;
-                    s.btc_velocity = new_vel;
-                }
-            }
-            if let Some(data) = http_get::<HealthInfo>("/api/health").await {
-                s.bal = data.balance;
-            }
-            if let Some(data) = http_get::<BtcProviderInfo>("/api/btc/provider").await {
-                s.btc_provider = data.provider;
-            }
-        }
-
-        // Poll HFT (100ms when SL active, 500ms otherwise)
-        let hft_interval = if s.mt_sl_price > 0.0 || s.mt_tsl_pct > 0.0 { 100 } else { 500 };
-        if s.last_poll_hft.elapsed() > Duration::from_millis(hft_interval) {
-            s.last_poll_hft = Instant::now();
-            if let Some(data) = http_get::<HftState>("/api/hft/latest").await {
-                let api_lat = s.last_api_ok.elapsed().as_millis() as u64;
-                s.api_pings.push_front(api_lat);
-                if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
-                s.last_api_ok = Instant::now();
-                apply_hft_state(&data, &mut s);
-                // Use backend-computed real-time BTC volume (aggTrade per-tick sum)
-                s.btc_vol_1m = data.btc_vol_1m;
-                // Track CLOB prices for 30s momentum
-                if data.clob_trade_up > 0.0 {
-                    s.clob_up_history.push_back((Instant::now(), data.clob_trade_up));
-                    if s.clob_up_history.len() > 100 { s.clob_up_history.pop_front(); }
-                }
-                if data.clob_trade_dn > 0.0 {
-                    s.clob_dn_history.push_back((Instant::now(), data.clob_trade_dn));
-                    if s.clob_dn_history.len() > 100 { s.clob_dn_history.pop_front(); }
-                }
-                let cutoff_30s = Instant::now() - Duration::from_secs(30);
-                s.clob_up_30s = s.clob_up_history.iter()
-                    .find(|(t,_)| *t <= cutoff_30s)
-                    .or_else(|| s.clob_up_history.front())
-                    .map(|(_,p)| *p).unwrap_or(data.clob_trade_up);
-                s.clob_dn_30s = s.clob_dn_history.iter()
-                    .find(|(t,_)| *t <= cutoff_30s)
-                    .or_else(|| s.clob_dn_history.front())
-                    .map(|(_,p)| *p).unwrap_or(data.clob_trade_dn);
-                s.btc_price_30s = s.btc_history.iter()
-                    .find(|(_, t)| *t <= cutoff_30s)
-                    .or_else(|| s.btc_history.front())
-                    .map(|(p,_)| *p).unwrap_or(data.btc_price);
-                // Depth absorption: net bid - ask size change at bottom levels
-                // .last() = deepest level (cheapest bid, most expensive ask) — less noisy than best level
-                let deep_bid_up = data.depth_up_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
-                let deep_ask_up = data.depth_up_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
-                let deep_bid_dn = data.depth_dn_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
-                let deep_ask_dn = data.depth_dn_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
-                if s.prev_bid_up > 0.0 {
-                    let b_up = (deep_bid_up / s.prev_bid_up - 1.0) * 100.0;
-                    let a_up = (deep_ask_up / s.prev_ask_up - 1.0) * 100.0;
-                    s.abs_up = b_up - a_up;  // + = deep bids growing vs asks = whale accumulation
-                    let b_dn = (deep_bid_dn / s.prev_bid_dn - 1.0) * 100.0;
-                    let a_dn = (deep_ask_dn / s.prev_ask_dn - 1.0) * 100.0;
-                    s.abs_dn = b_dn - a_dn;
-                }
-                s.prev_bid_up = deep_bid_up; s.prev_ask_up = deep_ask_up;
-                s.prev_bid_dn = deep_bid_dn; s.prev_ask_dn = deep_ask_dn;
-                let _ = tokio::time::timeout(Duration::from_secs(3), commands::update_trailing_stop(&mut s)).await;
-                let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
-                commands::check_alerts(&mut s);
-            }
-        }
-
-        // Poll Orders — 250ms if pending, 1s otherwise
-        {
-            let interval = if s.mt_state == 1 { Duration::from_millis(250) } else { Duration::from_millis(1000) };
-            if s.last_poll_orders.elapsed() > interval {
-                s.last_poll_orders = Instant::now();
-                if let Some(orders) = http_get::<Vec<api::OrderInfo>>("/api/orders").await {
-                    let nc = orders.len() as i64;
-                    s.open_orders = orders;
-                    s.orders = nc;
-                    let _ = tokio::time::timeout(Duration::from_secs(5), commands::track_manual_fills(&mut s)).await;
-                }
-            }
-        }
-
-        // Poll Sessions (10s)
-        if s.last_poll_sessions.elapsed() > Duration::from_secs(10) {
-            s.last_poll_sessions = Instant::now();
-            if let Some(data) = http_get::<Vec<SessionInfo>>("/api/sessions").await {
-                s.sessions = data;
-            }
-        }
-
-        // Keyboard
-        while let Ok(k) = irx.try_recv() {
+        // ── Keyboard input ──
+        while let Ok(k) = kb_rx.try_recv() {
             if s.input_mode == InputMode::Command {
                 match k {
                     KeyCode::Esc => { s.input_mode = InputMode::Normal; s.input_buf.clear(); }
@@ -913,7 +865,6 @@ async fn main() -> io::Result<()> {
                             if s.command_history.len() > 50 { s.command_history.pop_back(); }
                             s.history_cursor = None;
                         }
-                        // Timeout guard: prevents command dispatch from blocking render loop
                         let _ = tokio::time::timeout(Duration::from_secs(5), commands::dispatch(&c, &mut s)).await;
                         s.input_mode = InputMode::Normal; s.input_buf.clear();
                     }
@@ -929,10 +880,7 @@ async fn main() -> io::Result<()> {
                     }
                     KeyCode::Down => {
                         match s.history_cursor {
-                            None | Some(0) => {
-                                s.history_cursor = None;
-                                s.input_buf.clear();
-                            }
+                            None | Some(0) => { s.history_cursor = None; s.input_buf.clear(); }
                             Some(i) => {
                                 s.history_cursor = Some(i - 1);
                                 s.input_buf = s.command_history.get(i - 1).cloned().unwrap_or_default();
@@ -948,10 +896,7 @@ async fn main() -> io::Result<()> {
 
             match k {
                 KeyCode::Esc | KeyCode::Char('q') => {
-                    if s.show_man {
-                        s.show_man = false;
-                        continue;
-                    }
+                    if s.show_man { s.show_man = false; continue; }
                     disable_raw_mode()?;
                     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
                     terminal.show_cursor()?;
@@ -967,13 +912,11 @@ async fn main() -> io::Result<()> {
                         s.add_log("Starting 15-min session...".to_string(), Color::Green);
                         let now = chrono::Utc::now();
                         let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
-                        let result = tokio::time::timeout(
-                            Duration::from_secs(5),
-                            http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)),
-                        ).await;
+                        let body = format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name);
+                        let result = tokio::time::timeout(Duration::from_secs(5), http_post("/api/sessions/start", &body)).await;
                         match result {
                             Ok(Err(e)) => s.add_log(format!("Session start FAIL: {}", e), Color::Red),
-                            Err(_) => s.add_log("Session start TIMEOUT — backend may be busy".to_string(), Color::Red),
+                            Err(_) => s.add_log("Session start TIMEOUT".to_string(), Color::Red),
                             _ => {}
                         }
                     }
@@ -982,11 +925,19 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // Gemini trigger → place buy (guarded by timeout)
+        // ── Gemini trigger (guarded by timeout) ──
         if s.gemini_triggered && s.mt_state == 0 {
             let _ = tokio::time::timeout(Duration::from_secs(5), commands::trigger_gemini_buy(&mut s)).await;
         }
 
+        // ── Manual trade tracking (SL/TSL/fills — only with timeout, from polled order data) ──
+        if !s.open_orders.is_empty() || s.mt_state > 0 {
+            let _ = tokio::time::timeout(Duration::from_secs(3), commands::update_trailing_stop(&mut s)).await;
+            let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
+            let _ = tokio::time::timeout(Duration::from_secs(3), commands::track_manual_fills(&mut s)).await;
+        }
+
+        // ── Render ──
         s.pulse_tick = s.pulse_tick.wrapping_add(1);
         terminal.draw(|f| ui::draw(f, &s))?;
         tokio::time::sleep(Duration::from_millis(100)).await;
