@@ -227,71 +227,120 @@ fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(2))
+            .connect_timeout(Duration::from_secs(1))
+            .pool_max_idle_per_host(0)
             .build()
             .unwrap()
     })
 }
 
+/// Wraps an async future with a tokio timeout, returning None on timeout.
+/// Safety net: prevents any HTTP call from blocking the render loop indefinitely.
+async fn with_timeout<T, F>(future: F, label: &str) -> Option<T>
+where
+    F: std::future::Future<Output = T>,
+{
+    match tokio::time::timeout(Duration::from_secs(2), future).await {
+        Ok(v) => Some(v),
+        Err(_) => {
+            // Silent — timeout prevents UI freeze
+            let _ = label; // could log if needed
+            None
+        }
+    }
+}
+
 pub async fn http_get<T: for<'de> Deserialize<'de>>(path: &str) -> Option<T> {
     let url = format!("{API_URL}{path}");
-    client().get(&url).send().await.ok()?.json::<T>().await.ok()
+    with_timeout(
+        async {
+            client().get(&url).send().await.ok()?.json::<T>().await.ok()
+        },
+        path,
+    ).await.flatten()
 }
 
 pub async fn http_post(path: &str, body: &str) -> Result<(), String> {
-    let resp = client()
-        .post(format!("{API_URL}{path}"))
-        .header("Content-Type", "application/json")
-        .body(body.to_string())
-        .send().await
-        .map_err(|e| format!("POST {path}: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("POST {path} → HTTP {}", resp.status().as_u16()));
+    let url = format!("{API_URL}{path}");
+    let fut = async {
+        let resp = client()
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send().await
+            .map_err(|e| format!("POST {path}: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("POST {path} → HTTP {}", resp.status().as_u16()));
+        }
+        Ok(())
+    };
+    match with_timeout(fut, path).await {
+        Some(result) => result,
+        None => Err(format!("POST {path}: timeout")),
     }
-    Ok(())
 }
 
 pub async fn http_post_json<T: for<'de> Deserialize<'de>>(path: &str, body: &str) -> Option<T> {
-    let resp = client()
-        .post(format!("{API_URL}{path}"))
-        .header("Content-Type", "application/json")
-        .body(body.to_string())
-        .send().await.ok()?;
-    if resp.status().is_success() {
-        resp.json::<T>().await.ok()
-    } else {
-        None
-    }
+    let url = format!("{API_URL}{path}");
+    with_timeout(
+        async {
+            let resp = client()
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .body(body.to_string())
+                .send().await.ok()?;
+            if resp.status().is_success() {
+                resp.json::<T>().await.ok()
+            } else {
+                None
+            }
+        },
+        path,
+    ).await.flatten()
 }
 
 pub async fn http_post_result<T: for<'de> Deserialize<'de>>(path: &str, body: &str) -> Result<T, String> {
-    let resp = client()
-        .post(format!("{API_URL}{path}"))
-        .header("Content-Type", "application/json")
-        .body(body.to_string())
-        .send().await
-        .map_err(|e| format!("POST {path}: {e}"))?;
-    let status = resp.status();
-    let body_text = resp.text().await.unwrap_or_default();
-    if status.is_success() {
-        serde_json::from_str::<T>(&body_text).map_err(|e| format!("JSON parse: {e}"))
-    } else {
-        // Try to extract error message from JSON or use raw body
-        let msg = serde_json::from_str::<serde_json::Value>(&body_text)
-            .ok()
-            .and_then(|v| v.get("message").or_else(|| v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
-            .unwrap_or(body_text);
-        Err(format!("HTTP {}: {}", status.as_u16(), msg))
+    let url = format!("{API_URL}{path}");
+    let fut = async {
+        let resp = client()
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send().await
+            .map_err(|e| format!("POST {path}: {e}"))?;
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        if status.is_success() {
+            serde_json::from_str::<T>(&body_text).map_err(|e| format!("JSON parse: {e}"))
+        } else {
+            let msg = serde_json::from_str::<serde_json::Value>(&body_text)
+                .ok()
+                .and_then(|v| v.get("message").or_else(|| v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
+                .unwrap_or(body_text);
+            Err(format!("HTTP {}: {}", status.as_u16(), msg))
+        }
+    };
+    match with_timeout(fut, path).await {
+        Some(result) => result,
+        None => Err(format!("POST {path}: timeout")),
     }
 }
 
 pub async fn http_delete(path: &str) -> Result<(), String> {
-    let resp = client()
-        .delete(format!("{API_URL}{path}"))
-        .send().await
-        .map_err(|e| format!("DELETE {path}: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("DELETE {path} → HTTP {}", resp.status().as_u16()));
+    let url = format!("{API_URL}{path}");
+    let fut = async {
+        let resp = client()
+            .delete(&url)
+            .send().await
+            .map_err(|e| format!("DELETE {path}: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("DELETE {path} → HTTP {}", resp.status().as_u16()));
+        }
+        Ok(())
+    };
+    match with_timeout(fut, path).await {
+        Some(result) => result,
+        None => Err(format!("DELETE {path}: timeout")),
     }
-    Ok(())
 }

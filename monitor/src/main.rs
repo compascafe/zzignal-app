@@ -744,10 +744,11 @@ async fn main() -> io::Result<()> {
                     s.add_log(format!("{} {}", if ok {"OK"}else{"FAIL"}, txt), if ok{Color::Green}else{Color::Red});
                     if s.mt_state == 1 { s.last_poll_orders = Instant::now() - Duration::from_millis(200); }
                 }
-                Some("hft_state") => {
+                    Some("hft_state") => {
                     if let Some(ref hft) = msg.data {
                         apply_hft_state(hft, &mut s);
-                        commands::check_sl_trigger(&mut s).await;
+                        // Guard: timeout prevents SL trigger from blocking render loop
+                        let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
                     }
                 }
                 Some("book") => {
@@ -872,8 +873,8 @@ async fn main() -> io::Result<()> {
                 }
                 s.prev_bid_up = deep_bid_up; s.prev_ask_up = deep_ask_up;
                 s.prev_bid_dn = deep_bid_dn; s.prev_ask_dn = deep_ask_dn;
-                commands::update_trailing_stop(&mut s).await;
-                commands::check_sl_trigger(&mut s).await;
+                let _ = tokio::time::timeout(Duration::from_secs(3), commands::update_trailing_stop(&mut s)).await;
+                let _ = tokio::time::timeout(Duration::from_secs(3), commands::check_sl_trigger(&mut s)).await;
                 commands::check_alerts(&mut s);
             }
         }
@@ -887,7 +888,7 @@ async fn main() -> io::Result<()> {
                     let nc = orders.len() as i64;
                     s.open_orders = orders;
                     s.orders = nc;
-                    commands::track_manual_fills(&mut s).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(5), commands::track_manual_fills(&mut s)).await;
                 }
             }
         }
@@ -912,7 +913,8 @@ async fn main() -> io::Result<()> {
                             if s.command_history.len() > 50 { s.command_history.pop_back(); }
                             s.history_cursor = None;
                         }
-                        commands::dispatch(&c, &mut s).await;
+                        // Timeout guard: prevents command dispatch from blocking render loop
+                        let _ = tokio::time::timeout(Duration::from_secs(5), commands::dispatch(&c, &mut s)).await;
                         s.input_mode = InputMode::Normal; s.input_buf.clear();
                     }
                     KeyCode::Up => {
@@ -965,8 +967,14 @@ async fn main() -> io::Result<()> {
                         s.add_log("Starting 15-min session...".to_string(), Color::Green);
                         let now = chrono::Utc::now();
                         let name = now.format("BTC15-Manual-%Y%m%dT%H%M").to_string();
-                        if let Err(e) = http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)).await {
-                            s.add_log(format!("Session start FAIL: {}", e), Color::Red);
+                        let result = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            http_post("/api/sessions/start", &format!(r#"{{"name":"{}","duration_min":15,"depth_levels":50,"indefinite":true}}"#, name)),
+                        ).await;
+                        match result {
+                            Ok(Err(e)) => s.add_log(format!("Session start FAIL: {}", e), Color::Red),
+                            Err(_) => s.add_log("Session start TIMEOUT — backend may be busy".to_string(), Color::Red),
+                            _ => {}
                         }
                     }
                 }
@@ -974,9 +982,9 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // Gemini trigger → place buy
+        // Gemini trigger → place buy (guarded by timeout)
         if s.gemini_triggered && s.mt_state == 0 {
-            commands::trigger_gemini_buy(&mut s).await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), commands::trigger_gemini_buy(&mut s)).await;
         }
 
         s.pulse_tick = s.pulse_tick.wrapping_add(1);
