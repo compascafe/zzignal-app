@@ -261,9 +261,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Err(e) = state3.session_manager.recover_session(sid) {
                                 warn!("Failed to recover session #{}: {}", sid, e);
                             }
-                            // Use actual scheduled_end if still in future, capped at now+15min
+                            // Use actual scheduled_end if still in future, capped at next 15-min boundary
                             let now = chrono::Utc::now();
-                            let cap = now + chrono::Duration::minutes(15);
+                            let cap = crate::db::scheduler::snap_to_next_chunk(now, 15);
                             let t5_end = if sess.scheduled_end > now {
                                 sess.scheduled_end.min(cap)
                             } else {
@@ -312,8 +312,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(child_id) = session_repo::create_session(&state3, &child_name, child_start, child_end, chunk_min, 50, Some(parent_id)).await {
                         state3.recording_sessions.write().await.push(child_id);
                         state3.session_manager.start_session(child_id, &child_name).ok();
-                        // Session starts NOW, countdown = now+15min cap (never show >15min)
-                        let t5_end = child_end.min(now + chrono::Duration::minutes(15));
+                        // Session starts NOW — countdown uses next 15-min boundary (aligned to Polymarket round)
+                        let t5_end = child_end.min(crate::db::scheduler::snap_to_next_chunk(now, 15));
                         state3.t5_manager.on_session_start(child_id, t5_end);
                         state3.t3_manager.on_session_start(child_id, t5_end);
                         // Reset trade prices to avoid stale triggers from previous session

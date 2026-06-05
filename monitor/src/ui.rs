@@ -137,7 +137,7 @@ fn aggregate_alert(s: &State) -> (Color, bool) {
     // Check aligned signal (S1/S2)
     let up_ref = if s.session_open_up > 0.0 { s.session_open_up } else { s.hft.clob_trade_up };
     let dn_ref = if s.session_open_dn > 0.0 { s.session_open_dn } else { s.hft.clob_trade_dn };
-    let btc_o = if s.btc_open > 0.0 { s.btc_open } else if s.session_open_btc > 0.0 { s.session_open_btc } else { s.btc };
+    let btc_o = if s.session_open_btc > 0.0 { s.session_open_btc } else if s.btc_open > 0.0 { s.btc_open } else { s.btc };
     let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
     let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
     let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
@@ -192,8 +192,8 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(1,4); 4]).split(area);
     let big = Modifier::BOLD;
 
-    let btc_ref = if s.btc_open > 0.0 { s.btc_open }
-        else if s.session_open_btc > 0.0 { s.session_open_btc }
+    let btc_ref = if s.session_open_btc > 0.0 { s.session_open_btc }
+        else if s.btc_open > 0.0 { s.btc_open }
         else { s.btc };
     let btc_delta = s.btc - btc_ref;
     let btc_delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
@@ -332,7 +332,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
     let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
     let clob_up = up_d >= 0.0;
-    let btc_o = if s.btc_open > 0.0 { s.btc_open } else { s.session_open_btc };
+    let btc_o = if s.session_open_btc > 0.0 { s.session_open_btc } else if s.btc_open > 0.0 { s.btc_open } else { s.btc };
     let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
     let btc_up = btc_d >= 0.0;
     let up_30s = if s.clob_up_30s > 0.0 { (s.hft.clob_trade_up / s.clob_up_30s - 1.0) * 100.0 } else { 0.0 };
@@ -409,8 +409,8 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 
     // ── S3: BTC Δ vs SESSION OPEN ──
-    let btc_ref = if s.btc_open > 0.0 { s.btc_open }
-        else if s.session_open_btc > 0.0 { s.session_open_btc }
+    let btc_ref = if s.session_open_btc > 0.0 { s.session_open_btc }
+        else if s.btc_open > 0.0 { s.btc_open }
         else { s.btc };
     let delta = s.btc - btc_ref;
     let delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
@@ -617,40 +617,61 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
     };
 
     // ── D10 ──
+    let d10_bull = if d10 > 0.0 { (d10 / (1.0 + d10) * 100.0).clamp(5.0, 95.0) } else { 50.0 };
     let c10 = if d10 > 1.15 { BB_GREEN } else if d10 < 0.85 { BB_RED } else { BB_AMBER };
-    let l10 = if d10 > 1.15 { "▲BULL" } else if d10 < 0.85 { "▼BEAR" } else { "—FLAT" };
+    let l10 = if d10 > 1.15 { "▲" } else if d10 < 0.85 { "▼" } else { "─" };
     let d10_bar = mini_bar(d10, cols[0].width as usize);
     f.render_widget(Paragraph::new(vec![
         Line::from(vec![Span::styled("● ", Style::default().fg(c10).add_modifier(b)),
             Span::styled("IMB D10", Style::default().fg(BB_AMBER).add_modifier(b))]),
         Line::from(d10_bar),
-        Line::from(Span::styled(format!("{l10} {d10:.2}x"), Style::default().fg(c10).add_modifier(b))),
+        Line::from(vec![
+            Span::styled(format!("{l10}BEAR "), Style::default().fg(BB_RED).add_modifier(b)),
+            Span::styled(format!("{:.0}%", 100.0 - d10_bull), Style::default().fg(BB_RED)),
+            Span::styled(" │ ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("BULL {:.0}%", d10_bull), Style::default().fg(BB_GREEN)),
+            Span::styled(format!(" {l10}"), Style::default().fg(BB_GREEN).add_modifier(b)),
+        ]),
         Line::from(Span::styled("10 levels", Style::default().fg(BB_DIM))),
     ]).block(Block::default().borders(Borders::ALL).title("D10")
         .border_style(Style::default().fg(c10)).style(Style::default().bg(BB_CARD))), cols[0]);
 
     // ── D20 ──
+    let d20_bull = if d20 > 0.0 { (d20 / (1.0 + d20) * 100.0).clamp(5.0, 95.0) } else { 50.0 };
     let c20 = if d20 > 1.15 { BB_GREEN } else if d20 < 0.85 { BB_RED } else { BB_AMBER };
-    let l20 = if d20 > 1.15 { "▲BULL" } else if d20 < 0.85 { "▼BEAR" } else { "—FLAT" };
+    let l20 = if d20 > 1.15 { "▲" } else if d20 < 0.85 { "▼" } else { "─" };
     let d20_bar = mini_bar(d20, cols[1].width as usize);
     f.render_widget(Paragraph::new(vec![
         Line::from(vec![Span::styled("● ", Style::default().fg(c20).add_modifier(b)),
             Span::styled("IMB D20", Style::default().fg(BB_AMBER).add_modifier(b))]),
         Line::from(d20_bar),
-        Line::from(Span::styled(format!("{l20} {d20:.2}x"), Style::default().fg(c20).add_modifier(b))),
+        Line::from(vec![
+            Span::styled(format!("{l20}BEAR "), Style::default().fg(BB_RED).add_modifier(b)),
+            Span::styled(format!("{:.0}%", 100.0 - d20_bull), Style::default().fg(BB_RED)),
+            Span::styled(" │ ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("BULL {:.0}%", d20_bull), Style::default().fg(BB_GREEN)),
+            Span::styled(format!(" {l20}"), Style::default().fg(BB_GREEN).add_modifier(b)),
+        ]),
         Line::from(Span::styled("20 levels", Style::default().fg(BB_DIM))),
     ]).block(Block::default().borders(Borders::ALL).title("D20")
         .border_style(Style::default().fg(c20)).style(Style::default().bg(BB_CARD))), cols[1]);
 
     // ── D30 ──
+    let d30_bull = if d30 > 0.0 { (d30 / (1.0 + d30) * 100.0).clamp(5.0, 95.0) } else { 50.0 };
     let c30 = if d30 > 1.15 { BB_GREEN } else if d30 < 0.85 { BB_RED } else { BB_AMBER };
-    let l30 = if d30 > 1.15 { "▲BULL" } else if d30 < 0.85 { "▼BEAR" } else { "—FLAT" };
+    let l30 = if d30 > 1.15 { "▲" } else if d30 < 0.85 { "▼" } else { "─" };
     let d30_bar = mini_bar(d30, cols[2].width as usize);
     f.render_widget(Paragraph::new(vec![
         Line::from(vec![Span::styled("● ", Style::default().fg(c30).add_modifier(b)),
             Span::styled("IMB D30", Style::default().fg(BB_AMBER).add_modifier(b))]),
         Line::from(d30_bar),
-        Line::from(Span::styled(format!("{l30} {d30:.2}x"), Style::default().fg(c30).add_modifier(b))),
+        Line::from(vec![
+            Span::styled(format!("{l30}BEAR "), Style::default().fg(BB_RED).add_modifier(b)),
+            Span::styled(format!("{:.0}%", 100.0 - d30_bull), Style::default().fg(BB_RED)),
+            Span::styled(" │ ", Style::default().fg(BB_DIM)),
+            Span::styled(format!("BULL {:.0}%", d30_bull), Style::default().fg(BB_GREEN)),
+            Span::styled(format!(" {l30}"), Style::default().fg(BB_GREEN).add_modifier(b)),
+        ]),
         Line::from(Span::styled("30 levels", Style::default().fg(BB_DIM))),
     ]).block(Block::default().borders(Borders::ALL).title("D30")
         .border_style(Style::default().fg(c30)).style(Style::default().bg(BB_CARD))), cols[2]);
