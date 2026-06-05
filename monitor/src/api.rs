@@ -35,6 +35,7 @@ pub struct WsMsg {
     pub status: Option<String>,
     pub btc: Option<f64>,
     pub price: Option<f64>,
+    pub open: Option<f64>,
     pub success: Option<bool>,
     pub message: Option<String>,
     /// Real-time HFT state (broadcast in-band, ~every tick)

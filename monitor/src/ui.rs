@@ -417,11 +417,11 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let total_secs = 900;
     let elapsed = if s.hft.secs_left >= 0 { (total_secs - s.hft.secs_left).max(0) } else { 0 };
     let elapsed_min = elapsed as f64 / 60.0;
-    let (s3_border, s3_fg) = if elapsed_min <= 7.0 {
+    let (s3_border, s3_fg) = if elapsed_min <= 1.0 {
         (BB_AMBER, BB_AMBER)
     } else if elapsed_min <= 14.0 {
-        if delta > 50.0 { (BB_GREEN, BB_GREEN) }
-        else if delta >= -50.0 { (BB_AMBER, BB_AMBER) }
+        if delta_pct > 0.25 { (BB_GREEN, BB_GREEN) }
+        else if delta_pct >= -0.25 { (BB_AMBER, BB_AMBER) }
         else { (BB_RED, BB_RED) }
     } else {
         (BB_AMBER, BB_AMBER)

@@ -834,7 +834,12 @@ async fn main() -> io::Result<()> {
             match msg.msg_type.as_deref() {
                 Some("connected") => { s.connected = true; s.add_log("WS OK".to_string(), Color::Green); }
                 Some("snapshot") => { s.bal = msg.balance.unwrap_or(s.bal); s.btc = msg.btc.unwrap_or(s.btc); }
-                Some("btc_price") => s.btc = msg.price.unwrap_or(s.btc),
+                Some("btc_price") => {
+                    s.btc = msg.price.unwrap_or(s.btc);
+                    if let Some(open) = msg.open {
+                        if open > 0.0 { s.btc_open = open; }
+                    }
+                }
                 Some("balance") => {
                     let old = s.bal; s.bal = msg.balance.unwrap_or(s.bal);
                     if (s.bal - old).abs() > 0.01 { s.add_log(format!("USD ${:.2} ({:+.2})", s.bal, s.bal-old), if s.bal>old{Color::Green}else{Color::Red}); }

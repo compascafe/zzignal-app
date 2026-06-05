@@ -81,8 +81,9 @@ pub async fn capture_combined(
         let pb_vol_bid: f64 = poly_bids.iter().map(|l| l.size).sum();
         let pb_vol_ask: f64 = poly_asks.iter().map(|l| l.size).sum();
         let pb_imb = if pb_vol_ask > 0.0 { pb_vol_bid / pb_vol_ask } else { 0.0 };
+        let fallback_btc = *state.btc_price.read().await;
 
-        let rec = CsvRecord {
+        let mut rec = CsvRecord {
             event_type: evt_type,
             ts_local: Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             poly_bid: pb_bid,
@@ -94,6 +95,9 @@ pub async fn capture_combined(
             poly_imbalance: if pb_imb.is_finite() { pb_imb } else { 0.0 },
             ..Default::default()
         };
+        if fallback_btc.unwrap_or(0.0) > 0.0 {
+            rec.binance_price = fallback_btc.unwrap();
+        }
         if evt_type == EventType::Trade {
         }
         rec
@@ -267,6 +271,26 @@ pub async fn capture_combined(
         hft.ask_wall = rec.ask_wall;
         hft.tick_gap_ms = rec.tick_gap_ms;
         hft.secs_left = rec.pnr_seconds_left;
+
+        // ── Update btc_open on session boundary ──
+        // Detects when secs_left jumps from near 0 to ~900 (new 15-min session),
+        // refreshing the "price to beat" reference used by the dashboard delta.
+        {
+            use std::sync::atomic::{AtomicI32, Ordering};
+            static PREV_SESSION_SECS: AtomicI32 = AtomicI32::new(-1);
+            let prev = PREV_SESSION_SECS.swap(rec.pnr_seconds_left, Ordering::Relaxed);
+            if prev >= 0 && rec.pnr_seconds_left > prev + 60 && rec.binance_price > 0.0 {
+                *state.btc_open.write().await = Some(rec.binance_price);
+            }
+            if prev < 0 && rec.binance_price > 0.0 {
+                // Initial set on first tick if not yet from Gamma/Pyth
+                let current = *state.btc_open.read().await;
+                if current.is_none() {
+                    *state.btc_open.write().await = Some(rec.binance_price);
+                }
+            }
+        }
+
         {
             let up = state.book_up.read().await;
             let dn = state.book_down.read().await;
