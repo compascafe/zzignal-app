@@ -186,7 +186,7 @@ jobs:
             echo "Waiting for service to bind..."
             for i in $(seq 1 10); do
               sleep 2
-              if curl -sf http://localhost:8080/api/status > /dev/null 2>&1; then
+              if curl -sf http://localhost:8080/api/health > /dev/null 2>&1; then
                 echo "OK: Service is healthy after ${i}s"
                 exit 0
               fi
