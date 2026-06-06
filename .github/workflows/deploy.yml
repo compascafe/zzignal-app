@@ -5,7 +5,7 @@ name: Deploy App
 # Deploy manual en el servidor:
 #   ssh ubuntu@<ip> 'cd ~/zzignal-app && git pull &&
 #     cargo build --release --manifest-path backend_rust/Cargo.toml &&
-#     cargo build --release --manifest-path monitor/Cargo.toml &&
+#     cargo build --release --manifest-path TUI_monitor/Cargo.toml &&
 #     sudo systemctl restart zzignal-app'
 # ═══════════════════════════════════════════════════════════
 
@@ -139,7 +139,7 @@ jobs:
       - name: Build Monitor TUI
         if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         run: |
-          cd monitor
+          cd TUI_monitor
           cargo build --release
 
       - name: Package
@@ -147,9 +147,8 @@ jobs:
         run: |
           mkdir -p deploy
           cp backend_rust/target/release/polymarket-backend deploy/
-          cp monitor/target/release/zzignal-monitor deploy/
-          cp monitor.sh deploy/
-          cp zzignal_aliases.sh deploy/
+          cp TUI_monitor/target/release/zzignal-monitor deploy/
+          cp scripts/zzignal_aliases.sh deploy/
           tar -czf deploy.tar.gz -C deploy .
 
       - name: Deploy to Server
@@ -178,7 +177,6 @@ jobs:
             echo "${{ secrets.ENV_FILE }}" | base64 -d > .env
             chmod +x polymarket-backend
             chmod +x zzignal-monitor
-            chmod +x monitor.sh
             test -f polymarket-backend || (echo "FATAL: binary not found after extract" && exit 1)
             file polymarket-backend
             echo "Backend size: $(stat -c%s polymarket-backend) bytes"
