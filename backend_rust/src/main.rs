@@ -346,10 +346,16 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
             }
         }
         AppMsg::BtcTick { price, volume, event_time } => {
-            *state.btc_price.write().await = Some(*price);
+            // Compute mid-price from Binance depth (closer to Chainlink than aggTrade)
+            let mid = if let Some(ref bn) = *state.binance_depth.read().await {
+                let bid = bn.bids.first().map(|l| l.price).unwrap_or(0.0);
+                let ask = bn.asks.first().map(|l| l.price).unwrap_or(0.0);
+                if bid > 0.0 && ask > 0.0 { (bid + ask) / 2.0 } else { *price }
+            } else { *price };
+            *state.btc_price.write().await = Some(mid);
             *state.btc_volume.write().await = *volume;
             state.tracking_state.push_volume(*event_time, *volume);
-            state.tracking_state.track_price(*price, *event_time);
+            state.tracking_state.track_price(mid, *event_time);
             {
                 let mut window = state.btc_vol_window.write().await;
                 window.push_back((*event_time, *volume));
@@ -358,26 +364,24 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
                 *state.btc_vol_1m.write().await = window.iter().map(|(_, v)| *v).sum();
             }
             *state.btc_vol_ses.write().await += *volume;
-            if *price > 0.0 {
-                // Update btc_open on session boundaries (synchronous, zero delay)
+            if mid > 0.0 {
+                // Update btc_open on session boundaries using mid-price
                 {
                     use std::sync::atomic::{AtomicI32, Ordering};
                     static PREV_SECS: AtomicI32 = AtomicI32::new(-1);
                     let t = chrono::Utc::now().time();
                     let secs = 900 - (t.minute() as i32 % 15 * 60 + t.second() as i32);
                     let prev = PREV_SECS.swap(secs, Ordering::Relaxed);
-                    // Session boundary: secs jumped from near-0 to ~900
                     if prev >= 0 && secs > prev + 60 {
-                        *state.btc_open.write().await = Some(*price);
+                        *state.btc_open.write().await = Some(mid);
                     }
-                    // Initial set: only if never set before
                     if prev < 0 && state.btc_open.read().await.is_none() {
-                        *state.btc_open.write().await = Some(*price);
+                        *state.btc_open.write().await = Some(mid);
                     }
                 }
                 let open = state.btc_open.read().await.unwrap_or(0.0);
                 let _ = state.broadcast_tx.send(
-                    json!({"type":"btc_price","price":price,"open":open}).to_string()
+                    json!({"type":"btc_price","price":mid,"open":open}).to_string()
                 );
             }
         }
