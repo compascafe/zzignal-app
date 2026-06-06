@@ -103,9 +103,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         // Stop sessions that have passed their end
+                        // Drain IDs first, drop lock, then do I/O outside lock
                         if has_active && secs_left <= 2 && secs_left >= 0 {
-                            let mut rec = auto_state.recording_sessions.write().await;
-                            for sid in rec.drain(..) {
+                            let to_stop: Vec<i32> = {
+                                let mut rec = auto_state.recording_sessions.write().await;
+                                rec.drain(..).collect()
+                            };
+                            for sid in to_stop {
                                 info!("[SESSION] Auto-stop #{}", sid);
                                 auto_state.odiseo_trading.on_session_close(sid, "tie");
                                 auto_state.session_manager.flush(sid).ok();

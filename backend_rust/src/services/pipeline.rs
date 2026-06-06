@@ -242,17 +242,20 @@ pub async fn capture_combined(
             use std::sync::atomic::{AtomicI32, Ordering};
             static PREV_SESSION_SECS: AtomicI32 = AtomicI32::new(-1);
             let prev = PREV_SESSION_SECS.swap(rec.pnr_seconds_left, Ordering::Relaxed);
-            if prev >= 0 && rec.pnr_seconds_left > prev + 60 && rec.binance_price > 0.0 {
-                *state.btc_open.write().await = Some(rec.binance_price);
+            // Use state.btc_price as fallback if binance_price is stale/zero
+            let price = if rec.binance_price > 0.0 { rec.binance_price }
+                        else { state.btc_price.read().await.unwrap_or(0.0) };
+            if prev >= 0 && rec.pnr_seconds_left > prev + 60 && price > 0.0 {
+                *state.btc_open.write().await = Some(price);
                 let _ = state.broadcast_tx.send(
-                    serde_json::json!({"type":"btc_price","open":rec.binance_price}).to_string()
+                    serde_json::json!({"type":"btc_price","price":price,"open":price}).to_string()
                 );
             }
-            if prev < 0 && rec.binance_price > 0.0 {
-                // Initial set: always use real BTC price (ignore stale Gamma API value)
-                *state.btc_open.write().await = Some(rec.binance_price);
+            if prev < 0 && price > 0.0 {
+                // Initial set: always use real BTC price
+                *state.btc_open.write().await = Some(price);
                 let _ = state.broadcast_tx.send(
-                    serde_json::json!({"type":"btc_price","open":rec.binance_price}).to_string()
+                    serde_json::json!({"type":"btc_price","price":price,"open":price}).to_string()
                 );
             }
         }
