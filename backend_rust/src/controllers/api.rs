@@ -21,60 +21,25 @@ use crate::controllers::worker::{self, CandleInterval, CmdMsg, OrderSide, Outcom
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn router(state: Arc<AppState>) -> Router {
-    let core = Router::new()
-        // Health check — despliegue + BD
+    Router::new()
+        // TUI polls
         .route("/api/health",          get(get_health))
-        // Status / mercado
-        .route("/api/status",          get(get_status))
-        .route("/api/market",          get(get_market))
-        .route("/api/balance",         get(get_balance))
         .route("/api/btc",             get(get_btc))
-        // USDC approve — activa el saldo en CLOB (requiere MATIC en wallet)
-        .route("/api/approve",         post(post_approve))
-        // Wrap USDC.e → pUSD vía CollateralOnramp (CLOB V2)
-        .route("/api/wrap",            post(post_wrap))
-        // Order book
-        .route("/api/book/up",         get(get_book_up))
-        .route("/api/book/down",       get(get_book_down))
-        // Depth history — orderbook completo en memoria (todos los niveles)
-        .route("/api/depth/latest",    get(get_depth_latest))
-        .route("/api/depth/history",   get(get_depth_history))
-        .route("/api/depth/session",   get(get_depth_session))
-        // Diagnostic mode toggle
-        .route("/api/mode",            get(get_mode))
-        .route("/api/mode/diagnostic", post(post_diagnostic_mode))
-        // Live HFT triggers for TUI
         .route("/api/hft/latest",      get(get_hft_latest))
-        // Candles (live desde estado en memoria)
-        .route("/api/candles",         get(get_candles))
-        .route("/api/candles/interval",post(set_interval))
-        // Órdenes abiertas
         .route("/api/orders",          get(get_orders))
-        .route("/api/orders",          delete(cancel_all_orders))
-        .route("/api/orders/{id}",     delete(cancel_order))
-        // Panic — cancel all + market sell
-        .route("/api/panic",           post(post_panic))
-        // Colocar órdenes
+        .route("/api/sessions",        get(get_sessions))
+        // TUI commands — trading
         .route("/api/orders/limit",    post(post_limit_order))
         .route("/api/orders/market",   post(post_market_order))
-        .route("/api/orders/scalp",    post(post_scalp_order))
-        // Fills
-        .route("/api/fills",           get(get_fills))
-        // Live CSV export (in-memory buffer, no DB required)
-        .route("/api/csv/live",        get(export_live_csv))
+        .route("/api/orders",          delete(cancel_all_orders))
+        .route("/api/orders/{id}",     delete(cancel_order))
+        .route("/api/panic",           post(post_panic))
+        // TUI commands — session
+        .route("/api/sessions/start",  post(post_session_start))
         // WebSocket
         .route("/ws",                  get(ws_handler))
-        // Sessions (in-memory)
-        .route("/api/sessions",        get(get_sessions))
-        .route("/api/sessions/start",  post(post_session_start))
-        // DB stubs
-        .route("/api/db/snapshots",    get(db_snapshots_stub))
-        .route("/api/db/executions",   get(db_executions_stub))
-        .with_state(Arc::clone(&state));
-
-    let app = core;
-
-    app.layer(CorsLayer::permissive())
+        .with_state(Arc::clone(&state))
+        .layer(CorsLayer::permissive())
 }
 
 // ─── Health Check — Despliegue + BD ────────────────────────────────────────────

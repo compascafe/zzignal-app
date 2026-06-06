@@ -474,11 +474,11 @@ async fn run_cycle(
     // 5. Órdenes abiertas y fills iniciales
     fetch_and_send_orders(&clob_client, tx, token_up, token_down).await;
 
-    // 6. Precio BTC en tiempo real (Binance WS) en segundo plano
+    // 6. Precio BTC (Binance) — módulo independiente, broadcast directo sin cola
     {
         let tx2 = tx.clone();
-        let iv2 = Arc::clone(&interval_arc);
-        tokio::spawn(async move { run_btc_price_stream(tx2, iv2).await });
+        let bt2 = broadcast_tx.clone();
+        tokio::spawn(async move { crate::services::btc_stream::run(tx2, bt2).await });
     }
 
     // 6b. Velas BTC/USDT — fetch inicial + refresco adaptativo según intervalo
@@ -705,106 +705,6 @@ impl TickCandleGenerator {
         s
     }
 }
-
-// ─── BTC/USD precio en tiempo real — Multi-proveedor WebSocket ───────────────
-
-const BINANCE_WS: &str = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade";
-
-
-async fn run_btc_price_stream(
-    tx: mpsc::Sender<AppMsg>,
-    interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
-) {
-    let mut backoff = Duration::from_secs(2);
-    let mut generator = TickCandleGenerator::new(60_000, 200);
-    let mut last_interval = CandleInterval::OneMinute;
-
-    loop {
-        // Detectar cambio de intervalo
-        if let Ok(iv) = interval_arc.lock() {
-            if *iv != last_interval {
-                last_interval = *iv;
-                generator.set_interval(last_interval);
-                let snap = generator.snapshot();
-                let _ = tx.send(AppMsg::Candles {
-                    interval: last_interval.binance_str().to_string(),
-                    candles: snap,
-                });
-                info!("Intervalo cambiado a {:?} — velas sintéticas reset", last_interval);
-            }
-        }
-
-        match connect_async(BINANCE_WS).await {
-            Ok((ws_stream, _)) => {
-                backoff = Duration::from_secs(2);
-                info!("BTC via Binance aggTrade conectado");
-
-                let (_, mut read) = ws_stream.split();
-                let mut stream_open = true;
-
-                while stream_open {
-                    match read.next().await {
-                        Some(Ok(m)) if m.is_text() => {
-                            if let Ok(text) = m.into_text() {
-                                let now_ms = Utc::now().timestamp_millis();
-                                let mut price: Option<f64> = None;
-                                let mut volume: f64 = 0.0;
-
-                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                                    price = json.get("p")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                        .filter(|&p| p > 0.0);
-                                    if let Some(v) = json.get("q")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|s| s.parse::<f64>().ok())
-                                        .filter(|&v| v >= 0.0)
-                                    {
-                                        volume = v;
-                                    }
-                                }
-
-                                if let Some(p) = price {
-                                    let evt = now_ms;
-                                    let _ = tx.send(AppMsg::BtcTick { price: p, volume, event_time: evt });
-
-                                    if let Ok(iv) = interval_arc.lock() {
-                                        if *iv != last_interval {
-                                            last_interval = *iv;
-                                            generator.set_interval(last_interval);
-                                            let snap = generator.snapshot();
-                                            let _ = tx.send(AppMsg::Candles {
-                                                interval: last_interval.binance_str().to_string(),
-                                                candles: snap,
-                                            });
-                                            info!("Intervalo cambiado a {:?}", last_interval);
-                                        }
-                                    }
-
-                                    if let Some(c) = generator.on_tick(p, volume, now_ms) {
-                                        let _ = tx.send(AppMsg::CandleUpdate(c));
-                                    }
-                                }
-                            }
-                        }
-                        Some(Ok(m)) if m.is_close() => { stream_open = false; }
-                        Some(Err(e)) => { warn!("BTC WS error: {}", e); stream_open = false; }
-                        None => { stream_open = false; }
-                        _ => {}
-                    }
-                }
-                warn!("BTC stream desconectado, reconectando...");
-            }
-            Err(e) => {
-                warn!("BTC WS Binance connect falló: {} — reintento en {}s", e, backoff.as_secs());
-            }
-        }
-
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(Duration::from_secs(30));
-    }
-}
-
 // ─── Velas BTC/USDT — Binance REST klines (1m, últimas 200) ──────────────────
 
 /// Stream de velas en tiempo real: REST histórico + WebSocket kline de Binance.

@@ -11,6 +11,7 @@
 /// - `strategies/`   — Strategy implementations
 
 pub mod binance;
+pub mod btc_stream;
 pub mod metrics;
 pub mod perf;
 pub mod pipeline;
