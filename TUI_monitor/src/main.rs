@@ -471,45 +471,7 @@ async fn main() -> io::Result<()> {
                 PollUpdate::Health(data) => { s.bal = data.balance; }
                 PollUpdate::Hft(data) => {
                     apply_hft_state(&data, &mut s);
-                    s.btc_vol_1m = data.btc_vol_1m;
-                    if data.clob_trade_up > 0.0 {
-                        s.clob_up_history.push_back((Instant::now(), data.clob_trade_up));
-                        if s.clob_up_history.len() > 100 { s.clob_up_history.pop_front(); }
-                    }
-                    if data.clob_trade_dn > 0.0 {
-                        s.clob_dn_history.push_back((Instant::now(), data.clob_trade_dn));
-                        if s.clob_dn_history.len() > 100 { s.clob_dn_history.pop_front(); }
-                    }
-                    let cutoff_30s = Instant::now() - Duration::from_secs(30);
-                    s.clob_up_30s = s.clob_up_history.iter()
-                        .find(|(t,_)| *t <= cutoff_30s)
-                        .or_else(|| s.clob_up_history.front())
-                        .map(|(_,p)| *p).unwrap_or(data.clob_trade_up);
-                    s.clob_dn_30s = s.clob_dn_history.iter()
-                        .find(|(t,_)| *t <= cutoff_30s)
-                        .or_else(|| s.clob_dn_history.front())
-                        .map(|(_,p)| *p).unwrap_or(data.clob_trade_dn);
-                    s.btc_price_30s = s.btc_history.iter()
-                        .find(|(_, t)| *t <= cutoff_30s)
-                        .or_else(|| s.btc_history.front())
-                        .map(|(p,_)| *p).unwrap_or(data.btc_price);
-                    let deep_bid_up = data.depth_up_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
-                    let deep_ask_up = data.depth_up_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
-                    let deep_bid_dn = data.depth_dn_bids.last().map(|(_,s)| *s).unwrap_or(0.0);
-                    let deep_ask_dn = data.depth_dn_asks.last().map(|(_,s)| *s).unwrap_or(0.0);
-                    if s.prev_bid_up > 0.0 {
-                        let b_up = (deep_bid_up / s.prev_bid_up - 1.0) * 100.0;
-                        let a_up = (deep_ask_up / s.prev_ask_up - 1.0) * 100.0;
-                        s.abs_up = b_up - a_up;
-                        let b_dn = (deep_bid_dn / s.prev_bid_dn - 1.0) * 100.0;
-                        let a_dn = (deep_ask_dn / s.prev_ask_dn - 1.0) * 100.0;
-                        s.abs_dn = b_dn - a_dn;
-                    }
-                    s.prev_bid_up = deep_bid_up; s.prev_ask_up = deep_ask_up;
-                    s.prev_bid_dn = deep_bid_dn; s.prev_ask_dn = deep_ask_dn;
                     commands::check_alerts(&mut s);
-                    // TSL update: pure math, no I/O — safe in poll handler
-                    commands::update_trailing_stop(&mut s).await;
                 }
                 PollUpdate::Orders(orders) => {
                     let nc = orders.len() as i64;
@@ -532,7 +494,6 @@ async fn main() -> io::Result<()> {
         // ── Drain WS messages (capped, hft_state deferred to last) ──
         let mut ws_count = 0u32;
         let ws_cap = 15;
-        let mut last_hft: Option<api::HftState> = None;
         while let Ok(msg) = ws_rx.try_recv() {
             ws_count += 1;
             if ws_count > ws_cap { break; }
@@ -557,9 +518,6 @@ async fn main() -> io::Result<()> {
                     let ok = msg.success.unwrap_or(false);
                     let txt = msg.message.unwrap_or_default();
                     s.add_log(format!("{} {}", if ok {"OK"}else{"FAIL"}, txt), if ok{Color::Green}else{Color::Red});
-                }
-                Some("hft_state") => {
-                    if let Some(ref hft) = msg.data { last_hft = Some(hft.clone()); }
                 }
                 Some("book") => {
                     if let Some(ref book) = msg.book {
@@ -645,14 +603,9 @@ async fn main() -> io::Result<()> {
                 _ => {}
             }
         }
-        // Apply deferred hft_state (only the last one, to avoid redundant heavy processing)
-        if let Some(ref hft) = last_hft {
-            apply_hft_state(hft, &mut s);
-        }
-
         // ── Render ──
         s.pulse_tick = s.pulse_tick.wrapping_add(1);
         terminal.draw(|f| ui::draw(f, &s))?;
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(33)).await;
     }
 }
