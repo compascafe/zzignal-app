@@ -13,7 +13,6 @@ use crate::services::binance::BinanceTickEvent;
 use crate::models::hft::CsvRecord;
 use crate::models::hft::PolyDepthFrame;
 use crate::services::session::SessionManager;
-use crate::services::strategies::odiseo::OdiseoTradingManager;
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct LatestHftState {
@@ -111,8 +110,6 @@ pub struct AppState {
 
     pub session_manager: Arc<SessionManager>,
     pub tick_drain: Arc<AtomicBool>,
-    pub odiseo_trading: Arc<OdiseoTradingManager>,
-
     pub poly_depth_history: RwLock<VecDeque<PolyDepthFrame>>,
     pub diagnostic_mode: std::sync::atomic::AtomicBool,
     pub latest_hft: RwLock<LatestHftState>,
@@ -133,7 +130,6 @@ impl AppState {
         tick_tx:         mpsc::UnboundedSender<BinanceTickEvent>,
         creds:           ClobCredentials,
     ) -> Arc<Self> {
-        let cmd_tx_clone = cmd_tx.clone();
         Arc::new(Self {
             status:            RwLock::new("Initializing".into()),
             market:            RwLock::new(None),
@@ -171,7 +167,6 @@ impl AppState {
             tick_tx,
             session_manager:   Arc::new(SessionManager::new("sessions")),
             tick_drain:        Arc::new(AtomicBool::new(false)),
-            odiseo_trading:    Arc::new(OdiseoTradingManager::new(Some(cmd_tx_clone))),
             poly_depth_history: RwLock::new(VecDeque::with_capacity(300)),
             diagnostic_mode: AtomicBool::new(false),
             latest_hft: RwLock::new(LatestHftState::default()),

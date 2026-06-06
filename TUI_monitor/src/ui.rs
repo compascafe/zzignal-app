@@ -31,7 +31,6 @@ pub fn draw(f: &mut Frame, s: &State) {
 
     let pos_h = 3;
     let cmd_h = if s.input_mode == InputMode::Command { 3 } else { 0 };
-    let gem_h = if s.gemini_active || s.gemini_triggered || s.mt_state >= 1 { 2 } else { 0 };
 
     let mut constraints = vec![
         Constraint::Length(1),     // commit bar
@@ -39,7 +38,6 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Length(pos_h), // position bar
         Constraint::Min(4),        // dashboard
     ];
-    if gem_h > 0 { constraints.push(Constraint::Length(gem_h)); }
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
     constraints.push(Constraint::Length(10)); // footer: ayuda
 
@@ -96,12 +94,6 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── MAIN ─────────────────────────────────────────────────────────
     draw_dashboard(f, chunks[ci], s);
     ci += 1;
-
-    // ─── GEMINI CARD ───────────────────────────────────────────────────
-    if gem_h > 0 {
-        draw_gemini_card(f, chunks[ci], s);
-        ci += 1;
-    }
 
     // ─── COMMAND BAR (modal) ──────────────────────────────────────────
     if cmd_h > 0 {
@@ -287,8 +279,7 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
                 Span::styled(format!("{:.4}", up_px), Style::default().fg(BB_WHITE).add_modifier(big)),
                 Span::styled(format!(" {:+.2}%", up_diff), Style::default().fg(up_c).add_modifier(big)),
             ]),
-            Line::from(Span::styled(format!("init {:.4}  vol {:.0}  {}", up_init, s.hft.clob_trade_up_vol,
-                if s.pos_sen_up||s.pos_h65_up||s.pos_odi_up {"▶ POS"}else{"—"}),
+            Line::from(Span::styled(format!("init {:.4}  vol {:.0}", up_init, s.hft.clob_trade_up_vol),
                 Style::default().fg(BB_DIM))),
         ]).block(Block::default().borders(Borders::ALL)
             .border_style(Style::default().fg(BB_GREEN))
@@ -308,10 +299,8 @@ fn draw_price_cards(f: &mut Frame, area: Rect, s: &State) {
             ]),
             Line::from(Span::styled(format!("INIT {:.4}  |  vol {:.0}", dn_init, s.hft.clob_trade_dn_vol),
                 Style::default().fg(BB_DIM))),
-            Line::from(Span::styled(if s.pos_sen_dn || s.pos_h65_dn || s.pos_odi_dn {
-                format!("▶ POSICION ABIERTA")
-            } else { "— sin posicion".into() },
-                Style::default().fg(if s.pos_sen_dn||s.pos_h65_dn||s.pos_odi_dn {BB_RED}else{BB_DIM}))),
+            Line::from(Span::styled("— sin posicion",
+                Style::default().fg(BB_DIM))),
         ]).block(Block::default().borders(Borders::ALL)
             .border_style(Style::default().fg(BB_RED))
             .style(Style::default().bg(BB_CARD))),
@@ -796,56 +785,8 @@ fn draw_positions_card(f: &mut Frame, area: Rect, s: &State) {
         lines.push(Line::from(""));
     }
 
-    let has_positions = s.pos_sen_up || s.pos_sen_dn || s.pos_h65_up
-        || s.pos_h65_dn || s.pos_odi_up || s.pos_odi_dn;
-    if has_positions {
-        lines.push(Line::from(Span::styled("── POSICIONES STRATEGY ──",
-            Style::default().fg(BB_AMBER).add_modifier(bb))));
-    }
-
-    if s.pos_sen_up {
-        let entry = s.pos_sen_entry_up; let cur = s.hft.clob_trade_up;
-        let pnl = if entry > 0.0 && cur > 0.0 { s.sen_budget * (cur / entry - 1.0) } else { 0.0 };
-        let pc = if pnl >= 0.0 { BB_GREEN } else { BB_RED };
-        lines.push(Line::from(vec![
-            Span::styled("▲ SENNA UP  ", Style::default().fg(BB_GREEN).add_modifier(bb)),
-            Span::styled(format!("entry:{:.4}→{:.4}  PnL {:+.2}", entry, cur, pnl),
-                Style::default().fg(pc).add_modifier(bb)),
-        ]));
-    }
-    if s.pos_sen_dn {
-        let entry = s.pos_sen_entry_dn; let cur = s.hft.clob_trade_dn;
-        let pnl = if entry > 0.0 && cur > 0.0 { s.sen_budget * (cur / entry - 1.0) } else { 0.0 };
-        let pc = if pnl >= 0.0 { BB_GREEN } else { BB_RED };
-        lines.push(Line::from(vec![
-            Span::styled("▼ SENNA DN  ", Style::default().fg(BB_RED).add_modifier(bb)),
-            Span::styled(format!("entry:{:.4}→{:.4}  PnL {:+.2}", entry, cur, pnl),
-                Style::default().fg(pc).add_modifier(bb)),
-        ]));
-    }
-    if s.pos_h65_up {
-        lines.push(Line::from(Span::styled(format!("▲ H65 UP  entry:{:.4}  bid:{:.4}",
-            s.pos_h65_entry_up, s.hft.clob_trade_up), Style::default().fg(BB_GREEN).add_modifier(bb))));
-    }
-    if s.pos_h65_dn {
-        lines.push(Line::from(Span::styled(format!("▼ H65 DN  entry:{:.4}  bid:{:.4}",
-            s.pos_h65_entry_dn, s.hft.clob_trade_dn), Style::default().fg(BB_RED).add_modifier(bb))));
-    }
-    if s.pos_odi_up {
-        lines.push(Line::from(Span::styled(format!("▲ O83 UP  entry:{:.4}  bid:{:.4}",
-            s.pos_odi_entry_up, s.hft.clob_trade_up), Style::default().fg(BB_GREEN))));
-    }
-    if s.pos_odi_dn {
-        lines.push(Line::from(Span::styled(format!("▼ O83 DN  entry:{:.4}  bid:{:.4}",
-            s.pos_odi_entry_dn, s.hft.clob_trade_dn), Style::default().fg(BB_RED))));
-    }
-
     if lines.is_empty() {
         lines.push(Line::from(Span::styled("— sin posiciones activas", Style::default().fg(BB_DIM))));
-        if s.sen_enabled && s.sen_budget > 0.0 {
-            lines.push(Line::from(Span::styled(format!("SENNA ${:.0} esperando senal", s.sen_budget),
-                Style::default().fg(BB_CYAN))));
-        }
     }
     f.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL)
@@ -1038,7 +979,7 @@ fn draw_footer(f: &mut Frame, area: Rect, s: &State) {
 
 fn draw_command_bar(f: &mut Frame, area: Rect, s: &State) {
     let help = "/l10up65e70  BUY+EXIT   |  /clm  cancel+mkt  |  /xu70 /xd70  sell limit";
-    let help2 = "/c  cancel  |  /x  mkt sell  |  /p  PANIC  |  /5g70  Gemini";
+    let help2 = "/c  cancel  |  /x  mkt sell  |  /p  PANIC";
     let text = format!("▶ /{}_\n{help}\n{help2}", s.input_buf);
     f.render_widget(
         Paragraph::new(text)
@@ -1076,42 +1017,6 @@ fn draw_man_page(f: &mut Frame, area: Rect, _s: &State) {
     lines.push(Line::from(Span::styled("/quit = salir  Esc/q = cerrar  [/] = nuevo comando",
         Style::default().fg(BB_DIM))));
     f.render_widget(Paragraph::new(lines), area);
-}
-
-fn draw_gemini_card(f: &mut Frame, area: Rect, s: &State) {
-    let bb = Modifier::BOLD;
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled("⚡ GEMINI: ", Style::default().fg(BB_MAGENTA).add_modifier(bb)));
-    if s.gemini_active && !s.gemini_triggered {
-        spans.push(Span::styled(format!("@{:.2}→{:.2} ${:.0}", s.gemini_trigger, s.gemini_target, s.gemini_budget),
-            Style::default().fg(BB_WHITE).add_modifier(bb)));
-        if s.gemini_exit > 0.0 {
-            spans.push(Span::styled(format!("  EXIT @{:.2}", s.gemini_exit), Style::default().fg(BB_CYAN)));
-        }
-        spans.push(Span::styled("  /c=cancelar", Style::default().fg(BB_DIM)));
-    } else if s.gemini_triggered || s.mt_state >= 1 {
-        let out_s = if s.gemini_outcome.is_empty() { &s.mt_outcome } else { &s.gemini_outcome };
-        let out_c = if out_s == "up" { BB_GREEN } else { BB_RED };
-        spans.push(Span::styled(format!("{} ", out_s.to_uppercase()), Style::default().fg(out_c).add_modifier(bb)));
-        spans.push(Span::styled(format!("@{:.4} sz={:.0} ${:.0}", s.mt_entry, s.mt_size, s.mt_budget),
-            Style::default().fg(BB_WHITE)));
-        match s.mt_state {
-            1 => spans.push(Span::styled("  PENDING...", Style::default().fg(BB_AMBER).add_modifier(bb))),
-            2 => {
-                let cur = if out_s == "up" { s.hft.clob_trade_up } else { s.hft.clob_trade_dn };
-                let upnl = s.mt_size * (cur - s.mt_entry);
-                let pc = if upnl >= 0.0 { BB_GREEN } else { BB_RED };
-                spans.push(Span::styled(format!("  PnL:{:+.2}", upnl), Style::default().fg(pc).add_modifier(bb)));
-            }
-            3 => spans.push(Span::styled("  EXITING...", Style::default().fg(BB_CYAN).add_modifier(bb))),
-            _ => {}
-        }
-    }
-    let border_c = if s.mt_state == 2 { BB_GREEN } else if s.mt_state == 1 || s.mt_state == 3 { BB_AMBER } else { BB_MAGENTA };
-    f.render_widget(
-        Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL)
-            .border_style(Style::default().fg(border_c))),
-        area);
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -21,7 +21,6 @@ pub enum InputMode { Normal, Command }
 
 // ─── Messages from spawned poller task → main loop ─────────────
 enum PollUpdate {
-    Odiseo(OdiseoStatus),
     Btc(BtcInfo),
     Health(HealthInfo),
     Hft(HftState),
@@ -32,46 +31,13 @@ enum PollUpdate {
 struct State {
     connected: bool,
     tab: usize,
-    btc: f64, btc_open: f64, btc_entry: f64,
+    btc: f64, btc_open: f64,
     bal: f64,
-    live: bool, reinvest: bool, _paper_mode: bool,
-
-    odi_label: String, odi_code: String,
-    odi_pnl: f64, odi_bal: f64, odi_budget: f64,
-    odi_t_up: i64, odi_t_dn: i64, odi_w_up: i64, odi_w_dn: i64,
-    odi_tp_up: i64, odi_tp_dn: i64, odi_sl_up: i64, odi_sl_dn: i64,
-    odi_sessions: i64, odi_enabled: bool,
-    odi_accuracy: f64, odi_avg_pnl: f64, odi_best: f64, odi_worst: f64,
-    odi_filters: u16,
-    last_odi_t_up: i64, last_odi_t_dn: i64,
-
-    h65_pnl: f64, h65_bal: f64, h65_budget: f64,
-    h65_t_up: i64, h65_t_dn: i64, h65_w_up: i64, h65_w_dn: i64,
-    h65_tp_up: i64, h65_tp_dn: i64, h65_sl_up: i64, h65_sl_dn: i64,
-    h65_sessions: i64, h65_enabled: bool,
-    h65_accuracy: f64, h65_avg_pnl: f64, h65_best: f64, h65_worst: f64,
-    last_h65_t_up: i64, last_h65_t_dn: i64,
-
-    sen_pnl: f64, sen_bal: f64, sen_budget: f64,
-    sen_t_up: i64, sen_t_dn: i64, sen_w_up: i64, sen_w_dn: i64,
-    sen_sessions: i64, sen_enabled: bool,
-    last_sen_t_up: i64, last_sen_t_dn: i64,
+    _paper_mode: bool,
 
     sessions: Vec<SessionInfo>,
 
     hft: HftState,
-
-    pos_h65_up: bool, pos_h65_dn: bool,
-    pos_h65_entry_up: f64, pos_h65_entry_dn: f64,
-    pos_odi_up: bool, pos_odi_dn: bool,
-    pos_odi_entry_up: f64, pos_odi_entry_dn: f64,
-    prev_hd65_up: u8, prev_hd65_dn: u8,
-    prev_od83_up: u8, prev_od83_dn: u8,
-    pos_sen_up: bool, pos_sen_dn: bool,
-    pos_sen_entry_up: f64, pos_sen_entry_dn: f64,
-    prev_sen_up: u8, prev_sen_dn: u8,
-
-    h65_lock: bool, odi_lock: bool, sen_lock: bool,
 
     sl_pct: f64,
     sl_market: bool,
@@ -163,13 +129,6 @@ struct State {
     pub micro_up_history: VecDeque<f64>,
     pub micro_dn_history: VecDeque<f64>,
 
-    pub gemini_active: bool,
-    pub gemini_budget: f64,
-    pub gemini_target: f64,
-    pub gemini_trigger: f64,
-    pub gemini_exit: f64,
-    pub gemini_outcome: String,
-    pub gemini_triggered: bool,
 }
 
 #[derive(Clone)]
@@ -189,38 +148,10 @@ impl State {
     fn new(paper_mode: bool) -> Self {
         Self {
             connected: false, tab: 0,
-            btc: 0.0, btc_open: 0.0, btc_entry: 0.0, bal: 0.0,
-            live: !paper_mode, reinvest: false, _paper_mode: paper_mode,
-            odi_label: "Odiseo 83".into(), odi_code: String::new(),
-            odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 0.0,
-            odi_t_up: 0, odi_t_dn: 0, odi_w_up: 0, odi_w_dn: 0,
-            odi_tp_up: 0, odi_tp_dn: 0, odi_sl_up: 0, odi_sl_dn: 0,
-            odi_sessions: 0, odi_enabled: false,
-            odi_accuracy: 0.0, odi_avg_pnl: 0.0, odi_best: 0.0, odi_worst: 0.0,
-            odi_filters: 0,
-            last_odi_t_up: 0, last_odi_t_dn: 0,
-            h65_pnl: 0.0, h65_bal: 0.0, h65_budget: 0.0,
-            h65_t_up: 0, h65_t_dn: 0, h65_w_up: 0, h65_w_dn: 0,
-            h65_tp_up: 0, h65_tp_dn: 0, h65_sl_up: 0, h65_sl_dn: 0,
-            h65_sessions: 0, h65_enabled: false,
-            h65_accuracy: 0.0, h65_avg_pnl: 0.0, h65_best: 0.0, h65_worst: 0.0,
-            last_h65_t_up: 0, last_h65_t_dn: 0,
-            sen_pnl: 0.0, sen_bal: 0.0, sen_budget: 0.0,
-            sen_t_up: 0, sen_t_dn: 0, sen_w_up: 0, sen_w_dn: 0,
-            sen_sessions: 0, sen_enabled: false,
-            last_sen_t_up: 0, last_sen_t_dn: 0,
+            btc: 0.0, btc_open: 0.0, bal: 0.0,
+            _paper_mode: paper_mode,
             sessions: Vec::new(),
             hft: HftState::default(),
-            pos_h65_up: false, pos_h65_dn: false,
-            pos_h65_entry_up: 0.0, pos_h65_entry_dn: 0.0,
-            pos_odi_up: false, pos_odi_dn: false,
-            pos_odi_entry_up: 0.0, pos_odi_entry_dn: 0.0,
-            prev_hd65_up: 0, prev_hd65_dn: 0,
-            prev_od83_up: 0, prev_od83_dn: 0,
-            pos_sen_up: false, pos_sen_dn: false,
-            pos_sen_entry_up: 0.0, pos_sen_entry_dn: 0.0,
-            prev_sen_up: 0, prev_sen_dn: 0,
-            h65_lock: false, odi_lock: false, sen_lock: false,
             sl_pct: 0.0, sl_market: true,
             input_mode: InputMode::Normal,
             input_buf: String::new(),
@@ -288,13 +219,6 @@ impl State {
             ofi_dn_history: VecDeque::with_capacity(200),
             micro_up_history: VecDeque::with_capacity(200),
             micro_dn_history: VecDeque::with_capacity(200),
-            gemini_active: false,
-            gemini_budget: 0.0,
-            gemini_target: 0.0,
-            gemini_trigger: 0.0,
-            gemini_exit: 0.0,
-            gemini_outcome: String::new(),
-            gemini_triggered: false,
         }
     }
 
@@ -334,82 +258,10 @@ impl State {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// HFT / VARIANT LOGIC
+// HFT STATE APPLICATION
 // ═══════════════════════════════════════════════════════════════════
 
 fn apply_hft_state(new_hft: &HftState, s: &mut State) {
-    if new_hft.hd65_up == 2 && s.prev_hd65_up != 2 {
-        s.pos_h65_up = true;
-        s.pos_h65_entry_up = new_hft.clob_trade_up;
-        s.add_log(format!("▲ H65 ENTER UP @ {:.4}", s.pos_h65_entry_up), Color::Green);
-    } else if new_hft.hd65_up != 2 && s.prev_hd65_up == 2 {
-        s.pos_h65_up = false;
-        let pnl = if s.pos_h65_entry_up > 0.0 && new_hft.clob_trade_up > 0.0 {
-            s.h65_budget * (new_hft.clob_trade_up / s.pos_h65_entry_up - 1.0)
-        } else { 0.0 };
-        s.add_log(format!("▲ H65 EXIT UP @ {:.4} PnL:{:+.2}", new_hft.clob_trade_up, pnl),
-            if pnl >= 0.0 { Color::Green } else { Color::Red });
-    }
-    if new_hft.hd65_dn == 2 && s.prev_hd65_dn != 2 {
-        s.pos_h65_dn = true;
-        s.pos_h65_entry_dn = new_hft.clob_trade_dn;
-        s.add_log(format!("▼ H65 ENTER DN @ {:.4}", s.pos_h65_entry_dn), Color::Red);
-    } else if new_hft.hd65_dn != 2 && s.prev_hd65_dn == 2 {
-        s.pos_h65_dn = false;
-        let pnl = if s.pos_h65_entry_dn > 0.0 && new_hft.clob_trade_dn > 0.0 {
-            s.h65_budget * (new_hft.clob_trade_dn / s.pos_h65_entry_dn - 1.0)
-        } else { 0.0 };
-        s.add_log(format!("▼ H65 EXIT DN @ {:.4} PnL:{:+.2}", new_hft.clob_trade_dn, pnl),
-            if pnl >= 0.0 { Color::Green } else { Color::Red });
-    }
-    if new_hft.od83_up == 2 && s.prev_od83_up != 2 {
-        s.pos_odi_up = true;
-        s.pos_odi_entry_up = new_hft.clob_trade_up;
-        s.add_log(format!("▲ O83 ENTER UP @ {:.4}", s.pos_odi_entry_up), Color::Green);
-    } else if new_hft.od83_up != 2 && s.prev_od83_up == 2 {
-        s.pos_odi_up = false;
-        s.add_log(format!("▲ O83 EXIT UP @ {:.4}", new_hft.clob_trade_up), Color::Yellow);
-    }
-    if new_hft.od83_dn == 2 && s.prev_od83_dn != 2 {
-        s.pos_odi_dn = true;
-        s.pos_odi_entry_dn = new_hft.clob_trade_dn;
-        s.add_log(format!("▼ O83 ENTER DN @ {:.4}", s.pos_odi_entry_dn), Color::Red);
-    } else if new_hft.od83_dn != 2 && s.prev_od83_dn == 2 {
-        s.pos_odi_dn = false;
-        s.add_log(format!("▼ O83 EXIT DN @ {:.4}", new_hft.clob_trade_dn), Color::Yellow);
-    }
-    if new_hft.sen_up == 2 && s.prev_sen_up != 2 {
-        s.pos_sen_up = true;
-        s.pos_sen_entry_up = new_hft.clob_trade_up;
-        s.add_log(format!("⚡ SENNA ENTER UP @ {:.4}", s.pos_sen_entry_up), Color::Cyan);
-    } else if new_hft.sen_up != 2 && s.prev_sen_up == 2 {
-        s.pos_sen_up = false;
-        let pnl = if s.pos_sen_entry_up > 0.0 && new_hft.clob_trade_up > 0.0 {
-            s.sen_budget * (new_hft.clob_trade_up / s.pos_sen_entry_up - 1.0)
-        } else { 0.0 };
-        s.add_log(format!("⚡ SENNA EXIT UP @ {:.4} PnL:{:+.2}", new_hft.clob_trade_up, pnl),
-            if pnl >= 0.0 { Color::Green } else { Color::Red });
-    }
-    if new_hft.sen_dn == 2 && s.prev_sen_dn != 2 {
-        s.pos_sen_dn = true;
-        s.pos_sen_entry_dn = new_hft.clob_trade_dn;
-        s.add_log(format!("⚡ SENNA ENTER DN @ {:.4}", s.pos_sen_entry_dn), Color::Cyan);
-    } else if new_hft.sen_dn != 2 && s.prev_sen_dn == 2 {
-        s.pos_sen_dn = false;
-        let pnl = if s.pos_sen_entry_dn > 0.0 && new_hft.clob_trade_dn > 0.0 {
-            s.sen_budget * (new_hft.clob_trade_dn / s.pos_sen_entry_dn - 1.0)
-        } else { 0.0 };
-        s.add_log(format!("⚡ SENNA EXIT DN @ {:.4} PnL:{:+.2}", new_hft.clob_trade_dn, pnl),
-            if pnl >= 0.0 { Color::Green } else { Color::Red });
-    }
-
-    s.prev_hd65_up = new_hft.hd65_up;
-    s.prev_hd65_dn = new_hft.hd65_dn;
-    s.prev_od83_up = new_hft.od83_up;
-    s.prev_od83_dn = new_hft.od83_dn;
-    s.prev_sen_up = new_hft.sen_up;
-    s.prev_sen_dn = new_hft.sen_dn;
-
     if new_hft.clob_trade_up > 0.0 && (s.trades.is_empty() || (new_hft.clob_trade_up - s.trades.front().map(|t| t.price).unwrap_or(0.0)).abs() > 0.0001) {
         s.trades.push_front(api::TradeEntry {
             ts: new_hft.time.clone(),
@@ -430,7 +282,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     }
 
     s.hft = new_hft.clone();
-    s.odi_filters = s.hft.od83_filters;
 
     s.session_vol_cum += new_hft.clob_trade_up_vol + new_hft.clob_trade_dn_vol;
 
@@ -488,12 +339,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
         s.session_open_btc = new_hft.btc_price;
-        s.pos_odi_up = false; s.pos_odi_dn = false;
-        s.pos_odi_entry_up = 0.0; s.pos_odi_entry_dn = 0.0;
-        s.pos_h65_up = false; s.pos_h65_dn = false;
-        s.pos_h65_entry_up = 0.0; s.pos_h65_entry_dn = 0.0;
-        s.pos_sen_up = false; s.pos_sen_dn = false;
-        s.pos_sen_entry_up = 0.0; s.pos_sen_entry_dn = 0.0;
         if s.mt_state > 0 {
             s.add_trade_log("SESSION RESET — posicion manual cerrada".to_string(), Color::Yellow);
             s.reset_manual();
@@ -513,115 +358,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         s.session_open_btc = new_hft.btc_price;
     }
     s.prev_secs_left = secs;
-
-    check_gemini_trigger(s);
-}
-
-fn check_gemini_trigger(s: &mut State) {
-    if !s.gemini_active || s.gemini_triggered { return; }
-    let up_px = s.hft.clob_trade_up;
-    let dn_px = s.hft.clob_trade_dn;
-    let trigger = s.gemini_trigger;
-    if up_px > 0.0 && up_px <= trigger {
-        s.gemini_triggered = true;
-        s.gemini_outcome = "up".to_string();
-        s.add_log(format!("⚡ GEMINI TRIGGERED UP @{:.4} (trigger {:.4})", up_px, trigger), Color::Green);
-        s.add_trade_log(format!("⚡ GEMINI UP @{:.4}→{:.4} ${:.0}", trigger, s.gemini_target, s.gemini_budget), Color::Green);
-    } else if dn_px > 0.0 && dn_px <= trigger {
-        s.gemini_triggered = true;
-        s.gemini_outcome = "down".to_string();
-        s.add_log(format!("⚡ GEMINI TRIGGERED DN @{:.4} (trigger {:.4})", dn_px, trigger), Color::Red);
-        s.add_trade_log(format!("⚡ GEMINI DN @{:.4}→{:.4} ${:.0}", trigger, s.gemini_target, s.gemini_budget), Color::Red);
-    }
-}
-
-fn detect_trades(v: &OdiseoVariant, last_t_up: i64, last_t_dn: i64,
-                 s: &mut State, label: &str) -> (i64, i64) {
-    let delta_up = v.trades_up - last_t_up;
-    let delta_dn = v.trades_dn - last_t_dn;
-    if delta_up > 0 { s.add_log(format!("⬆ ENTER UP  [{} {}]  BTC ${:.0}", label, if s.live{"LIVE"}else{"PAPER"}, s.btc), Color::Green); s.btc_entry = s.btc; }
-    if delta_dn > 0 { s.add_log(format!("⬇ ENTER DN  [{} {}]  BTC ${:.0}", label, if s.live{"LIVE"}else{"PAPER"}, s.btc), Color::Red); s.btc_entry = s.btc; }
-    if delta_up < 0 { s.add_log(format!("⬆ EXIT  UP  [{} {}]", label, if s.live{"LIVE"}else{"PAPER"}), Color::Yellow); }
-    if delta_dn < 0 { s.add_log(format!("⬇ EXIT  DN  [{} {}]", label, if s.live{"LIVE"}else{"PAPER"}), Color::Yellow); }
-    (v.trades_up, v.trades_dn)
-}
-
-fn find_variant<'a>(variants: &'a [OdiseoVariant], code: &str) -> Option<&'a OdiseoVariant> {
-    variants.iter().find(|v| v.code.as_deref() == Some(code))
-}
-
-fn apply_variant(v: &OdiseoVariant, s: &mut State) {
-    match v.code.as_deref() {
-        Some(c) if c.starts_with("odiseo") && c != "odiseo65" => {
-            let new_pnl = v.total_pnl;
-            let delta = new_pnl - s.odi_pnl;
-            if delta.abs() > 0.0001 && s.odi_pnl != 0.0 {
-                s.add_log(format!("{} PnL {:+.4} ({:+.4})", v.name.as_deref().unwrap_or("Odi"), new_pnl, delta), if delta>0.0{Color::Green}else{Color::Red});
-            }
-            s.odi_code = c.to_string();
-            s.odi_label = v.name.clone().unwrap_or_else(|| "Odiseo".into());
-            s.odi_pnl = new_pnl; s.odi_budget = v.budget; s.odi_bal = v.balance;
-            s.odi_t_up = v.trades_up; s.odi_t_dn = v.trades_dn;
-            s.odi_w_up = v.wins_up; s.odi_w_dn = v.wins_dn;
-            s.odi_tp_up = v.tp_up; s.odi_tp_dn = v.tp_dn;
-            s.odi_sl_up = v.sl_up; s.odi_sl_dn = v.sl_dn;
-            s.odi_sessions = v.sessions;
-            s.odi_accuracy = v.accuracy; s.odi_avg_pnl = v.avg_pnl;
-            s.odi_best = v.best; s.odi_worst = v.worst;
-            if !s.odi_lock {
-                s.odi_enabled = v.enabled.unwrap_or(true);
-            } else if v.enabled.unwrap_or(true) == s.odi_enabled {
-                s.odi_lock = false;
-            }
-            let (nu, nd) = detect_trades(v, s.last_odi_t_up, s.last_odi_t_dn, s, &s.odi_label.clone());
-            s.last_odi_t_up = nu; s.last_odi_t_dn = nd;
-            let total_sl = v.sl_up + v.sl_dn;
-            let total_trades = v.trades_up + v.trades_dn;
-            if total_trades > 0 && total_sl >= 3 { s.add_warning(format!("{} ALERTA: {} SLs", s.odi_label, total_sl)); }
-            if v.total_pnl < -v.budget * 0.1 { s.add_warning(format!("{} PERDIDA >10%", s.odi_label)); }
-            if !v.enabled.unwrap_or(true) { s.add_warning(format!("{} DESACTIVADO", s.odi_label)); }
-        }
-        Some("houdini65") => {
-            let new_pnl = v.total_pnl;
-            let delta = new_pnl - s.h65_pnl;
-            if delta.abs() > 0.0001 && s.h65_pnl != 0.0 {
-                s.add_log(format!("H65 PnL {:+.4} ({:+.4})", new_pnl, delta), if delta>0.0{Color::Green}else{Color::Red});
-            }
-            s.h65_pnl = new_pnl; s.h65_budget = v.budget; s.h65_bal = v.balance;
-            s.h65_t_up = v.trades_up; s.h65_t_dn = v.trades_dn;
-            s.h65_w_up = v.wins_up; s.h65_w_dn = v.wins_dn;
-            s.h65_tp_up = v.tp_up; s.h65_tp_dn = v.tp_dn;
-            s.h65_sl_up = v.sl_up; s.h65_sl_dn = v.sl_dn;
-            s.h65_sessions = v.sessions;
-            s.h65_accuracy = v.accuracy; s.h65_avg_pnl = v.avg_pnl;
-            s.h65_best = v.best; s.h65_worst = v.worst;
-            if !s.h65_lock {
-                s.h65_enabled = v.enabled.unwrap_or(true);
-            } else if v.enabled.unwrap_or(true) == s.h65_enabled {
-                s.h65_lock = false;
-            }
-            let (nu, nd) = detect_trades(v, s.last_h65_t_up, s.last_h65_t_dn, s, "H65");
-            s.last_h65_t_up = nu; s.last_h65_t_dn = nd;
-            let total_sl = v.sl_up + v.sl_dn;
-            if v.trades_up + v.trades_dn > 0 && total_sl >= 3 { s.add_warning(format!("H65 ALERTA: {} SLs", total_sl)); }
-            if v.total_pnl < -v.budget * 0.1 { s.add_warning("H65 PERDIDA >10%"); }
-            if !v.enabled.unwrap_or(true) { s.add_warning("HOUDINI 65 DESACTIVADO"); }
-        }
-        Some("scalper") => {
-            s.sen_pnl = v.total_pnl; s.sen_budget = v.budget; s.sen_bal = v.balance;
-            s.sen_t_up = v.trades_up; s.sen_t_dn = v.trades_dn;
-            s.sen_w_up = v.wins_up; s.sen_w_dn = v.wins_dn;
-            s.sen_sessions = v.sessions;
-            if !s.sen_lock {
-                s.sen_enabled = v.enabled.unwrap_or(true);
-            } else if v.enabled.unwrap_or(true) == s.sen_enabled {
-                s.sen_lock = false;
-            }
-            let (nu, nd) = detect_trades(v, s.last_sen_t_up, s.last_sen_t_dn, s, "SENNA");
-            s.last_sen_t_up = nu; s.last_sen_t_dn = nd;
-        }
-        _ => {}
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -633,8 +369,7 @@ async fn run_poller(tx: mpsc::UnboundedSender<PollUpdate>) {
         let start = Instant::now();
 
         // Collect all poll results concurrently (each bounded to 2s by api.rs)
-        let (odi, btc, health, hft, orders, sessions) = tokio::join!(
-            http_get::<OdiseoStatus>("/api/odiseo/status"),
+        let (btc, health, hft, orders, sessions) = tokio::join!(
             http_get::<BtcInfo>("/api/btc"),
             http_get::<HealthInfo>("/api/health"),
             http_get::<HftState>("/api/hft/latest"),
@@ -642,7 +377,6 @@ async fn run_poller(tx: mpsc::UnboundedSender<PollUpdate>) {
             http_get::<Vec<SessionInfo>>("/api/sessions"),
         );
 
-        if let Some(data) = odi { let _ = tx.send(PollUpdate::Odiseo(data)); }
         if let Some(data) = btc { let _ = tx.send(PollUpdate::Btc(data)); }
         if let Some(data) = health { let _ = tx.send(PollUpdate::Health(data)); }
         if let Some(data) = hft { let _ = tx.send(PollUpdate::Hft(data)); }
@@ -705,22 +439,8 @@ async fn main() -> io::Result<()> {
     tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = kb_tx.send(k.code).await; } } });
 
     let mut s = State::new(paper_mode);
-    let mode_label = if s.live { "DINERO REAL" } else { "PAPER MONEY" };
+    let mode_label = if paper_mode { "PAPER MONEY" } else { "DINERO REAL" };
     s.add_log(format!("ZZIGNAL MONITOR — {}", mode_label), Color::Magenta);
-
-    // Startup config — fire and forget with timeout
-    tokio::spawn(async move {
-        let _ = tokio::time::timeout(Duration::from_secs(5), async {
-            let live = !paper_mode;
-            if live {
-                let _ = http_post("/api/odiseo/live", "{\"enable\":true}").await;
-            } else {
-                let _ = http_post("/api/odiseo/live", "{\"enable\":false}").await;
-                let _ = http_post("/api/odiseo/variant", "{\"index\":0,\"enable\":true}").await;
-                let _ = http_post("/api/odiseo/variant", "{\"index\":1,\"enable\":true}").await;
-            }
-        }).await;
-    });
 
     // ═══════════════════════ MAIN LOOP ═══════════════════════
     // ZERO HTTP I/O — only channel drains, keyboard, and render
@@ -737,16 +457,6 @@ async fn main() -> io::Result<()> {
             s.last_api_ok = Instant::now();
 
             match update {
-                PollUpdate::Odiseo(data) => {
-                    s.reinvest = data.reinvest.unwrap_or(false);
-                    let odi_v = data.variants.iter().find(|v| {
-                        let code = v.code.as_deref().unwrap_or("");
-                        code.starts_with("odiseo") && code != "odiseo65"
-                    });
-                    if let Some(v) = odi_v { apply_variant(v, &mut s); }
-                    if let Some(v) = find_variant(&data.variants, "houdini65") { apply_variant(v, &mut s); }
-                    if let Some(v) = find_variant(&data.variants, "scalper") { apply_variant(v, &mut s); }
-                }
                 PollUpdate::Btc(data) => {
                     s.btc = data.price;
                     if data.open > 0.0 { s.btc_open = data.open; }
@@ -942,25 +652,6 @@ async fn main() -> io::Result<()> {
         // Apply deferred hft_state (only the last one, to avoid redundant heavy processing)
         if let Some(ref hft) = last_hft {
             apply_hft_state(hft, &mut s);
-        }
-
-        // ── Gemini trigger → place buy (spawned, non-blocking) ──
-        if s.gemini_triggered && s.mt_state == 0 {
-            let (budget, target, exit, outcome) = (
-                s.gemini_budget, s.gemini_target, s.gemini_exit, s.gemini_outcome.clone(),
-            );
-            s.gemini_triggered = false;
-            s.gemini_active = false;
-            tokio::spawn(async move {
-                use crate::api::{http_post_result, OrderPlaced};
-                let size = (budget / target).floor().max(1.0);
-                let body = format!(r#"{{"side":"buy","outcome":"{}","price":{},"size":{}}}"#, outcome, target, size);
-                let _ = http_post_result::<OrderPlaced>("/api/orders/limit", &body).await;
-                if exit > 0.0 {
-                    let ex_body = format!(r#"{{"side":"sell","outcome":"{}","price":{},"size":{}}}"#, outcome, exit, size);
-                    let _ = http_post_result::<OrderPlaced>("/api/orders/limit", &ex_body).await;
-                }
-            });
         }
 
         // ── Render ──

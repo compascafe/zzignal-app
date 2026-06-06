@@ -60,12 +60,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (*creds).clone(),
     );
 
-    // Estrategias desactivadas por defecto — trading manual desde TUI
-    state.odiseo_trading.set_live_mode(false);
-    state.odiseo_trading.set_variant(0, false);
-    state.odiseo_trading.set_variant(1, false);
-    state.odiseo_trading.set_variant(2, false);
-
     // Auto-session manager: starts a new 15-min session at each boundary
     {
         let auto_state = Arc::clone(&state);
@@ -111,7 +105,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             };
                             for sid in to_stop {
                                 info!("[SESSION] Auto-stop #{}", sid);
-                                auto_state.odiseo_trading.on_session_close(sid, "tie");
                                 auto_state.session_manager.flush(sid).ok();
                                 auto_state.session_manager.stop_session(sid).ok();
                             }

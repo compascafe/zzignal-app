@@ -50,31 +50,6 @@ pub struct WsMsg {
 
 // ─── REST Response Types ────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-pub struct OdiseoStatus {
-    #[serde(default)]
-    pub reinvest: Option<bool>,
-    pub variants: Vec<OdiseoVariant>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)]
-pub struct OdiseoVariant {
-    pub enabled: Option<bool>,
-    pub name: Option<String>,
-    pub code: Option<String>,
-    #[serde(default)] pub budget: f64,
-    #[serde(default)] pub total_pnl: f64,
-    #[serde(default)] pub balance: f64,
-    #[serde(default)] pub trades_up: i64, #[serde(default)] pub trades_dn: i64,
-    #[serde(default)] pub wins_up: i64, #[serde(default)] pub wins_dn: i64,
-    #[serde(default)] pub tp_up: i64, #[serde(default)] pub tp_dn: i64,
-    #[serde(default)] pub sl_up: i64, #[serde(default)] pub sl_dn: i64,
-    #[serde(default)] pub sessions: i64,
-    #[serde(default)] pub accuracy: f64, #[serde(default)] pub avg_pnl: f64,
-    #[serde(default)] pub best: f64, #[serde(default)] pub worst: f64,
-}
-
 #[derive(Debug, Deserialize, Default)]
 pub struct BtcInfo {
     pub price: f64,
@@ -110,24 +85,6 @@ pub struct HftState {
     pub ask_wall: u8,
     pub tick_gap_ms: i64,
     pub secs_left: i32,
-    pub od83_up: u8,
-    pub od83_dn: u8,
-    pub hd65_up: u8,
-    pub hd65_dn: u8,
-    pub od83_up_bal: f64,
-    pub od83_dn_bal: f64,
-    pub hd65_up_bal: f64,
-    pub hd65_dn_bal: f64,
-    pub od83_filters: u16,
-    pub od83_event: String,
-    pub hd65_event: String,
-    pub sen_up: u8,
-    pub sen_dn: u8,
-    pub sen_up_bal: f64,
-    pub sen_dn_bal: f64,
-    pub sen_event: String,
-    pub sen_clob_delta: f64,
-    pub sen_btc_vel: f64,
     pub depth_up_bids: Vec<(f64,f64)>,
     pub depth_up_asks: Vec<(f64,f64)>,
     pub depth_dn_bids: Vec<(f64,f64)>,

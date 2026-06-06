@@ -33,16 +33,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/approve",         post(post_approve))
         // Wrap USDC.e → pUSD vía CollateralOnramp (CLOB V2)
         .route("/api/wrap",            post(post_wrap))
-        // ─── Odiseo Trading ────────────────────────────────────────────────
-        .route("/api/odiseo",          get(get_odiseo))
-        .route("/api/odiseo/live",     post(post_odiseo_live))
-        .route("/api/odiseo/variant",  post(post_odiseo_variant))
-        .route("/api/odiseo/budget",   post(post_odiseo_budget))
-        .route("/api/odiseo/reinvest", post(post_odiseo_reinvest))
-        .route("/api/odiseo/max-sessions", post(post_odiseo_max_sessions))
-        .route("/api/odiseo/filters", post(post_odiseo_filters))
-        .route("/api/odiseo/trade-config", post(post_odiseo_trade_config))
-        .route("/api/odiseo/status",   get(get_odiseo_status))
         // Order book
         .route("/api/book/up",         get(get_book_up))
         .route("/api/book/down",       get(get_book_down))
@@ -201,7 +191,6 @@ async fn post_session_start(State(s): State<Arc<AppState>>) -> Json<Value> {
     // Stop any existing recording first
     let mut rec = s.recording_sessions.write().await;
     for old in rec.drain(..) {
-        s.odiseo_trading.on_session_close(old, "tie");
         s.session_manager.flush(old).ok();
         s.session_manager.stop_session(old).ok();
     }
@@ -257,113 +246,6 @@ async fn post_wrap(State(s): State<Arc<AppState>>) -> Json<Value> {
             Json(json!({"ok": false, "error": msg}))
         }
     }
-}
-
-async fn get_odiseo(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let json_str = s.odiseo_trading.export_json();
-    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
-    Json(value)
-}
-
-async fn get_odiseo_status(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let live = s.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed);
-    let stats = s.odiseo_trading.export_json();
-    let mut stats_arr: Vec<Value> = serde_json::from_str(&stats).unwrap_or_default();
-    // Inject per-variant enabled state
-    for (i, v) in stats_arr.iter_mut().enumerate() {
-        if let Some(obj) = v.as_object_mut() {
-            obj.insert("enabled".into(), json!(s.odiseo_trading.is_enabled(i)));
-            obj.insert("budget".into(), json!(s.odiseo_trading.get_budget(i)));
-            obj.insert("max_sessions".into(), json!(s.odiseo_trading.get_max_sessions(i)));
-            obj.insert("sessions_done".into(), json!(s.odiseo_trading.get_sessions_done(i)));
-        }
-    }
-    Json(json!({
-        "live_mode": live,
-        "reinvest": s.odiseo_trading.reinvest.load(std::sync::atomic::Ordering::Relaxed),
-        "status": if live { "LIVE" } else { "PAPER" },
-        "variants": stats_arr,
-        "session_history": s.odiseo_trading.session_summaries(),
-    }))
-}
-
-#[derive(Deserialize)]
-struct OdiseoVariantBody { index: usize, enable: bool }
-
-async fn post_odiseo_variant(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoVariantBody>) -> Json<Value> {
-    s.odiseo_trading.set_variant(body.index, body.enable);
-    Json(json!({"ok": true, "index": body.index, "enabled": s.odiseo_trading.is_enabled(body.index)}))
-}
-
-#[derive(Deserialize)]
-struct OdiseoBudgetBody { index: usize, amount: f64 }
-
-async fn post_odiseo_budget(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoBudgetBody>) -> Json<Value> {
-    s.odiseo_trading.set_budget(body.index, body.amount);
-    Json(json!({"ok": true, "index": body.index, "budget": s.odiseo_trading.get_budget(body.index)}))
-}
-
-#[derive(Deserialize)]
-struct OdiseoReinvestBody { enable: bool }
-
-async fn post_odiseo_reinvest(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoReinvestBody>) -> Json<Value> {
-    s.odiseo_trading.set_reinvest(body.enable);
-    Json(json!({"ok": true, "reinvest": body.enable}))
-}
-
-#[derive(Deserialize)]
-struct OdiseoMaxSessionsBody { index: usize, max_sessions: u32 }
-
-async fn post_odiseo_max_sessions(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoMaxSessionsBody>) -> Json<Value> {
-    s.odiseo_trading.set_max_sessions(body.index, body.max_sessions);
-    Json(json!({"ok": true, "index": body.index, "max_sessions": s.odiseo_trading.get_max_sessions(body.index)}))
-}
-
-#[derive(Deserialize)]
-struct OdiseoLiveBody { enable: bool }
-
-async fn post_odiseo_live(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoLiveBody>) -> Json<Value> {
-    s.odiseo_trading.set_live_mode(body.enable);
-    Json(json!({"ok": true, "live_mode": s.odiseo_trading.live_mode.load(std::sync::atomic::Ordering::Relaxed)}))
-}
-
-#[derive(Deserialize)]
-struct OdiseoFiltersBody { all: Option<bool>, name: Option<String>, enable: Option<bool> }
-
-async fn post_odiseo_filters(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoFiltersBody>) -> Json<Value> {
-    if let Some(name) = &body.name {
-        if body.enable.unwrap_or(true) {
-            s.odiseo_trading.filter_chain.enable(name);
-        } else {
-            s.odiseo_trading.filter_chain.disable(name);
-        }
-    } else if body.all == Some(false) {
-        s.odiseo_trading.filter_chain.disable_all();
-    } else if body.all == Some(true) {
-        s.odiseo_trading.filter_chain.enable_all();
-    }
-    Json(json!({
-        "ok": true,
-        "enabled_mask": s.odiseo_trading.filter_chain.enabled_mask(),
-        "filters": s.odiseo_trading.filter_chain.list_filters(),
-    }))
-}
-
-#[derive(Deserialize)]
-struct OdiseoTradeConfigBody { min_vol: Option<f64>, window: Option<usize> }
-
-async fn post_odiseo_trade_config(State(s): State<Arc<AppState>>, Json(body): Json<OdiseoTradeConfigBody>) -> Json<Value> {
-    if let Some(v) = body.min_vol {
-        *s.trade_min_vol.write().await = v.max(0.0);
-    }
-    if let Some(n) = body.window {
-        *s.trade_window_n.write().await = n.max(1).min(50);
-    }
-    Json(json!({
-        "ok": true,
-        "trade_min_vol": *s.trade_min_vol.read().await,
-        "trade_window_n": *s.trade_window_n.read().await,
-    }))
 }
 
 // ─── Live CSV Export (from in-memory buffer — no DB required) ──────────────────
@@ -607,10 +489,7 @@ async fn post_panic(State(s): State<Arc<AppState>>, Json(body): Json<PanicBody>)
         });
     }
 
-    // 3. Apagar estrategias
-    s.odiseo_trading.disable_all();
-
-    Json(json!({"ok": true, "message": format!("PANIC: cancelled all + market sell {:?} + strategies disabled", outcomes)}))
+    Json(json!({"ok": true, "message": format!("PANIC: cancelled all + market sell {:?}", outcomes)}))
 }
 
 // ─── Fills ────────────────────────────────────────────────────────────────────

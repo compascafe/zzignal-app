@@ -15,4 +15,3 @@ pub mod metrics;
 pub mod perf;
 pub mod pipeline;
 pub mod session;
-pub mod strategies;
