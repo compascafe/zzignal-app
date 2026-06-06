@@ -58,7 +58,6 @@ struct State {
     prev_secs_left: i32,
     session_open_up: f64,
     session_open_dn: f64,
-    session_open_btc: f64,
 
     pub mt_outcome: String,
     pub mt_size: f64,
@@ -167,7 +166,6 @@ impl State {
             prev_secs_left: -1,
             session_open_up: 0.0,
             session_open_dn: 0.0,
-            session_open_btc: 0.0,
             mt_outcome: String::new(),
             mt_size: 0.0, mt_entry: 0.0, mt_budget: 0.0,
             mt_order_id: String::new(), mt_exit_price: 0.0,
@@ -336,7 +334,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
-        s.session_open_btc = new_hft.btc_price;
         if s.mt_state > 0 {
             s.add_trade_log("SESSION RESET — posicion manual cerrada".to_string(), Color::Yellow);
             s.reset_manual();
@@ -353,7 +350,6 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
     if s.session_open_up == 0.0 && new_hft.clob_trade_up > 0.0 {
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
-        s.session_open_btc = new_hft.btc_price;
     }
     s.prev_secs_left = secs;
 }

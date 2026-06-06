@@ -129,7 +129,7 @@ fn aggregate_alert(s: &State) -> (Color, bool) {
     // Check aligned signal (S1/S2)
     let up_ref = if s.session_open_up > 0.0 { s.session_open_up } else { s.hft.clob_trade_up };
     let dn_ref = if s.session_open_dn > 0.0 { s.session_open_dn } else { s.hft.clob_trade_dn };
-    let btc_o = if s.session_open_btc > 0.0 { s.session_open_btc } else if s.btc_open > 0.0 { s.btc_open } else { s.btc };
+    let btc_o = if s.btc_open > 0.0 { s.btc_open } else { s.btc };
     let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
     let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
     let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
@@ -184,25 +184,15 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
         .constraints([Constraint::Ratio(1,4); 4]).split(area);
     let big = Modifier::BOLD;
 
-    let btc_ref = if s.session_open_btc > 0.0 { s.session_open_btc }
-        else if s.btc_open > 0.0 { s.btc_open }
-        else { s.btc };
+    let btc_ref = if s.btc_open > 0.0 { s.btc_open } else { s.btc };
     let btc_delta = s.btc - btc_ref;
     let btc_delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
     let btc_up = btc_delta > 0.0001;
     let btc_dn = btc_delta < -0.0001;
     let btc_c = if btc_up { BB_GREEN } else if btc_dn { BB_RED } else { BB_AMBER };
     let arrow = if btc_up { "▲" } else if btc_dn { "▼" } else { "─" };
-    let delta_str = if btc_delta.abs() < 1.0 {
-        format!("${:.0}", btc_delta)
-    } else {
-        format!("${:+.0}", btc_delta)
-    };
-    let pct_str = if btc_delta_pct.abs() < 0.05 {
-        format!("{:.1}%", btc_delta_pct)
-    } else {
-        format!("{:+.1}%", btc_delta_pct)
-    };
+    let delta_str = if btc_delta.abs() < 1.0 { format!("${:.0}", btc_delta) } else { format!("${:+.0}", btc_delta) };
+    let pct_str = if btc_delta_pct.abs() < 0.05 { format!("{:.1}%", btc_delta_pct) } else { format!("{:+.1}%", btc_delta_pct) };
 
     f.render_widget(
         Paragraph::new(vec![
@@ -319,7 +309,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let up_d = if up_ref > 0.0 { (s.hft.clob_trade_up / up_ref - 1.0) * 100.0 } else { 0.0 };
     let dn_d = if dn_ref > 0.0 { (s.hft.clob_trade_dn / dn_ref - 1.0) * 100.0 } else { 0.0 };
     let clob_up = up_d >= 0.0;
-    let btc_o = if s.session_open_btc > 0.0 { s.session_open_btc } else if s.btc_open > 0.0 { s.btc_open } else { s.btc };
+    let btc_o = if s.btc_open > 0.0 { s.btc_open } else { s.btc };
     let btc_d = if btc_o > 0.0 { (s.btc / btc_o - 1.0) * 100.0 } else { 0.0 };
     let btc_up = btc_d >= 0.0;
     let up_30s = if s.clob_up_30s > 0.0 { (s.hft.clob_trade_up / s.clob_up_30s - 1.0) * 100.0 } else { 0.0 };
@@ -396,23 +386,14 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
         cols[1]);
 
     // ── S3: BTC Δ vs SESSION OPEN ──
-    let btc_ref = if s.session_open_btc > 0.0 { s.session_open_btc }
-        else if s.btc_open > 0.0 { s.btc_open }
-        else { s.btc };
+    let btc_ref = if s.btc_open > 0.0 { s.btc_open } else { s.btc };
     let delta = s.btc - btc_ref;
     let delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
-    let total_secs = 900;
-    let elapsed = if s.hft.secs_left >= 0 { (total_secs - s.hft.secs_left).max(0) } else { 0 };
+    let elapsed = if s.hft.secs_left >= 0 { (900 - s.hft.secs_left).max(0) } else { 0 };
     let elapsed_min = elapsed as f64 / 60.0;
-    let (s3_border, s3_fg) = if elapsed_min <= 1.0 {
-        (BB_AMBER, BB_AMBER)
-    } else if elapsed_min <= 14.0 {
-        if delta_pct > 0.25 { (BB_GREEN, BB_GREEN) }
-        else if delta_pct >= -0.25 { (BB_AMBER, BB_AMBER) }
-        else { (BB_RED, BB_RED) }
-    } else {
-        (BB_AMBER, BB_AMBER)
-    };
+    let (s3_border, s3_fg) = if delta_pct > 0.25 { (BB_GREEN, BB_GREEN) }
+        else if delta_pct < -0.25 { (BB_RED, BB_RED) }
+        else { (BB_AMBER, BB_AMBER) };
     f.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -421,7 +402,7 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
             ]),
             Line::from(Span::styled(format!("${:+.0}  {:+.1}%", delta, delta_pct),
                 Style::default().fg(s3_fg).add_modifier(b))),
-            Line::from(Span::styled(format!("min {:.0}/15  ref ${:.0}", elapsed_min, btc_ref),
+            Line::from(Span::styled(format!("min {:.0}/15  open ${:.0}", elapsed_min, btc_ref),
                 Style::default().fg(BB_DIM))),
         ]).block(Block::default().borders(Borders::ALL).title(format!("S3 Δ [{:.0}m]", elapsed_min))
             .border_style(Style::default().fg(s3_border))
