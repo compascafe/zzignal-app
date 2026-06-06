@@ -152,7 +152,7 @@ async fn get_balance(State(s): State<Arc<AppState>>) -> Json<Value> {
 
 async fn get_btc(State(s): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
-        "price": *s.btc_price.read().await,
+        "price": s.btc_price.read().await.unwrap_or(0.0),
         "open":  s.btc_open.read().await.unwrap_or(0.0),
     }))
 }
