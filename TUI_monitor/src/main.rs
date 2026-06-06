@@ -5,6 +5,7 @@ mod ui;
 use std::collections::VecDeque;
 use std::io;
 use std::time::{Duration, Instant};
+use chrono::Timelike;
 
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::execute;
@@ -330,7 +331,9 @@ fn apply_hft_state(new_hft: &HftState, s: &mut State) {
         if s.dn_imb_history.len() > 200 { s.dn_imb_history.pop_front(); }
     }
 
-    let secs = new_hft.secs_left;
+    let now = chrono::Utc::now().time();
+    let secs_into = (now.minute() as i32 % 15) * 60 + now.second() as i32;
+    let secs = 900 - secs_into;
     if s.prev_secs_left >= 0 && secs > s.prev_secs_left + 60 {
         s.session_open_up = new_hft.clob_trade_up;
         s.session_open_dn = new_hft.clob_trade_dn;
