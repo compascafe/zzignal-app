@@ -3,6 +3,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
+use chrono::Timelike;
 
 use crate::InputMode;
 use crate::State;
@@ -223,7 +224,9 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
             .style(Style::default().bg(BB_CARD))),
         cols[1]);
 
-    let sl = s.hft.secs_left;
+    let now = chrono::Utc::now().time();
+    let secs_into = (now.minute() as i32 % 15) * 60 + now.second() as i32;
+    let sl = 900 - secs_into;
     let min = sl / 60; let sec = sl % 60;
     let sl_c = if sl > 300 { BB_GREEN } else if sl > 60 { BB_AMBER } else if sl > 0 { BB_RED } else { BB_DIM };
     f.render_widget(
@@ -389,7 +392,9 @@ fn draw_indicators(f: &mut Frame, area: Rect, s: &State) {
     let btc_ref = if s.btc_open > 0.0 { s.btc_open } else { s.btc };
     let delta = s.btc - btc_ref;
     let delta_pct = if btc_ref > 0.0 { (s.btc / btc_ref - 1.0) * 100.0 } else { 0.0 };
-    let elapsed = if s.hft.secs_left >= 0 { (900 - s.hft.secs_left).max(0) } else { 0 };
+    let now = chrono::Utc::now().time();
+    let secs_into = (now.minute() as i32 % 15) * 60 + now.second() as i32;
+    let elapsed = secs_into;
     let elapsed_min = elapsed as f64 / 60.0;
     let (s3_border, s3_fg) = if delta_pct > 0.25 { (BB_GREEN, BB_GREEN) }
         else if delta_pct < -0.25 { (BB_RED, BB_RED) }
