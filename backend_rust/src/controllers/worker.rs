@@ -329,7 +329,7 @@ pub async fn run(
         match run_cycle(&tx, &creds, &mut cmd_rx, Arc::clone(&interval_arc), broadcast_tx.clone(), &mut provider_rx).await {
             Ok(_) => {
                 attempts = 0;
-                info!("Ciclo completado, reiniciando...");
+                info!("Ciclo completado, reiniciando inmediatamente...");
             }
             Err(e) => {
                 attempts += 1;
@@ -338,7 +338,6 @@ pub async fn run(
                 tokio::time::sleep(Duration::from_secs((5 * attempts).min(30) as u64)).await;
             }
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 

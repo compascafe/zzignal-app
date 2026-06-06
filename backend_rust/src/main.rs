@@ -219,9 +219,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             while let Some(tick) = tick_rx.recv().await {
                 let _guard = perf::TICK_CONSUMER.start();
-                // Drain residual ticks on session boundary
+                // Drain residual ticks on session boundary (capped at 50)
                 if drain3.swap(false, std::sync::atomic::Ordering::Acquire) {
-                    while tick_rx.try_recv().is_ok() {}
+                    let mut drained = 0;
+                    while drained < 50 && tick_rx.try_recv().is_ok() { drained += 1; }
                     continue;
                 }
                 if let Some(ref bn) = *depth3.read().await {

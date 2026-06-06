@@ -7,7 +7,6 @@ use chrono::Utc;
 use crate::models::state::AppState;
 use crate::controllers::worker::{CmdMsg, OrderSide, Outcome};
 use crate::db::{api, repository};
-use crate::services::risk::warmup_fetch_and_compute;
 
 /// Corre en background:
 ///  1. Cada 10s guarda snapshot del order book en PostgreSQL
@@ -151,98 +150,95 @@ async fn process_sessions(state: Arc<AppState>) {
     }
 
     let mut parents_to_replenish: Vec<i32> = Vec::new();
-    let mut stopped_ids: Vec<i32> = Vec::new(); // defer recording_sessions cleanup
+    let mut stopped_ids: Vec<i32> = Vec::new();
+    let mut handles = tokio::task::JoinSet::new();
 
     for session in to_stop {
-        let btc_price = *state.btc_price.read().await;
-        let parent_id = session.parent_id;
-        info!("[SESSION STOP] #{} | dur={}min | end={}",
-            session.id, session.duration_min,
-            session.scheduled_end.format("%H:%M:%S"));
+        let s = Arc::clone(&state);
+        handles.spawn(async move {
+            let btc_price = *s.btc_price.read().await;
+            info!("[SESSION STOP] #{} | dur={}min | end={}",
+                session.id, session.duration_min,
+                session.scheduled_end.format("%H:%M:%S"));
 
-        // Compute actual outcome BEFORE stop (strike vs current BTC price)
-        let actual_outcome = match (session.strike_price, btc_price) {
-            (Some(strike), Some(current)) if current > strike => "up".to_string(),
-            (Some(strike), Some(current)) if current < strike => "down".to_string(),
-            (Some(_), Some(_)) => "tie".to_string(),
-            _ => "tie".to_string(),
-        };
+            let actual_outcome = match (session.strike_price, btc_price) {
+                (Some(strike), Some(current)) if current > strike => "up".to_string(),
+                (Some(strike), Some(current)) if current < strike => "down".to_string(),
+                (Some(_), Some(_)) => "tie".to_string(),
+                _ => "tie".to_string(),
+            };
 
-        // ─── T-5 Certainty Strategy: resolve prediction ──────────────────────
-        let final_poly = if actual_outcome == "up" { 1.0 } else if actual_outcome == "down" { 0.0 } else { 0.5 };
-        let t5_result = state.t5_manager.on_session_close(session.id, &actual_outcome, final_poly);
-        if let Some(ref snap) = t5_result {
-            if !snap.prediction.is_empty() {
-                let csv_path = state.session_manager.session_path(session.id);
-                if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&csv_path) {
-                    use std::io::Write;
-                    let _ = writeln!(file, "# T5_RESULT: session_id={} prediction={} actual={} correct={} pnl={:.4} entry={:.4} exit={:?} vol={:.6}",
-                        session.id, snap.prediction, snap.actual_outcome, snap.correct, snap.virtual_pnl,
-                        snap.entry_price, snap.exit_price, snap.volatility_2min);
+            let final_poly = if actual_outcome == "up" { 1.0 } else if actual_outcome == "down" { 0.0 } else { 0.5 };
+            let t5_result = s.t5_manager.on_session_close(session.id, &actual_outcome, final_poly);
+            if let Some(ref snap) = t5_result {
+                if !snap.prediction.is_empty() {
+                    let csv_path = s.session_manager.session_path(session.id);
+                    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&csv_path) {
+                        use std::io::Write;
+                        let _ = writeln!(file, "# T5_RESULT: session_id={} prediction={} actual={} correct={} pnl={:.4} entry={:.4} exit={:?} vol={:.6}",
+                            session.id, snap.prediction, snap.actual_outcome, snap.correct, snap.virtual_pnl,
+                            snap.entry_price, snap.exit_price, snap.volatility_2min);
+                    }
                 }
             }
-        }
-        // ─── T-3 Aggressive Strategy: resolve prediction ────────────────────
-        let t3_result = state.t3_manager.on_session_close(session.id, &actual_outcome, final_poly);
-        if let Some(ref snap) = t3_result {
-            if !snap.prediction.is_empty() {
-                let csv_path = state.session_manager.session_path(session.id);
-                if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&csv_path) {
-                    use std::io::Write;
-                    let _ = writeln!(file, "# T3_RESULT: session_id={} prediction={} actual={} correct={} pnl={:.4} entry={:.4} exit={:?}",
-                        session.id, snap.prediction, snap.actual_outcome, snap.correct, snap.virtual_pnl,
-                        snap.entry_price, snap.exit_price);
+            let t3_result = s.t3_manager.on_session_close(session.id, &actual_outcome, final_poly);
+            if let Some(ref snap) = t3_result {
+                if !snap.prediction.is_empty() {
+                    let csv_path = s.session_manager.session_path(session.id);
+                    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&csv_path) {
+                        use std::io::Write;
+                        let _ = writeln!(file, "# T3_RESULT: session_id={} prediction={} actual={} correct={} pnl={:.4} entry={:.4} exit={:?}",
+                            session.id, snap.prediction, snap.actual_outcome, snap.correct, snap.virtual_pnl,
+                            snap.entry_price, snap.exit_price);
+                    }
                 }
             }
+            s.pnr_manager.flush_session(session.id, &actual_outcome);
+            s.odiseo_trading.on_session_close(session.id, &actual_outcome);
+
+            let mut stopped_ok = false;
+            if let Err(e) = repository::stop_session(&s, session.id, btc_price, btc_price).await {
+                warn!("stop_session #{} FAILED: {}", session.id, e);
+            } else {
+                info!("[SESSION STOPPED] #{} → completed", session.id);
+                stopped_ok = true;
+            }
+
+            let mut eng = s.adaptive_engine.lock().await;
+            let predicted_bias = eng.predicted_bias().to_string();
+            if !predicted_bias.is_empty() && predicted_bias != "IDLE" {
+                let accuracy = predicted_bias.eq_ignore_ascii_case(&actual_outcome);
+                let start_price = session.btc_price_start;
+                {
+                    let ctx = s.macro_ctx.read().await;
+                    let _ = repository::insert_session_log(
+                        s.db.as_ref(), session.id, &predicted_bias,
+                        Some(eng.macd_hist()), Some(eng.rsi_value()), Some(eng.vfi_value()),
+                        Some(eng.macro_slope()), start_price,
+                        Some(eng.cp_quantile()), Some(eng.cp_alpha()),
+                        Some(ctx.vfi_confidence), Some(ctx.db_accuracy_factor), Some(ctx.dynamic_rsi),
+                    ).await;
+                    let _ = repository::complete_session_log(
+                        s.db.as_ref(), session.id, &actual_outcome, accuracy,
+                    ).await;
+                }
+                eng.cp_mut().record_accuracy(accuracy);
+                if !accuracy { eng.cp_mut().robbins_monro_update(0.5); }
+                if eng.cp_mut().should_auto_widen() { eng.cp_mut().auto_widen(); }
+                let vfi_sign = if eng.vfi_value() > 0.1 { 1.0 } else if eng.vfi_value() < -0.1 { -1.0 } else { 0.0 };
+                let sma_sign = if eng.macro_slope() > 0.0001 { 1.0 } else if eng.macro_slope() < -0.0001 { -1.0 } else { 0.0 };
+                eng.cp_mut().reinforce_weights(accuracy, vfi_sign, sma_sign);
+                eng.cp_mut().adjust_confidence_level();
+            }
+            (session.parent_id, stopped_ok.then_some(session.id))
+        });
+    }
+    // Wait for all stop tasks before proceeding with new sessions
+    while let Some(result) = handles.join_next().await {
+        if let Ok((parent_id, stopped_id)) = result {
+            if let Some(pid) = parent_id { parents_to_replenish.push(pid); }
+            if let Some(sid) = stopped_id { stopped_ids.push(sid); }
         }
-        // ─── Hydra No Return: flush PNR data ────────────────────────────────
-        state.pnr_manager.flush_session(session.id, &actual_outcome);
-        // ─── Odiseo Trading: settle paper trades ────────────────────────────
-        state.odiseo_trading.on_session_close(session.id, &actual_outcome);
-
-        // ─── STOP in DB (always, before any other writes) ────────────────────
-        if let Err(e) = repository::stop_session(&state, session.id, btc_price, btc_price).await {
-            warn!("stop_session #{} FAILED: {}", session.id, e);
-        } else {
-            info!("[SESSION STOPPED] #{} → completed", session.id);
-            stopped_ids.push(session.id);
-        }
-        if let Some(pid) = parent_id {
-            parents_to_replenish.push(pid);
-        }
-
-        // ─── Feedback (runs in own spawn, lock().await is safe) ─────────────
-        let mut eng = state.adaptive_engine.lock().await;
-        let predicted_bias = eng.predicted_bias().to_string();
-        if predicted_bias.is_empty() || predicted_bias == "IDLE" { continue; }
-
-        let accuracy = predicted_bias.eq_ignore_ascii_case(&actual_outcome);
-
-        // Insert/complete session log
-        let start_price = session.btc_price_start;
-        {
-            let ctx = state.macro_ctx.read().await;
-            let _ = repository::insert_session_log(
-                state.db.as_ref(), session.id, &predicted_bias,
-                Some(eng.macd_hist()), Some(eng.rsi_value()), Some(eng.vfi_value()),
-                Some(eng.macro_slope()), start_price,
-                Some(eng.cp_quantile()), Some(eng.cp_alpha()),
-                Some(ctx.vfi_confidence), Some(ctx.db_accuracy_factor), Some(ctx.dynamic_rsi),
-            ).await;
-            let _ = repository::complete_session_log(
-                state.db.as_ref(), session.id, &actual_outcome, accuracy,
-            ).await;
-        }
-
-        // Reinforce learning
-        eng.cp_mut().record_accuracy(accuracy);
-        if !accuracy { eng.cp_mut().robbins_monro_update(0.5); }
-        if eng.cp_mut().should_auto_widen() { eng.cp_mut().auto_widen(); }
-        let vfi_sign = if eng.vfi_value() > 0.1 { 1.0 } else if eng.vfi_value() < -0.1 { -1.0 } else { 0.0 };
-        let sma_sign = if eng.macro_slope() > 0.0001 { 1.0 } else if eng.macro_slope() < -0.0001 { -1.0 } else { 0.0 };
-        eng.cp_mut().reinforce_weights(accuracy, vfi_sign, sma_sign);
-        eng.cp_mut().adjust_confidence_level();
-        drop(eng);
     }
 
     // 2. Auto-generar siguiente hijo para padres indefinidos
@@ -266,41 +262,7 @@ async fn process_sessions(state: Arc<AppState>) {
         state.tracking_state.reset_session_baselines();
         state.recording_sessions.write().await.push(session.id);
 
-        // ─── Adaptive Risk Engine: refresh macro warm‑up + feedback from history ──
-        {
-            // Load recent accuracy from past sessions for CP feedback
-            let recent_accuracy = repository::get_recent_accuracy(state.db.as_ref(), 16).await;
-            let mut eng = state.adaptive_engine.lock().await;
-            // Replay historical accuracy into CP engine (fast, no I/O)
-            for correct in &recent_accuracy {
-                eng.cp_mut().record_accuracy(*correct);
-            }
-            if eng.cp_mut().should_auto_widen() {
-                eng.cp_mut().auto_widen();
-            }
-            // Pre-trade calibration: accuracy < 65% → widen CP
-            let mut ctx = state.macro_ctx.write().await;
-            eng.pre_trade_calibrate(&mut ctx, &recent_accuracy);
-            // VFI-weighted bias with divergence detection
-            eng.compute_weighted_bias(&mut ctx);
-        }
-        // Fire‑and‑forget: warmup refresh (lock‑free HTTP, only brief lock for apply)
-        {
-            let warm_state = Arc::clone(&state);
-            let session_dur = session.duration_min;
-            tokio::spawn(async move {
-                info!("AdaptiveRiskEngine: refreshing warm‑up for {}-min session...", session_dur);
-                match warmup_fetch_and_compute().await {
-                    Ok(result) => {
-                        warm_state.adaptive_engine.lock().await.apply_warmup_result(result);
-                        info!("AdaptiveRiskEngine: warm‑up refreshed for {}-min session", session_dur);
-                    }
-                    Err(e) => warn!("AdaptiveRiskEngine session-start refresh failed: {e}"),
-                }
-            });
-        }
-
-        // New session: truncate and write fresh header
+        // New session: truncate and write fresh header (start IMMEDIATELY, no warmup delay)
         if let Err(e) = state.session_manager.start_session(session.id, &session.name) {
             warn!("SessionManager start #{}: {}", session.id, e);
         }
