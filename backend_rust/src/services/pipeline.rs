@@ -1,44 +1,12 @@
 use chrono::Utc;
-use serde_json::json;
-use tracing::warn;
 
 use crate::controllers::worker::PriceLevel;
-use crate::db::repository as session_repo;
 use crate::models::hft::{CsvRecord, EventType, PolyDepthFrame};
 use crate::models::state::AppState;
 use crate::services::metrics;
 
 pub async fn capture_book_db(state: &AppState, side: &str, bids: &[PriceLevel], asks: &[PriceLevel]) {
-    let session_ids = state.recording_sessions.read().await.clone();
-    if session_ids.is_empty() { return; }
-
-    let best_bid = bids.first().map(|l| l.price);
-    let best_bid_sz = bids.first().map(|l| l.size);
-    let best_ask = asks.first().map(|l| l.price);
-    let best_ask_sz = asks.first().map(|l| l.size);
-    let spread = best_bid.and_then(|bb| best_ask.map(|ba| ba - bb));
-    let mid_price = best_bid.and_then(|bb| best_ask.map(|ba| (bb + ba) / 2.0));
-    let bid_vol_5: f64 = bids.iter().take(5).map(|l| l.size).sum();
-    let ask_vol_5: f64 = asks.iter().take(5).map(|l| l.size).sum();
-    let bid_vol_10: f64 = bids.iter().take(10).map(|l| l.size).sum();
-    let ask_vol_10: f64 = asks.iter().take(10).map(|l| l.size).sum();
-    let bid_vol: f64 = bids.iter().map(|l| l.size).sum();
-    let ask_vol: f64 = asks.iter().map(|l| l.size).sum();
-    let imb = if ask_vol > 0.0 { Some(bid_vol / ask_vol) } else { None };
-    let dbids = json!(bids.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
-    let dasks = json!(asks.iter().map(|l| json!({"p":l.price,"s":l.size})).collect::<Vec<_>>());
-    let btc_price = *state.btc_price.read().await;
-
-    for &session_id in &session_ids {
-        if let Err(e) = session_repo::insert_session_snapshot(
-            state, session_id, side,
-            best_bid, best_bid_sz, best_ask, best_ask_sz, spread, mid_price,
-            Some(bid_vol_5), Some(ask_vol_5), Some(bid_vol_10), Some(ask_vol_10),
-            Some(bid_vol), Some(ask_vol), imb, mid_price, mid_price.map(|p| 1.0 - p),
-            Some(dbids.clone()), Some(dasks.clone()), btc_price,
-            None, None, None,
-        ).await { warn!("Session snapshot #{}: {}", session_id, e); }
-    }
+    let _ = (state, side, bids, asks);
 }
 
 pub async fn push_depth_frame(state: &AppState, side: u8, bids: &[PriceLevel], asks: &[PriceLevel]) {
@@ -129,19 +97,7 @@ pub async fn capture_combined(
 
     rec.poly_spread = rec.clob_trade_up - rec.clob_trade_dn;
 
-    let secs_left = state.t5_manager.seconds_left(active_sid);
-    rec.pnr_seconds_left = secs_left as i32;
-
-    // ─── PNR — solo en modo normal ────────────────────────────────────
-    if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
-        if secs_left >= 0 && secs_left <= 300 {
-            let pnr_price = rec.poly_mid;
-            let pnr_ret_up = if rec.poly_ask > 0.0 { 1.0 - rec.poly_ask } else { 0.0 };
-            let pnr_ret_dn = if rec.poly_bid > 0.0 { rec.poly_bid } else { 0.0 };
-            state.pnr_manager.accumulate_tick(active_sid, secs_left as i32,
-                pnr_price, pnr_ret_up, pnr_ret_dn);
-        }
-    }
+    rec.pnr_seconds_left = 0;
 
     // ─── Anti-Flash Dump metrics ───────────────────────────────────────
     {
@@ -430,41 +386,9 @@ pub async fn capture_combined(
 
     state.session_manager.push(&rec);
 
-    if !state.diagnostic_mode.load(std::sync::atomic::Ordering::Relaxed) {
-        let _result = state.strategy_manager.lock().unwrap().evaluate(&rec);
-    }
-
     state.mem_hft.write().await.push(rec.clone());
 
-    if let Some(_pool) = state.db.as_ref() {
-        for &sid in &session_ids {
-            let _ = sqlx::query(
-                "INSERT INTO hft_snapshots (btc_price_binance, btc_bid_vol_5, btc_ask_vol_5, poly_mid_price, poly_imbalance, latency_delta, session_id, binance_lag_ms, binance_micro_price_at_t) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"
-            )
-            .bind(rec.binance_price)
-            .bind(0.0f64)
-            .bind(0.0f64)
-            .bind(rec.poly_mid)
-            .bind(rec.poly_imbalance)
-            .bind(rec.latencia_ms as f64)
-            .bind(sid)
-            .bind(rec.latencia_ms)
-            .bind(0.0f64)
-            .execute(_pool)
-            .await;
-        }
-        if evt_type == EventType::Trade && !session_ids.is_empty() {
-            let btc_price = *state.btc_price.read().await;
-            let db_trade_side = match trade_side {
-                "BUY" => "buy", "SELL" => "sell", _ => trade_side,
-            };
-            for &sid in &session_ids {
-                if let Err(e) = session_repo::insert_session_trade(
-                    state, sid, _side, db_trade_side, trade_price, trade_size, btc_price,
-                ).await { warn!("Session trade #{}: {}", sid, e); }
-            }
-        }
-    }
+    // DB removed — no-op
 
 }
 

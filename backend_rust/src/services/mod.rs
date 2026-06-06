@@ -11,10 +11,8 @@
 /// - `strategies/`   — Strategy implementations
 
 pub mod binance;
-pub mod engine;
 pub mod metrics;
 pub mod perf;
 pub mod pipeline;
-pub mod risk;
 pub mod session;
 pub mod strategies;

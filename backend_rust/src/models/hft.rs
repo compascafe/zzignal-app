@@ -1,7 +1,91 @@
 use serde::Serialize;
 use crate::controllers::worker::PriceLevel;
+use std::cell::UnsafeCell;
+use std::hint;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-pub use crate::utils::ring_buffer::{BinanceState, PriceRingBuffer};
+const RING_CAP: usize = 4096;
+const RING_MASK: usize = RING_CAP - 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BinanceState {
+    pub timestamp:         u64,
+    pub mid_price:         f64,
+    pub micro_price:       f64,
+    pub total_liquidity:   f64,
+    pub binance_vol_100ms: f64,
+    pub imbalance:         f32,
+}
+
+impl BinanceState {
+    pub const EMPTY: Self = Self { timestamp: 0, mid_price: 0.0, micro_price: 0.0, total_liquidity: 0.0, binance_vol_100ms: 0.0, imbalance: 0.0 };
+}
+
+impl Default for BinanceState {
+    fn default() -> Self { Self { timestamp: 0, mid_price: 0.0, micro_price: 0.0, total_liquidity: 0.0, binance_vol_100ms: 0.0, imbalance: 0.0 } }
+}
+
+pub struct PriceRingBuffer {
+    slots: Box<[UnsafeCell<BinanceState>]>,
+    write_seq: AtomicU64,
+}
+
+unsafe impl Send for PriceRingBuffer {}
+unsafe impl Sync for PriceRingBuffer {}
+
+impl PriceRingBuffer {
+    pub fn new() -> Self {
+        let mut vec = Vec::with_capacity(RING_CAP);
+        for _ in 0..RING_CAP { vec.push(UnsafeCell::new(BinanceState::default())); }
+        Self { slots: vec.into_boxed_slice(), write_seq: AtomicU64::new(0) }
+    }
+    pub fn push(&self, state: BinanceState) {
+        let seq = self.write_seq.fetch_add(1, Ordering::Release);
+        let idx = (seq as usize) & RING_MASK;
+        unsafe { self.slots[idx].get().write(state); }
+    }
+    pub fn get_closest_to(&self, target_ts: u64) -> Option<BinanceState> {
+        let mut seq = self.write_seq.load(Ordering::Acquire);
+        if seq == 0 {
+            for _ in 0..16 { hint::spin_loop(); seq = self.write_seq.load(Ordering::Acquire); if seq != 0 { break; } }
+            if seq == 0 { return None; }
+        }
+        let count = seq.min(RING_CAP as u64);
+        let base = seq.wrapping_sub(count);
+        let mut lo: u64 = 0;
+        let mut hi: u64 = count.saturating_sub(1);
+        let ts_lo = unsafe { (*self.slots[((base + lo) as usize) & RING_MASK].get()).timestamp };
+        let ts_hi = unsafe { (*self.slots[((base + hi) as usize) & RING_MASK].get()).timestamp };
+        if target_ts <= ts_lo { return Some(unsafe { *self.slots[((base + lo) as usize) & RING_MASK].get() }); }
+        if target_ts >= ts_hi { return Some(unsafe { *self.slots[((base + hi) as usize) & RING_MASK].get() }); }
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2;
+            let phys = ((base + mid) as usize) & RING_MASK;
+            let ts_mid = unsafe { (*self.slots[phys].get()).timestamp };
+            if ts_mid <= target_ts { lo = mid; } else { hi = mid; }
+        }
+        let state_lo = unsafe { *self.slots[((base + lo) as usize) & RING_MASK].get() };
+        let state_hi = unsafe { *self.slots[((base + hi) as usize) & RING_MASK].get() };
+        let dist_lo = if target_ts >= state_lo.timestamp { target_ts - state_lo.timestamp } else { state_lo.timestamp - target_ts };
+        let dist_hi = if target_ts >= state_hi.timestamp { target_ts - state_hi.timestamp } else { state_hi.timestamp - target_ts };
+        Some(if dist_lo <= dist_hi { state_lo } else { state_hi })
+    }
+    pub fn latest(&self) -> Option<BinanceState> {
+        let seq = self.write_seq.load(Ordering::Acquire);
+        if seq == 0 { return None; }
+        unsafe { Some(*self.slots[((seq.wrapping_sub(1)) as usize) & RING_MASK].get()) }
+    }
+    pub fn len(&self) -> usize { (self.write_seq.load(Ordering::Acquire) as usize).min(RING_CAP) }
+    pub fn clear(&self) {
+        for i in 0..RING_CAP { unsafe { *self.slots[i].get() = BinanceState::EMPTY; } }
+        self.write_seq.store(0, Ordering::Release);
+    }
+}
+
+impl Default for PriceRingBuffer {
+    fn default() -> Self { Self::new() }
+}
 
 /// Snapshot completo del orderbook de Polymarket (todos los niveles).
 /// Se captura en cada BOOK_UPDATE y se almacena en un buffer circular en AppState.

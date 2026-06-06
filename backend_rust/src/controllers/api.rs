@@ -8,7 +8,6 @@ use axum::{
     Json,
 };
 use axum::extract::ws::{Message, WebSocket};
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
@@ -17,8 +16,6 @@ use tracing::info;
 
 use crate::models::state::AppState;
 use crate::controllers::worker::{self, CandleInterval, CmdMsg, OrderSide, Outcome};
-use crate::db::api as db_api;
-use crate::services::perf;
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -35,25 +32,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/approve",         post(post_approve))
         // Wrap USDC.e → pUSD vía CollateralOnramp (CLOB V2)
         .route("/api/wrap",            post(post_wrap))
-        // Macro indicators (Adaptive Risk Engine)
-        .route("/api/macro",           get(get_macro))
-        // Wisdom & RL state
-        .route("/api/wisdom",          get(get_wisdom))
-        .route("/api/wisdom/save",     post(snapshot_wisdom))
-        .route("/api/wisdom/list",     get(list_wisdom_snapshots))
-        .route("/api/wisdom/export",   get(export_wisdom))
-        .route("/api/wisdom/export-bulk",get(export_wisdom_bulk))
-        .route("/api/wisdom/import",   post(import_wisdom))
-
-        // ─── Wisdom v2: T-5 Certainty Strategy ─────────────────────────────
-        .route("/api/wisdom2",         get(get_wisdom2))
-
-        // ─── Wisdom v3: T-3 Aggressive Strategy ────────────────────────────
-        .route("/api/wisdom3",         get(get_wisdom3))
-
-        // ─── Wisdom v4: Hydra No Return ────────────────────────────────────
-        .route("/api/wisdom4",         get(get_wisdom4))
-
         // ─── Odiseo Trading ────────────────────────────────────────────────
         .route("/api/odiseo",          get(get_odiseo))
         .route("/api/odiseo/live",     post(post_odiseo_live))
@@ -91,43 +69,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/orders/scalp",    post(post_scalp_order))
         // Fills
         .route("/api/fills",           get(get_fills))
-        // Análisis histórico (PostgreSQL)
-        .route("/api/analysis/candles",get(analysis_candles))
-        .route("/api/analysis/pnl",    get(analysis_pnl))
-        .route("/api/analysis/fills",  get(analysis_fills))
-        // Performance counters
-        .route("/api/perf",            get(get_perf))
-        .route("/api/perf/reset",      post(reset_perf))
         // Live CSV export (in-memory buffer, no DB required)
         .route("/api/csv/live",        get(export_live_csv))
         // WebSocket
         .route("/ws",                  get(ws_handler))
+        // DB stubs
+        .route("/api/db/snapshots",    get(db_snapshots_stub))
+        .route("/api/db/executions",   get(db_executions_stub))
         .with_state(Arc::clone(&state));
 
-    let db_r = db_api::router(Arc::clone(&state));
-    let session_r = db_api::session_router(Arc::clone(&state)); // clone para no consumir state
-
-    #[allow(unused_mut)]
-    let mut app = core.merge(db_r).merge(session_r);
-
-    // ─── Premium modules (conditional compilation) ───
-    #[cfg(feature = "premium-collector")]
-    {
-        use crate::premium::collector::api as collector_api;
-        app = app.merge(collector_api::router(Arc::clone(&state)));
-    }
-
-    #[cfg(feature = "premium-patterns")]
-    {
-        use crate::premium::patterns::api as patterns_api;
-        app = app.merge(patterns_api::router(Arc::clone(&state)));
-    }
-
-    #[cfg(feature = "premium-executor")]
-    {
-        use crate::premium::executor::api as executor_api;
-        app = app.merge(executor_api::router(Arc::clone(&state)));
-    }
+    let app = core;
 
     app.layer(CorsLayer::permissive())
 }
@@ -136,83 +87,15 @@ pub fn router(state: Arc<AppState>) -> Router {
 // Verifica: compilación, conexión BD, migraciones, tablas existentes
 
 async fn get_health(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let app_version   = env!("CARGO_PKG_VERSION");
-    let build_time    = option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("dev");
-    let git_sha       = option_env!("VERGEN_GIT_SHA").unwrap_or("dev");
-    let target        = option_env!("VERGEN_CARGO_TARGET_TRIPLE").unwrap_or("unknown");
-
-    // Minimum required tables for full functionality
-    let expected_tables: &[&str] = &[
-        "btc_ticks",
-        "candles",
-        "fills",
-        "hft_snapshots",
-        "order_book_snapshots",
-        "recording_sessions",
-        "scheduled_executions",
-        "session_snapshots",
-        "session_trades",
-    ];
-
-    let (db_ok, db_error, mut tables, mut missing_tables) = match s.db.as_ref() {
-        Some(pool) => {
-            match sqlx::query("SELECT 1 AS ping").fetch_one(pool).await {
-                Ok(_) => {
-                    match sqlx::query_as::<_, (String,)>(r#"
-                        SELECT table_name FROM information_schema.tables
-                        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-                        ORDER BY table_name
-                    "#).fetch_all(pool).await {
-                        Ok(rows) => {
-                            let existing: Vec<String> = rows.into_iter().map(|(t,)| t).collect();
-                            let missing: Vec<String> = expected_tables.iter()
-                                .filter(|t| !existing.iter().any(|e| e == **t))
-                                .map(|t| t.to_string())
-                                .collect();
-                            (true, None, existing, missing)
-                        }
-                        Err(e) => {
-                            let msg = format!("error leyendo tablas: {}", e);
-                            let missing: Vec<String> = expected_tables.iter().map(|t| t.to_string()).collect();
-                            (false, Some(msg), vec![], missing)
-                        }
-                    }
-                }
-                Err(e) => {
-                    let msg = format!("ping falló: {e}");
-                    let missing: Vec<String> = expected_tables.iter().map(|t| t.to_string()).collect();
-                    (false, Some(msg), vec![], missing)
-                }
-            }
-        }
-        None => {
-            let missing: Vec<String> = expected_tables.iter().map(|t| t.to_string()).collect();
-            (false, Some("DATABASE_URL no configurada".into()), vec![], missing)
-        }
-    };
-
-    // Ensure tables/missing_tables are bound even if unreachable
-    if tables.is_empty() && db_ok {
-        tables = vec!["(empty)".into()];
-    }
-    if missing_tables.is_empty() && !db_ok {
-        missing_tables = expected_tables.iter().map(|t| t.to_string()).collect();
-    }
+    let app_version = env!("CARGO_PKG_VERSION");
+    let build_time  = option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("dev");
+    let git_sha     = option_env!("VERGEN_GIT_SHA").unwrap_or("dev");
 
     Json(json!({
         "app": {
             "version":    app_version,
             "build_time": build_time,
             "git_sha":    git_sha,
-            "target":     target,
-        },
-        "database": {
-            "connected":      db_ok,
-            "error":          db_error,
-            "tables":         tables,
-            "expected":       expected_tables,
-            "missing":        missing_tables,
-            "all_present":    missing_tables.is_empty(),
         },
         "system": system_metrics(),
         "latency": {
@@ -324,74 +207,6 @@ async fn post_wrap(State(s): State<Arc<AppState>>) -> Json<Value> {
     }
 }
 
-// ─── Adaptive Risk Engine: Macro Indicators ────────────────────────────────────
-
-async fn get_macro(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let ctx = s.macro_ctx.read().await;
-    Json(json!({
-        "predicted_bias":   ctx.predicted_bias,
-        "sma50":            ctx.sma200 * 0.99,
-        "sma200":           ctx.sma200,
-        "macro_slope":      ctx.macro_slope,
-        "macd_line":        ctx.macd_hist,
-        "macd_signal":      ctx.macd_hist * 0.8,
-        "macd_hist":        ctx.macd_hist,
-        "vfi":              ctx.vfi,
-        "rsi14":            ctx.rsi14,
-        "cp_quantile":      ctx.cp_quantile,
-        "cp_alpha":         ctx.cp_alpha,
-        "auto_widened":     ctx.auto_widened,
-        "feedback_count":   ctx.feedback_count,
-        "hunting_mode":     ctx.hunting_mode,
-        "hunting_z_score":  ctx.hunting_z_score,
-        "volatility_1h":    ctx.volatility_1h,
-        "signal_priority":  ctx.signal_priority,
-    }))
-}
-
-async fn get_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let ctx = s.macro_ctx.read().await;
-    Json(json!({
-        "mode":               ctx.mode,
-        "accuracy_24h":       ctx.accuracy_24h,
-        "cp_confidence":      ctx.cp_confidence,
-        "cp_quantile":        ctx.cp_quantile,
-        "cp_alpha":           ctx.cp_alpha,
-        "weight_sma":         ctx.weight_sma,
-        "weight_vfi":         ctx.weight_vfi,
-        "weight_macd":        ctx.weight_macd,
-        "weight_rsi":         ctx.weight_rsi,
-        "weight_bb":          ctx.weight_bb,
-        "feedback_count":     ctx.feedback_count,
-        "auto_widened":       ctx.auto_widened,
-        "dynamic_rsi":        ctx.dynamic_rsi,
-        "vfi_confidence":     ctx.vfi_confidence,
-        "db_accuracy_factor": ctx.db_accuracy_factor,
-        "hunting_mode":       ctx.hunting_mode,
-        "hunting_z_score":    ctx.hunting_z_score,
-        "volatility_1h":      ctx.volatility_1h,
-        "signal_priority":    ctx.signal_priority,
-    }))
-}
-
-async fn get_wisdom2(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let json_str = s.t5_manager.export_wisdom2();
-    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
-    Json(value)
-}
-
-async fn get_wisdom3(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let json_str = s.t3_manager.export_wisdom3();
-    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
-    Json(value)
-}
-
-async fn get_wisdom4(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let json_str = s.pnr_manager.export_json();
-    let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
-    Json(value)
-}
-
 async fn get_odiseo(State(s): State<Arc<AppState>>) -> Json<Value> {
     let json_str = s.odiseo_trading.export_json();
     let value: Value = serde_json::from_str(&json_str).unwrap_or(json!({"error": "parse failed"}));
@@ -499,101 +314,6 @@ async fn post_odiseo_trade_config(State(s): State<Arc<AppState>>, Json(body): Js
     }))
 }
 
-async fn export_wisdom(State(s): State<Arc<AppState>>) -> Response {
-    let eng = s.adaptive_engine.lock().await;
-    let ctx = s.macro_ctx.read().await;
-    let wisdom = json!({
-        "version":           "1.0",
-        "exported_at":       chrono::Utc::now().to_rfc3339(),
-        "cp": {
-            "confidence_level":  eng.cp.confidence_level,
-            "quantile_macd":     eng.cp.quantile_macd,
-            "quantile_rsi":      eng.cp.quantile_rsi,
-            "quantile_price":    eng.cp.quantile_price,
-            "alpha":             eng.cp.alpha,
-            "feedback_count":    eng.cp.feedback_count,
-        },
-        "weights": {
-            "sma":  eng.cp.weight_sma,
-            "vfi":  eng.cp.weight_vfi,
-            "macd": eng.cp.weight_macd,
-            "rsi":  eng.cp.weight_rsi,
-        },
-        "context": {
-            "dynamic_rsi":        ctx.dynamic_rsi,
-            "vfi_confidence":     ctx.vfi_confidence,
-            "db_accuracy_factor": ctx.db_accuracy_factor,
-        },
-    });
-    let body = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
-    (axum::http::StatusCode::OK,
-     [("Content-Type", "application/json"),
-      ("Content-Disposition", "attachment; filename=\"wisdom_state.json\"")],
-     body).into_response()
-}
-
-async fn snapshot_wisdom(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let wisdom = build_wisdom_json(&s).await;
-    let dir = "wisdom";
-    std::fs::create_dir_all(dir).ok();
-    let ts = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
-    let path = format!("{}/wisdom_state_{}.json", dir, ts);
-    let body = serde_json::to_string_pretty(&wisdom).unwrap_or_default();
-    match std::fs::write(&path, &body) {
-        Ok(_) => Json(json!({"ok": true, "path": path, "timestamp": ts})),
-        Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
-    }
-}
-
-async fn list_wisdom_snapshots() -> Json<Value> {
-    let dir = "wisdom";
-    let mut files: Vec<Value> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".json") {
-                let meta = entry.metadata().ok();
-                files.push(json!({
-                    "name": name,
-                    "size": meta.as_ref().map(|m| m.len()).unwrap_or(0),
-                    "modified": meta.and_then(|m| m.modified().ok())
-                        .map(|t| {
-                            let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            dt.to_rfc3339()
-                        }).unwrap_or_default(),
-                }));
-            }
-        }
-    }
-    files.sort_by(|a, b| b["name"].as_str().cmp(&a["name"].as_str()));
-    Json(json!(files))
-}
-
-async fn export_wisdom_bulk() -> Response {
-    use std::io::Write;
-    let dir = "wisdom";
-    let mut zip_buf = Vec::new();
-    let mut zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".json") { continue; }
-            if let Ok(data) = std::fs::read(entry.path()) {
-                if zip_writer.start_file(&name, options).is_err() { continue; }
-                if zip_writer.write_all(&data).is_err() { continue; }
-            }
-        }
-    }
-    let _ = zip_writer.finish();
-    (axum::http::StatusCode::OK,
-     [("Content-Type", "application/zip"),
-      ("Content-Disposition", "attachment; filename=\"wisdom_bulk.zip\"")],
-     zip_buf).into_response()
-}
-
 // ─── Live CSV Export (from in-memory buffer — no DB required) ──────────────────
 
 async fn export_live_csv(
@@ -638,43 +358,6 @@ async fn export_live_csv(
 struct LiveCsvParams {
     limit: Option<usize>,
     session_id: Option<i32>,
-}
-
-async fn import_wisdom(State(s): State<Arc<AppState>>, Json(body): Json<Value>) -> Json<Value> {
-    let mut eng = s.adaptive_engine.lock().await;
-    match eng.import_wisdom(&body) {
-        Ok(()) => Json(json!({"ok": true, "message": "Wisdom imported successfully"})),
-        Err(e) => Json(json!({"ok": false, "error": e})),
-    }
-}
-
-async fn build_wisdom_json(s: &AppState) -> Value {
-    let eng = s.adaptive_engine.lock().await;
-    let ctx = s.macro_ctx.read().await;
-    json!({
-        "version":           "1.0",
-        "exported_at":       chrono::Utc::now().to_rfc3339(),
-        "cp": {
-            "confidence_level":  eng.cp.confidence_level,
-            "quantile_macd":     eng.cp.quantile_macd,
-            "quantile_rsi":      eng.cp.quantile_rsi,
-            "quantile_price":    eng.cp.quantile_price,
-            "alpha":             eng.cp.alpha,
-            "feedback_count":    eng.cp.feedback_count,
-        },
-        "weights": {
-            "sma":  eng.cp.weight_sma,
-            "vfi":  eng.cp.weight_vfi,
-            "macd": eng.cp.weight_macd,
-            "rsi":  eng.cp.weight_rsi,
-            "bb":   eng.cp.weight_bb,
-        },
-        "context": {
-            "dynamic_rsi":        ctx.dynamic_rsi,
-            "vfi_confidence":     ctx.vfi_confidence,
-            "db_accuracy_factor": ctx.db_accuracy_factor,
-        },
-    })
 }
 
 // ─── Order Book ───────────────────────────────────────────────────────────────
@@ -891,65 +574,6 @@ async fn get_fills(State(s): State<Arc<AppState>>) -> Json<Value> {
         "session": f.session,
     })).collect();
     Json(json!(arr))
-}
-
-// ─── Análisis (PostgreSQL) ────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct CandleQuery {
-    interval: Option<String>,
-    limit:    Option<i64>,
-    from:     Option<DateTime<Utc>>,
-    to:       Option<DateTime<Utc>>,
-}
-
-async fn analysis_candles(
-    State(s): State<Arc<AppState>>,
-    Query(q): Query<CandleQuery>,
-) -> Json<Value> {
-    let interval = q.interval.as_deref().unwrap_or("1m");
-    let limit    = q.limit.unwrap_or(500).min(5000);
-    match crate::utils::persistence::query_candles(s.db.as_ref(), interval, limit, q.from, q.to).await {
-        Ok(rows) => Json(json!(rows)),
-        Err(e)   => Json(json!({"error": e.to_string()})),
-    }
-}
-
-async fn analysis_pnl(State(s): State<Arc<AppState>>) -> Json<Value> {
-    match crate::utils::persistence::query_pnl(s.db.as_ref()).await {
-        Ok(rows) => Json(json!(rows)),
-        Err(e)   => Json(json!({"error": e.to_string()})),
-    }
-}
-
-#[derive(Deserialize)]
-struct FillQuery {
-    limit: Option<i64>,
-}
-
-async fn analysis_fills(
-    State(s): State<Arc<AppState>>,
-    Query(q): Query<FillQuery>,
-) -> Json<Value> {
-    let limit = q.limit.unwrap_or(100).min(1000);
-    match crate::utils::persistence::query_fills(s.db.as_ref(), limit).await {
-        Ok(rows) => Json(json!(rows)),
-        Err(e)   => Json(json!({"error": e.to_string()})),
-    }
-}
-
-// ─── Performance Counters ────────────────────────────────────────────────────
-
-async fn get_perf() -> Response {
-    let body = perf::dump_json();
-    (axum::http::StatusCode::OK,
-     [("Content-Type", "application/json")],
-     body).into_response()
-}
-
-async fn reset_perf() -> Json<Value> {
-    perf::reset_all();
-    Json(json!({"ok": true, "message": "Performance counters reset"}))
 }
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
@@ -1225,6 +849,16 @@ async fn post_diagnostic_mode(
         "diagnostic_mode": enable,
         "strategies_active": !enable,
     })).into_response()
+}
+
+// ─── DB Stubs ──────────────────────────────────────────────────────────────────
+
+async fn db_snapshots_stub() -> Json<Value> {
+    Json(json!([]))
+}
+
+async fn db_executions_stub() -> Json<Value> {
+    Json(json!([]))
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

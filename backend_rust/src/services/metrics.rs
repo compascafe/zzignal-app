@@ -467,7 +467,7 @@ pub fn build_book_update(
     // ─── Advanced HFT Metrics (computed before struct to allow state storage) ─
     let trades_ps    = tracking.trades_per_second(now.timestamp_millis());
     let price_vel    = tracking.price_velocity(ring, now.timestamp_millis(), bb_mid);
-    let (liq_delta, spoof_flag) = compute_liquidity_delta(pb_ask_vol, tracking, false);
+    let (_liq_delta, spoof_flag) = compute_liquidity_delta(pb_ask_vol, tracking, false);
     let (gap_pct, gap_flag)     = compute_price_gap(bb_mid, pb_mid, tracking);
     let _tape_flag   = check_volume_spike(bn_vol_100, tracking, pb_sprd);
     if gap_flag > 0 { check_gap_alert(gap_pct); }

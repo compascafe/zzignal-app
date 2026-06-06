@@ -13,7 +13,22 @@ use serde::Serialize;
 use tracing::info;
 
 use crate::controllers::worker::{CmdMsg, OrderSide, Outcome as WorkerOutcome};
-use crate::services::strategies::filters::{FilterChain, FilterContext, FilterResult};
+pub struct FilterChain;
+impl FilterChain {
+    pub fn default_chain() -> Self { Self }
+    pub fn enable(&self, _name: &str) {}
+    pub fn disable(&self, _name: &str) {}
+    pub fn disable_all(&self) {}
+    pub fn enable_all(&self) {}
+    pub fn enabled_mask(&self) -> u16 { 0 }
+    pub fn list_filters(&self) -> Vec<String> { vec![] }
+}
+pub struct FilterContext;
+impl FilterContext {
+    pub fn default() -> Self { Self }
+    pub fn clone(&self) -> Self { Self }
+}
+pub enum FilterResult { Pass, Block { reason: String } }
 
 #[derive(Debug, Clone)]
 pub struct OdiseoDef {
@@ -141,7 +156,6 @@ impl OdiseoTradingManager {
     pub fn on_tick(&self, session_id:i32, seconds_left:i32,
                    bid_vol:f64, ask_vol:f64, imb:f64, vel:f64,
                    lt_up:Option<f64>, lt_dn:Option<f64>,
-                   ctx: &FilterContext,
     ) -> (Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, u8)
     {
         let mut sessions = self.sessions.lock().unwrap();
@@ -163,16 +177,15 @@ impl OdiseoTradingManager {
                 results.push((format!("{}_down",def.code),0,0.0,0.0,0.0,0.0,0,20.0));
                 continue;
             }
-            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i], seconds_left, ctx);
-            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i], seconds_left, ctx);
+            self.process(true, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_up, &mut sig, &mut results, budgets[i], seconds_left);
+            self.process(false, &mut state.trades[i], def, session_id, bid_vol, ask_vol, imb, vel, lt_dn, &mut sig, &mut results, budgets[i], seconds_left);
         }
         (results, sig)
     }
 
     fn process(&self, is_up:bool, t:&mut OdiseoSessionTrade, def:&OdiseoDef, sid:i32,
                bv:f64, av:f64, imb:f64, vel:f64, lt:Option<f64>, sig:&mut u8,
-               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64, seconds_left:i32,
-               ctx: &FilterContext)
+               r:&mut Vec<(String,u8,f64,f64,f64,f64,u8,f64)>, budget:f64, seconds_left:i32)
     {
         let code = format!("{}_{}", def.code, if is_up{"up"}else{"down"});
         let pos = if is_up {&mut t.up}else{&mut t.down};
@@ -224,32 +237,19 @@ impl OdiseoTradingManager {
             r.push((code,0,0.0,0.0,0.0,0.0,0,budget)); return;
         }
 
-        let (px, px_fresh) = match lt { Some(p) if p>0.0 => (p, true), _ => {
-            let raw = if is_up { ctx.raw_trade_up } else { ctx.raw_trade_dn };
-            if raw > 0.0 {
-                (raw, true)
-            } else {
-                let mid_alive = ctx.mid > 0.0 && (ctx.mid - 0.5).abs() > 0.01;
-                if mid_alive {
-                    (ctx.mid, true)
-                } else if ctx.best_bid > 0.0 && ctx.best_bid < 1.0 {
-                    (ctx.best_bid, true)
+        let (px, px_fresh) = match lt {
+            Some(p) if p>0.0 => (p, true),
+            _ => {
+                if pos.entered && !pos.settled && pos.last_px > 0.0 {
+                    (pos.last_px, false)
+                } else if pos.entered && !pos.settled {
+                    r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
+                    return;
                 } else {
-                    // Per-side stored best bid (always fresh from AppState)
-                    let side_bid = if is_up { ctx.best_bid_up } else { ctx.best_bid_dn };
-                    if side_bid > 0.0 && side_bid < 1.0 {
-                        (side_bid, true)
-                    } else if pos.entered && !pos.settled && pos.last_px > 0.0 {
-                        (pos.last_px, false)
-                    } else if pos.entered && !pos.settled {
-                        r.push((code.clone(), 2u8, pos.entry_price, pos.size, 0.0, 0.0, 0u8, budget));
-                        return;
-                    } else {
-                        r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
-                    }
+                    r.push((code,1,0.0,0.0,0.0,0.0,0,budget)); return;
                 }
             }
-        }};
+        };
         // Persist last known price (only from real data, not stale fallback)
         if px > 0.0 { pos.last_px = px; }
 
@@ -351,21 +351,7 @@ impl OdiseoTradingManager {
                     return;
                 }
             }
-            // ── PRE-ENTRY FILTER LAYER ──────────────────────────────
-            {
-                let mut fctx = ctx.clone();
-                fctx.px = px;
-                fctx.is_up = is_up;
-                fctx.budget = budget;
-                if let FilterResult::Block { reason } = self.filter_chain.check(&fctx, &code, sid) {
-                    info!("[Odiseo] #{} {} FILTERED OUT: {}", sid, code, reason);
-                    pos.confirm_count = 0;
-                    let status = 1u8;
-                    r.push((code, status, 0.0, 0.0, 0.0, 0.0, 0u8, budget));
-                    return;
-                }
-            }
-            // ─────────────────────────────────────────────────────────
+
             // Use px (signal price) as entry — best_ask can have wide spreads
             pos.entered = true; pos.entry_price = px;
             pos.signal_px = px;  // signal price (before slippage)
