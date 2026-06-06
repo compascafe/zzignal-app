@@ -237,21 +237,23 @@ pub async fn capture_combined(
         hft.secs_left = rec.pnr_seconds_left;
 
         // ── Update btc_open on session boundary ──
-        // Detects when secs_left jumps from near 0 to ~900 (new 15-min session),
-        // refreshing the "price to beat" reference used by the dashboard delta.
+        // Broadcasts the new "price to beat" so TUI deltas update immediately
         {
             use std::sync::atomic::{AtomicI32, Ordering};
             static PREV_SESSION_SECS: AtomicI32 = AtomicI32::new(-1);
             let prev = PREV_SESSION_SECS.swap(rec.pnr_seconds_left, Ordering::Relaxed);
             if prev >= 0 && rec.pnr_seconds_left > prev + 60 && rec.binance_price > 0.0 {
                 *state.btc_open.write().await = Some(rec.binance_price);
+                let _ = state.broadcast_tx.send(
+                    serde_json::json!({"type":"btc_price","open":rec.binance_price}).to_string()
+                );
             }
             if prev < 0 && rec.binance_price > 0.0 {
-                // Initial set on first tick if not yet from Gamma/Pyth
-                let current = *state.btc_open.read().await;
-                if current.is_none() {
-                    *state.btc_open.write().await = Some(rec.binance_price);
-                }
+                // Initial set: always use real BTC price (ignore stale Gamma API value)
+                *state.btc_open.write().await = Some(rec.binance_price);
+                let _ = state.broadcast_tx.send(
+                    serde_json::json!({"type":"btc_price","open":rec.binance_price}).to_string()
+                );
             }
         }
 
