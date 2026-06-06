@@ -71,7 +71,7 @@ alias zz-log='sudo journalctl -u zzignal-app --no-pager -n 30 | grep -E "ENTER|E
 alias zz-log-f='sudo journalctl -u zzignal-app -f | grep --line-buffered -E "ENTER|EXIT|Order result|Odiseo|error"'
 alias zz-monitor='cd /home/ubuntu/zzignal-app && ./zzignal-monitor'
 alias zz-monitor-paper='cd /home/ubuntu/zzignal-app && ./zzignal-monitor --paper'
-alias zz-deploy='cd /home/ubuntu/zzignal-app && ./deploy.sh'
+alias zz-deploy='cd /home/ubuntu/zzignal-app && ./scripts/deploy.sh'
 alias zz-orders='curl -s $ZZ_API/api/orders | python3 -m json.tool'
 alias zz-fills='curl -s $ZZ_API/api/fills | python3 -m json.tool'
 
