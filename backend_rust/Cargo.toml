@@ -1,16 +1,9 @@
 [package]
 name        = "polymarket-backend"
-version = "0.2.5"   # ring latency fix + csv flush + strategy framework + 94 cols
+version     = "0.3.0"
 edition     = "2021"
-rust-version = "1.91"   # MSRV
+rust-version = "1.91"
 default-run = "polymarket-backend"
-
-[features]
-default = []
-premium-collector = []
-premium-patterns  = ["premium-collector"]
-premium-executor  = ["premium-patterns"]
-premium-all       = ["premium-collector", "premium-patterns", "premium-executor"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -40,44 +33,16 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 
 dotenvy = "0.15"
 
-secrecy = { version = "0.10", features = ["serde"] }
-
-# License key system
-hmac = "0.12"
-sha2 = "0.10"
-base64 = "0.22"
-
-# Parquet export (HFT datasets)
-parquet = { version = "54", default-features = false, features = ["arrow"] }
-arrow = { version = "54", default-features = false, features = ["ffi"] }
-
-# API REST + WebSocket server
 axum       = { version = "0.8", features = ["ws", "macros"] }
 tower-http = { version = "0.6", features = ["cors"] }
 
-# Base de datos PostgreSQL
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "chrono"] }
-
-# ZIP export (bulk session download)
-zip = { version = "2", default-features = false, features = ["deflate"] }
-
-# System metrics for health endpoint
 sysinfo = "0.33"
 
-# Allocator optimizado para 2GB Lightsail
 mimalloc = "0.1"
 
 [[bin]]
 name = "polymarket-backend"
 path = "src/main.rs"
-
-[[bin]]
-name = "setup"
-path = "src/setup.rs"
-
-[[bin]]
-name = "license-gen"
-path = "src/bin/license-gen.rs"
 
 [profile.release]
 opt-level     = 2
