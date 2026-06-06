@@ -33,7 +33,6 @@ struct State {
     tab: usize,
     btc: f64, btc_open: f64,
     bal: f64,
-    _paper_mode: bool,
 
     sessions: Vec<SessionInfo>,
 
@@ -145,11 +144,10 @@ impl TradeLogEntry {
 }
 
 impl State {
-    fn new(paper_mode: bool) -> Self {
+    fn new() -> Self {
         Self {
             connected: false, tab: 0,
-            btc: 0.0, btc_open: 0.0, bal: 0.0,
-            _paper_mode: paper_mode,
+            btc: 0.0, btc_open: 0.0,             bal: 0.0,
             sessions: Vec::new(),
             hft: HftState::default(),
             sl_pct: 0.0, sl_market: true,
@@ -397,7 +395,6 @@ async fn run_poller(tx: mpsc::UnboundedSender<PollUpdate>) {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let paper_mode = std::env::args().any(|a| a == "--paper");
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -438,9 +435,8 @@ async fn main() -> io::Result<()> {
     let (kb_tx, mut kb_rx) = mpsc::channel::<KeyCode>(16);
     tokio::spawn(async move { loop { if let Ok(Event::Key(k)) = event::read() { let _ = kb_tx.send(k.code).await; } } });
 
-    let mut s = State::new(paper_mode);
-    let mode_label = if paper_mode { "PAPER MONEY" } else { "DINERO REAL" };
-    s.add_log(format!("ZZIGNAL MONITOR — {}", mode_label), Color::Magenta);
+    let mut s = State::new();
+    s.add_log("ZZIGNAL MONITOR".to_string(), Color::Magenta);
 
     // ═══════════════════════ MAIN LOOP ═══════════════════════
     // ZERO HTTP I/O — only channel drains, keyboard, and render

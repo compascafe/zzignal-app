@@ -7,7 +7,7 @@ use ratatui::Frame;
 use crate::InputMode;
 use crate::State;
 
-const TAB_NAMES: &[&str] = &["DINERO REAL", "PAPER MONEY"];
+const TAB_NAMES: &[&str] = &["DINERO REAL"];
 
 // ─── Bloomberg Terminal Palette ────────────────────────────────────
 const BB_CARD:     Color = Color::Rgb(10, 14, 22); // subtle card bg
