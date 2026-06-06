@@ -6,7 +6,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use sqlx::PgPool;
 
 use crate::models::credentials::ClobCredentials;
-use crate::controllers::worker::{BtcPriceProvider, BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
+use crate::controllers::worker::{BookSnapshot, Candle, CandleInterval, CmdMsg, MarketInfo, OpenOrder, RecentFill};
 use crate::db::models::{RecordingSession, SessionSnapshot, SessionTrade};
 use crate::models::hft::BinanceDepth;
 use crate::utils::ring_buffer::PriceRingBuffer;
@@ -108,9 +108,6 @@ pub struct AppState {
 
     pub interval_arc:    Arc<Mutex<CandleInterval>>,
 
-    pub btc_provider:    RwLock<BtcPriceProvider>,
-    pub btc_provider_tx: Arc<tokio::sync::watch::Sender<BtcPriceProvider>>,
-
     pub cmd_tx:          mpsc::UnboundedSender<CmdMsg>,
     pub broadcast_tx:    broadcast::Sender<String>,
 
@@ -185,7 +182,6 @@ impl AppState {
         broadcast_tx:    broadcast::Sender<String>,
         interval_arc:    Arc<Mutex<CandleInterval>>,
         db:              Option<PgPool>,
-        btc_provider_tx: Arc<tokio::sync::watch::Sender<BtcPriceProvider>>,
         binance_depth:   Arc<RwLock<Option<BinanceDepth>>>,
         binance_ring:    Arc<PriceRingBuffer>,
         tracking_state:  Arc<TrackingState>,
@@ -219,8 +215,6 @@ impl AppState {
             recent_fills:      RwLock::new(vec![]),
             candles:           RwLock::new(vec![]),
             interval_arc,
-            btc_provider:      RwLock::new(BtcPriceProvider::Binance),
-            btc_provider_tx,
             cmd_tx,
             broadcast_tx,
             creds,

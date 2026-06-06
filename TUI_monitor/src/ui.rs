@@ -218,8 +218,6 @@ fn draw_market_info(f: &mut Frame, area: Rect, s: &State) {
                 Style::default().fg(BB_WHITE).add_modifier(big))]),
             Line::from(Span::styled(format!("abrio ${:.0}", btc_ref),
                 Style::default().fg(BB_GRAY))),
-            Line::from(Span::styled(s.btc_provider.to_uppercase(),
-                Style::default().fg(BB_DIM))),
         ]).block(Block::default().borders(Borders::ALL).title("BTC")
             .border_style(Style::default().fg(btc_c))
             .style(Style::default().bg(BB_CARD))),

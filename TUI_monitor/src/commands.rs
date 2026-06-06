@@ -37,8 +37,6 @@ pub const REGISTRY: &[CmdDef] = &[
     // ── GEMINI ──
     CmdDef { syntax: "/<usd>g<cents>          ", desc: "Gemini $X target Y, trigger Y−0.05", category: "GEMINI" },
     CmdDef { syntax: "/<usd>g<cents>e<cents>  ", desc: "Gemini + exit automático", category: "GEMINI" },
-    // ── PROVIDER ──
-    CmdDef { syntax: "/provider binance       ", desc: "BTC provider: binance/coinbase/kraken", category: "PROVIDER" },
     // ── INFO ──
     CmdDef { syntax: "/pos                    ", desc: "Ver posición actual", category: "INFO" },
     CmdDef { syntax: "/alert up 0.70          ", desc: "Alerta al tocar precio (up/down/clear)", category: "INFO" },
@@ -71,7 +69,6 @@ enum Parsed {
     AlertClear,
     Undo,
     Gemini { budget: f64, target: f64, exit: Option<f64> },
-    Provider(String),
     Unknown(String),
 }
 
@@ -143,13 +140,6 @@ fn parse(input: &str) -> Parsed {
             }
         }
         'u' if rest.is_empty() => Parsed::Undo,
-        'p' if rest.starts_with("rovider") => {
-            let prov = rest[7..].trim().to_lowercase();
-            match prov.as_str() {
-                "binance" | "coinbase" | "kraken" => Parsed::Provider(prov),
-                _ => Parsed::Unknown(input.to_string()),
-            }
-        }
         _ if first.is_ascii_digit() => {
             try_parse_gemini(input).unwrap_or_else(|| Parsed::Unknown(input.to_string()))
         }
@@ -292,7 +282,6 @@ async fn execute(cmd: Parsed, s: &mut State) {
         Parsed::AlertClear => exec_alert_clear(s),
         Parsed::Undo => exec_undo(s).await,
         Parsed::Gemini { budget, target, exit } => exec_gemini(budget, target, exit, s).await,
-        Parsed::Provider(prov) => exec_provider(&prov, s).await,
         Parsed::Unknown(input) => {
             s.add_log(format!("?: /{} — desconocido", input), Color::Red);
         }
@@ -1040,24 +1029,6 @@ pub fn check_alerts(s: &mut State) {
     s.alerts.retain(|a| !a.triggered);
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// UNDO
-// ═══════════════════════════════════════════════════════════════════
-
-async fn exec_provider(prov: &str, s: &mut State) {
-    let body = format!(r#"{{"provider":"{}"}}"#, prov);
-    match http_post("/api/btc/provider", &body).await {
-        Ok(()) => {
-            s.btc_provider = prov.to_string();
-            s.add_log(format!("BTC provider → {}", prov.to_uppercase()), Color::Cyan);
-            s.add_trade_log(format!("⚡ Provider → {}", prov), Color::Cyan);
-        }
-        Err(e) => {
-            s.add_log(format!("Provider FAIL: {}", e), Color::Red);
-        }
-    }
-}
-
 async fn exec_undo(s: &mut State) {
     if s.last_order_id.is_empty() {
         s.add_log("Nada que deshacer".to_string(), Color::DarkGray);
@@ -1119,7 +1090,6 @@ mod tests {
             Parsed::Undo => "UNDO".into(),
             Parsed::Gemini { budget, target, exit } =>
                 format!("GEMINI ${:.0} @{:.4} exit={:?}", budget, target, exit),
-            Parsed::Provider(p) => format!("PROVIDER:{p}"),
             Parsed::Unknown(s) => format!("UNKNOWN:{s}"),
         }
     }
@@ -1853,14 +1823,6 @@ mod tests {
                 assert_eq!(result, *expected, "#{} FAIL: /{input}", i+1);
             }
         }
-    }
-
-    #[test]
-    fn provider_command() {
-        assert_eq!(parsed("provider binance"), "PROVIDER:binance");
-        assert_eq!(parsed("provider coinbase"), "PROVIDER:coinbase");
-        assert_eq!(parsed("provider kraken"), "PROVIDER:kraken");
-        assert!(parsed("provider xyz").starts_with("UNKNOWN"));
     }
 
     #[test]
@@ -2847,8 +2809,6 @@ mod tests {
             ("5g70",        "GEMINI $5 @0.7000 exit=None"),
             ("7g70e82",     "GEMINI $7 @0.7000 exit=Some(0.82)"),
             ("8g92",        "GEMINI $8 @0.9200 exit=None"),
-            ("provider binance", "PROVIDER:binance"),
-            ("provider coinbase", "PROVIDER:coinbase"),
         ];
         for (input, expected) in cases {
             assert_eq!(parsed(input), expected, "FAIL: /{input}");

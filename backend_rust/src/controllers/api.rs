@@ -16,7 +16,7 @@ use sysinfo::System;
 use tracing::info;
 
 use crate::models::state::AppState;
-use crate::controllers::worker::{self, BtcPriceProvider, CandleInterval, CmdMsg, OrderSide, Outcome};
+use crate::controllers::worker::{self, CandleInterval, CmdMsg, OrderSide, Outcome};
 use crate::db::api as db_api;
 use crate::services::perf;
 
@@ -31,8 +31,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/market",          get(get_market))
         .route("/api/balance",         get(get_balance))
         .route("/api/btc",             get(get_btc))
-        .route("/api/btc/provider",    get(get_btc_provider))
-        .route("/api/btc/provider",    post(set_btc_provider))
         // USDC approve — activa el saldo en CLOB (requiere MATIC en wallet)
         .route("/api/approve",         post(post_approve))
         // Wrap USDC.e → pUSD vía CollateralOnramp (CLOB V2)
@@ -280,39 +278,6 @@ async fn get_btc(State(s): State<Arc<AppState>>) -> Json<Value> {
         "price": *s.btc_price.read().await,
         "open":  *s.btc_open.read().await,
     }))
-}
-
-async fn get_btc_provider(State(s): State<Arc<AppState>>) -> Json<Value> {
-    let provider = *s.btc_provider.read().await;
-    Json(json!({ "provider": provider.as_str() }))
-}
-
-#[derive(Deserialize)]
-struct ProviderBody {
-    provider: String,
-}
-
-async fn set_btc_provider(
-    State(s):   State<Arc<AppState>>,
-    Json(body): Json<ProviderBody>,
-) -> Json<Value> {
-    let provider = match BtcPriceProvider::from_str(&body.provider) {
-        Some(p) => p,
-        None => return Json(json!({"ok": false, "error": format!("proveedor inválido: {}", body.provider)})),
-    };
-
-    // Actualizar estado
-    *s.btc_provider.write().await = provider;
-
-    // Notificar al worker vía watch channel
-    let _ = s.btc_provider_tx.send(provider);
-
-    // Broadcast a clientes WS
-    let _ = s.broadcast_tx.send(
-        json!({"type":"btc_provider","provider":provider.as_str()}).to_string()
-    );
-
-    Json(json!({"ok": true, "provider": provider.as_str()}))
 }
 
 // ─── USDC Approve ────────────────────────────────────────────────────────────
@@ -1091,17 +1056,6 @@ async fn handle_ws_cmd(text: &str, state: &AppState) {
                     if let Ok(mut guard) = state.interval_arc.lock() {
                         *guard = iv;
                     }
-                }
-            }
-        }
-        "set_btc_provider" => {
-            if let Some(p_str) = v["provider"].as_str() {
-                if let Some(provider) = BtcPriceProvider::from_str(p_str) {
-                    *state.btc_provider.write().await = provider;
-                    let _ = state.btc_provider_tx.send(provider);
-                    let _ = state.broadcast_tx.send(
-                        json!({"type":"btc_provider","provider":provider.as_str()}).to_string()
-                    );
                 }
             }
         }

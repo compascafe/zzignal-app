@@ -28,7 +28,7 @@ use chrono::Utc;
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
-use crate::controllers::worker::{AppMsg, BtcPriceProvider, CandleInterval, CmdMsg, ConnStatus};
+use crate::controllers::worker::{AppMsg, CandleInterval, CmdMsg, ConnStatus};
 use crate::models::credentials::ClobCredentials;
 use crate::models::state::AppState;
 use crate::utils::persistence;
@@ -79,8 +79,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (cmd_tx, cmd_rx)      = tokio_mpsc::unbounded_channel::<CmdMsg>();
     let (bcast_tx, _)         = broadcast::channel::<String>(512);
     let interval_arc          = Arc::new(Mutex::new(CandleInterval::OneMinute));
-    let (btc_provider_tx, btc_provider_rx) = tokio::sync::watch::channel(BtcPriceProvider::Binance);
-    let btc_provider_tx       = Arc::new(btc_provider_tx);
 
     // ─── HFT Module ─────────────────────────────────────────────────────────
     let binance_depth   = Arc::new(RwLock::new(None::<BinanceDepth>));
@@ -92,7 +90,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(
         cmd_tx, bcast_tx.clone(),
         Arc::clone(&interval_arc), db,
-        Arc::clone(&btc_provider_tx),
         Arc::clone(&binance_depth),
         Arc::clone(&binance_ring),
         Arc::clone(&tracking_state),
@@ -157,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .spawn(move || {
                 tokio::runtime::Builder::new_multi_thread()
                     .enable_all().build().expect("tokio runtime worker")
-                    .block_on(crate::controllers::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2, btc_provider_rx));
+                    .block_on(crate::controllers::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2));
             })
             .expect("spawn worker");
     }

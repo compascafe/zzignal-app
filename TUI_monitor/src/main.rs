@@ -24,7 +24,6 @@ enum PollUpdate {
     Odiseo(OdiseoStatus),
     Btc(BtcInfo),
     Health(HealthInfo),
-    Provider(BtcProviderInfo),
     Hft(HftState),
     Orders(Vec<OrderInfo>),
     Sessions(Vec<SessionInfo>),
@@ -35,7 +34,6 @@ struct State {
     tab: usize,
     btc: f64, btc_open: f64, btc_entry: f64,
     bal: f64,
-    btc_provider: String,
     live: bool, reinvest: bool, _paper_mode: bool,
 
     odi_label: String, odi_code: String,
@@ -192,7 +190,6 @@ impl State {
         Self {
             connected: false, tab: 0,
             btc: 0.0, btc_open: 0.0, btc_entry: 0.0, bal: 0.0,
-            btc_provider: "binance".into(),
             live: !paper_mode, reinvest: false, _paper_mode: paper_mode,
             odi_label: "Odiseo 83".into(), odi_code: String::new(),
             odi_pnl: 0.0, odi_bal: 0.0, odi_budget: 0.0,
@@ -636,11 +633,10 @@ async fn run_poller(tx: mpsc::UnboundedSender<PollUpdate>) {
         let start = Instant::now();
 
         // Collect all poll results concurrently (each bounded to 2s by api.rs)
-        let (odi, btc, health, prov, hft, orders, sessions) = tokio::join!(
+        let (odi, btc, health, hft, orders, sessions) = tokio::join!(
             http_get::<OdiseoStatus>("/api/odiseo/status"),
             http_get::<BtcInfo>("/api/btc"),
             http_get::<HealthInfo>("/api/health"),
-            http_get::<BtcProviderInfo>("/api/btc/provider"),
             http_get::<HftState>("/api/hft/latest"),
             http_get::<Vec<OrderInfo>>("/api/orders"),
             http_get::<Vec<SessionInfo>>("/api/sessions"),
@@ -649,7 +645,6 @@ async fn run_poller(tx: mpsc::UnboundedSender<PollUpdate>) {
         if let Some(data) = odi { let _ = tx.send(PollUpdate::Odiseo(data)); }
         if let Some(data) = btc { let _ = tx.send(PollUpdate::Btc(data)); }
         if let Some(data) = health { let _ = tx.send(PollUpdate::Health(data)); }
-        if let Some(data) = prov { let _ = tx.send(PollUpdate::Provider(data)); }
         if let Some(data) = hft { let _ = tx.send(PollUpdate::Hft(data)); }
         if let Some(data) = orders { let _ = tx.send(PollUpdate::Orders(data)); }
         if let Some(data) = sessions { let _ = tx.send(PollUpdate::Sessions(data)); }
@@ -768,7 +763,6 @@ async fn main() -> io::Result<()> {
                     }
                 }
                 PollUpdate::Health(data) => { s.bal = data.balance; }
-                PollUpdate::Provider(data) => { s.btc_provider = data.provider; }
                 PollUpdate::Hft(data) => {
                     apply_hft_state(&data, &mut s);
                     s.btc_vol_1m = data.btc_vol_1m;
@@ -869,9 +863,6 @@ async fn main() -> io::Result<()> {
                             _ => {}
                         }
                     }
-                }
-                Some("btc_provider") => {
-                    if let Some(ref p) = msg.provider { s.btc_provider = p.clone(); }
                 }
                 _ => {}
             }
