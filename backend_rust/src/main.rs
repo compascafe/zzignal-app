@@ -13,6 +13,7 @@ mod utils;
 use std::sync::{mpsc, Arc, Mutex};
 use chrono::{Timelike, Utc};
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
+use serde_json::json;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 use crate::controllers::worker::{AppMsg, CandleInterval, CmdMsg, ConnStatus};
@@ -364,6 +365,13 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             }
             *state.btc_vol_ses.write().await += *volume;
             let _ = BTC_TICK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Broadcast btc_price + open on every tick so TUI delta is always fresh
+            if *price > 0.0 {
+                let open = state.btc_open.read().await.unwrap_or(0.0);
+                let _ = state.broadcast_tx.send(
+                    serde_json::json!({"type":"btc_price","price":price,"open":open}).to_string()
+                );
+            }
         }
         AppMsg::OpenOrders(o) => { *state.open_orders.write().await = o.clone(); }
         AppMsg::RecentFills(fills) => {
