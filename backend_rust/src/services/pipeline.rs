@@ -1,9 +1,17 @@
-use chrono::Utc;
+use chrono::{Timelike, Utc};
 
 use crate::controllers::worker::PriceLevel;
 use crate::models::hft::{CsvRecord, EventType, PolyDepthFrame};
 use crate::models::state::AppState;
 use crate::services::metrics;
+
+/// Seconds remaining in the current 15-minute Polymarket round (aligned to :00/:15/:30/:45)
+fn seconds_left_15min() -> i32 {
+    let now = Utc::now();
+    let t = now.time();
+    let secs_in_chunk = (t.minute() as i64 % 15) * 60 + t.second() as i64;
+    (900 - secs_in_chunk) as i32
+}
 
 pub async fn capture_book_db(state: &AppState, side: &str, bids: &[PriceLevel], asks: &[PriceLevel]) {
     let _ = (state, side, bids, asks);
@@ -97,7 +105,7 @@ pub async fn capture_combined(
 
     rec.poly_spread = rec.clob_trade_up - rec.clob_trade_dn;
 
-    rec.pnr_seconds_left = 0;
+    rec.pnr_seconds_left = seconds_left_15min();
 
     // ─── Anti-Flash Dump metrics ───────────────────────────────────────
     {
