@@ -354,14 +354,19 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
             }
             *state.btc_vol_ses.write().await += *volume;
             if *price > 0.0 {
-                // Update btc_open on session boundary (synchronous, no pipeline delay)
+                // Update btc_open on session boundaries (synchronous, zero delay)
                 {
                     use std::sync::atomic::{AtomicI32, Ordering};
                     static PREV_SECS: AtomicI32 = AtomicI32::new(-1);
                     let t = chrono::Utc::now().time();
                     let secs = 900 - (t.minute() as i32 % 15 * 60 + t.second() as i32);
                     let prev = PREV_SECS.swap(secs, Ordering::Relaxed);
-                    if (prev < 0 && secs > 0) || (prev >= 0 && secs > prev + 60) {
+                    // Session boundary: secs jumped from near-0 to ~900
+                    if prev >= 0 && secs > prev + 60 {
+                        *state.btc_open.write().await = Some(*price);
+                    }
+                    // Initial set: only if never set before
+                    if prev < 0 && state.btc_open.read().await.is_none() {
                         *state.btc_open.write().await = Some(*price);
                     }
                 }
