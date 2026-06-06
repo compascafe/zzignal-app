@@ -338,6 +338,17 @@ pub async fn capture_combined(
         }
     }
 
+    // ── Sanitize NaN/Infinity before broadcast (prevents JSON deser failures) ──
+    {
+        let mut hft = state.latest_hft.write().await;
+        if hft.btc_volatility.is_nan() || hft.btc_volatility.is_infinite() { hft.btc_volatility = 0.0; }
+        if hft.imbalance.is_nan() || hft.imbalance.is_infinite() { hft.imbalance = 0.0; }
+        if hft.sen_clob_delta.is_nan() || hft.sen_clob_delta.is_infinite() { hft.sen_clob_delta = 0.0; }
+        if hft.sen_btc_vel.is_nan() || hft.sen_btc_vel.is_infinite() { hft.sen_btc_vel = 0.0; }
+        if hft.ofi_up.is_nan() || hft.ofi_up.is_infinite() { hft.ofi_up = 0.0; }
+        if hft.ofi_dn.is_nan() || hft.ofi_dn.is_infinite() { hft.ofi_dn = 0.0; }
+    }
+
     if let Ok(json) = serde_json::to_string(&*state.latest_hft.read().await) {
         let _ = state.broadcast_tx.send(format!("{{\"type\":\"hft_state\",\"data\":{json}}}"));
     }

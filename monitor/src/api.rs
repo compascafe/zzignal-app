@@ -90,6 +90,7 @@ pub struct BtcProviderInfo {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[allow(dead_code)]
+#[serde(default)]
 pub struct HftState {
     pub time: String,
     pub event: String,
@@ -105,6 +106,7 @@ pub struct HftState {
     pub clob_trade_dn_vol: f64,
     pub btc_vel: f64,
     pub btc_acel: f64,
+    #[serde(default)]
     pub btc_volatility: f64,
     pub btc_volume_24h: f64,
     pub btc_vol_1m: f64,       // real-time BTC volume in last 60s (aggTrade per-tick sum)
