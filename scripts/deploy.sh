@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "╔══════════════════════════════════╗"
 echo "║   ZZIGNAL — Deploy Manual       ║"
@@ -8,26 +9,24 @@ echo "╚═══════════════════════�
 
 echo ""
 echo "=== 1/3 Pull latest ==="
-cd "$SCRIPT_DIR"
+cd "$PROJECT_ROOT"
 git pull
 
 echo ""
 echo "=== 2/3 Build Backend ==="
-cd "$SCRIPT_DIR/backend_rust"
+cd "$PROJECT_ROOT/backend_rust"
 cargo build --release
-
-cd "$SCRIPT_DIR"
 
 echo ""
 echo "=== 3/3 Build Monitor ==="
-cd "$SCRIPT_DIR/TUI_monitor"
+cd "$PROJECT_ROOT/TUI_monitor"
 # Touch build.rs to force re-run and embed latest git hash in TUI commit bar
 touch build.rs
 cargo build --release
-cd "$SCRIPT_DIR"
 
 echo ""
 echo "=== 4/4 Symlink + Restart ==="
+cd "$PROJECT_ROOT"
 ln -sf backend_rust/target/release/polymarket-backend polymarket-backend
 ln -sf TUI_monitor/target/release/zzignal-monitor zzignal-monitor
 sudo systemctl restart zzignal-app
