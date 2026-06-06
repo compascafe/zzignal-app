@@ -730,8 +730,12 @@ async fn main() -> io::Result<()> {
     // ═══════════════════════ MAIN LOOP ═══════════════════════
     // ZERO HTTP I/O — only channel drains, keyboard, and render
     loop {
-        // ── Drain poll updates ──
+        // ── Drain poll updates (capped) ──
+        let mut poll_count = 0u32;
+        let poll_cap = 10;
         while let Ok(update) = poll_rx.try_recv() {
+            poll_count += 1;
+            if poll_count > poll_cap { break; }
             let api_lat = s.last_api_ok.elapsed().as_millis() as u64;
             s.api_pings.push_front(api_lat);
             if s.api_pings.len() > 20 { s.api_pings.pop_back(); }
@@ -825,8 +829,13 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // ── Drain WS messages ──
+        // ── Drain WS messages (capped, hft_state deferred to last) ──
+        let mut ws_count = 0u32;
+        let ws_cap = 15;
+        let mut last_hft: Option<api::HftState> = None;
         while let Ok(msg) = ws_rx.try_recv() {
+            ws_count += 1;
+            if ws_count > ws_cap { break; }
             let ws_lat = s.last_ws.elapsed().as_millis() as u64;
             s.ws_pings.push_front(ws_lat);
             if s.ws_pings.len() > 20 { s.ws_pings.pop_back(); }
@@ -850,7 +859,7 @@ async fn main() -> io::Result<()> {
                     s.add_log(format!("{} {}", if ok {"OK"}else{"FAIL"}, txt), if ok{Color::Green}else{Color::Red});
                 }
                 Some("hft_state") => {
-                    if let Some(ref hft) = msg.data { apply_hft_state(hft, &mut s); }
+                    if let Some(ref hft) = msg.data { last_hft = Some(hft.clone()); }
                 }
                 Some("book") => {
                     if let Some(ref book) = msg.book {
@@ -938,6 +947,10 @@ async fn main() -> io::Result<()> {
                 }
                 _ => {}
             }
+        }
+        // Apply deferred hft_state (only the last one, to avoid redundant heavy processing)
+        if let Some(ref hft) = last_hft {
+            apply_hft_state(hft, &mut s);
         }
 
         // ── Gemini trigger → place buy (spawned, non-blocking) ──
