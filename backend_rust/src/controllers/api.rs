@@ -8,6 +8,7 @@ use axum::{
     Json,
 };
 use axum::extract::ws::{Message, WebSocket};
+use chrono::{Timelike, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tower_http::cors::CorsLayer;
@@ -73,6 +74,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/csv/live",        get(export_live_csv))
         // WebSocket
         .route("/ws",                  get(ws_handler))
+        // Sessions (in-memory)
+        .route("/api/sessions",        get(get_sessions))
+        .route("/api/sessions/start",  post(post_session_start))
         // DB stubs
         .route("/api/db/snapshots",    get(db_snapshots_stub))
         .route("/api/db/executions",   get(db_executions_stub))
@@ -161,6 +165,54 @@ async fn get_btc(State(s): State<Arc<AppState>>) -> Json<Value> {
         "price": *s.btc_price.read().await,
         "open":  s.btc_open.read().await.unwrap_or(0.0),
     }))
+}
+
+async fn get_sessions(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let ids = s.recording_sessions.read().await.clone();
+    let sessions: Vec<Value> = ids.iter().map(|&sid| {
+        let path = s.session_manager.session_path(sid);
+        let name = std::path::Path::new(&path)
+            .file_stem().and_then(|s| s.to_str()).unwrap_or("")
+            .to_string();
+        json!({
+            "id": sid,
+            "name": name,
+            "status": "recording",
+            "scheduled_start": "",
+            "scheduled_end": "",
+            "duration_min": 15,
+            "tick_count": s.session_manager.tick_count(sid),
+            "trade_count": s.session_manager.trade_count(sid),
+        })
+    }).collect();
+    Json(json!(sessions))
+}
+
+async fn post_session_start(State(s): State<Arc<AppState>>) -> Json<Value> {
+    let now = Utc::now();
+    let t = now.time();
+    let secs_into = (t.minute() as i64 % 15) * 60 + t.second() as i64;
+    let start = now - chrono::Duration::seconds(secs_into);
+    let end = start + chrono::Duration::minutes(15);
+    // Generate unique session ID
+    let sid = now.timestamp() as i32;
+    let name = format!("S{:04}-{}", sid, start.format("%H%M"));
+
+    // Stop any existing recording first
+    let mut rec = s.recording_sessions.write().await;
+    for old in rec.drain(..) {
+        s.odiseo_trading.on_session_close(old, "tie");
+        s.session_manager.flush(old).ok();
+        s.session_manager.stop_session(old).ok();
+    }
+
+    rec.push(sid);
+    drop(rec);
+    s.session_manager.start_session(sid, &name).ok();
+    s.tracking_state.reset_session_baselines();
+    s.tick_drain.store(true, std::sync::atomic::Ordering::Release);
+    info!("[SESSION] Manual start #{} {} ({}→{})", sid, name, start.format("%H:%M"), end.format("%H:%M"));
+    Json(json!({"ok": true, "id": sid, "name": name}))
 }
 
 // ─── USDC Approve ────────────────────────────────────────────────────────────

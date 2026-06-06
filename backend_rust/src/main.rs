@@ -10,8 +10,8 @@ mod models;
 mod controllers;
 mod services;
 mod utils;
-
 use std::sync::{mpsc, Arc, Mutex};
+use chrono::{Timelike, Utc};
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -65,6 +65,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.odiseo_trading.set_variant(0, false);
     state.odiseo_trading.set_variant(1, false);
     state.odiseo_trading.set_variant(2, false);
+
+    // Auto-session manager: starts a new 15-min session at each boundary
+    {
+        let auto_state = Arc::clone(&state);
+        let mut shutdown_ses = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let mut last_session_id: i32 = 0;
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let now = Utc::now();
+                        let t = now.time();
+                        let secs_into_chunk = (t.minute() as i64 % 15) * 60 + t.second() as i64;
+                        let secs_left = 900 - secs_into_chunk;
+
+                        // Start new session at boundary (within first 2 seconds of chunk)
+                        let recording = auto_state.recording_sessions.read().await;
+                        let has_active = !recording.is_empty();
+                        drop(recording);
+
+                        if !has_active && secs_left >= 898 {
+                            let chunk_start = now - chrono::Duration::seconds(secs_into_chunk);
+                            let chunk_end = chunk_start + chrono::Duration::minutes(15);
+                            last_session_id += 1;
+                            let sid = last_session_id;
+                            let name = format!("S{:04}-{}", sid, chunk_start.format("%H%M"));
+
+                            info!("[SESSION] Auto-start #{} {} ({}→{})", sid, name,
+                                chunk_start.format("%H:%M"), chunk_end.format("%H:%M"));
+
+                            auto_state.recording_sessions.write().await.push(sid);
+                            auto_state.session_manager.start_session(sid, &name).ok();
+                            auto_state.tracking_state.reset_session_baselines();
+                            auto_state.tick_drain.store(true, std::sync::atomic::Ordering::Release);
+                        }
+
+                        // Stop sessions that have passed their end
+                        if has_active && secs_left <= 2 && secs_left >= 0 {
+                            let mut rec = auto_state.recording_sessions.write().await;
+                            for sid in rec.drain(..) {
+                                info!("[SESSION] Auto-stop #{}", sid);
+                                auto_state.odiseo_trading.on_session_close(sid, "tie");
+                                auto_state.session_manager.flush(sid).ok();
+                                auto_state.session_manager.stop_session(sid).ok();
+                            }
+                        }
+                    }
+                    _ = shutdown_ses.recv() => {
+                        auto_state.session_manager.flush_all();
+                        return;
+                    }
+                }
+            }
+        });
+    }
 
     // Worker (hilo OS)
     {
