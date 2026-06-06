@@ -20,7 +20,7 @@ cd "$SCRIPT_DIR"
 
 echo ""
 echo "=== 3/3 Build Monitor ==="
-cd "$SCRIPT_DIR/monitor"
+cd "$SCRIPT_DIR/TUI_monitor"
 # Touch build.rs to force re-run and embed latest git hash in TUI commit bar
 touch build.rs
 cargo build --release
@@ -29,7 +29,7 @@ cd "$SCRIPT_DIR"
 echo ""
 echo "=== 4/4 Symlink + Restart ==="
 ln -sf backend_rust/target/release/polymarket-backend polymarket-backend
-ln -sf monitor/target/release/zzignal-monitor zzignal-monitor
+ln -sf TUI_monitor/target/release/zzignal-monitor zzignal-monitor
 sudo systemctl restart zzignal-app
 
 sleep 5
