@@ -474,11 +474,10 @@ async fn run_cycle(
     // 5. Órdenes abiertas y fills iniciales
     fetch_and_send_orders(&clob_client, tx, token_up, token_down).await;
 
-    // 6. Precio BTC (Binance) — módulo independiente, broadcast directo sin cola
+    // 6. Precio BTC (Binance) — módulo independiente
     {
         let tx2 = tx.clone();
-        let bt2 = broadcast_tx.clone();
-        tokio::spawn(async move { crate::services::btc_stream::run(tx2, bt2).await });
+        tokio::spawn(async move { crate::services::btc_stream::run(tx2).await });
     }
 
     // 6b. Velas BTC/USDT — fetch inicial + refresco adaptativo según intervalo

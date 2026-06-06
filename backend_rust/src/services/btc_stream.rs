@@ -5,7 +5,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 use chrono::Utc;
 use futures_util::StreamExt;
-use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use tracing::{info, warn};
 
@@ -13,7 +12,7 @@ use crate::controllers::worker::AppMsg;
 
 const BINANCE_WS: &str = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade";
 
-pub async fn run(tx: mpsc::Sender<AppMsg>, broadcast_tx: broadcast::Sender<String>) {
+pub async fn run(tx: mpsc::Sender<AppMsg>) {
     let mut backoff = Duration::from_secs(2);
     loop {
         match connect_async(BINANCE_WS).await {
@@ -35,11 +34,6 @@ pub async fn run(tx: mpsc::Sender<AppMsg>, broadcast_tx: broadcast::Sender<Strin
                             .unwrap_or(0.0);
                         if let Some(p) = price {
                             let now_ms = Utc::now().timestamp_millis();
-                            // Direct broadcast — reaches TUI immediately, zero queue delay
-                            let _ = broadcast_tx.send(
-                                serde_json::json!({"type":"btc_price","price":p}).to_string()
-                            );
-                            // Consumer path — for state updates (btc_price, tracking, volume)
                             let _ = tx.send(AppMsg::BtcTick { price: p, volume, event_time: now_ms });
                         }
                     }
