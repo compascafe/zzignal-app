@@ -10,6 +10,7 @@ mod models;
 mod controllers;
 mod services;
 mod utils;
+
 use std::sync::{mpsc, Arc, Mutex};
 use chrono::{Timelike, Utc};
 use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
@@ -61,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (*creds).clone(),
     );
 
-    // Auto-session manager: starts a new 15-min session at each boundary
+    // Auto-session manager
     {
         let auto_state = Arc::clone(&state);
         let mut shutdown_ses = shutdown_tx.subscribe();
@@ -75,30 +76,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let t = now.time();
                         let secs_into_chunk = (t.minute() as i64 % 15) * 60 + t.second() as i64;
                         let secs_left = 900 - secs_into_chunk;
-
-                        // Start new session at boundary (within first 2 seconds of chunk)
                         let recording = auto_state.recording_sessions.read().await;
                         let has_active = !recording.is_empty();
                         drop(recording);
-
                         if !has_active && secs_left >= 898 {
                             let chunk_start = now - chrono::Duration::seconds(secs_into_chunk);
-                            let chunk_end = chunk_start + chrono::Duration::minutes(15);
                             last_session_id += 1;
                             let sid = last_session_id;
                             let name = format!("S{:04}-{}", sid, chunk_start.format("%H%M"));
-
-                            info!("[SESSION] Auto-start #{} {} ({}→{})", sid, name,
-                                chunk_start.format("%H:%M"), chunk_end.format("%H:%M"));
-
+                            info!("[SESSION] Auto-start #{} {}", sid, name);
                             auto_state.recording_sessions.write().await.push(sid);
                             auto_state.session_manager.start_session(sid, &name).ok();
                             auto_state.tracking_state.reset_session_baselines();
                             auto_state.tick_drain.store(true, std::sync::atomic::Ordering::Release);
                         }
-
-                        // Stop sessions that have passed their end
-                        // Drain IDs first, drop lock, then do I/O outside lock
                         if has_active && secs_left <= 2 && secs_left >= 0 {
                             let to_stop: Vec<i32> = {
                                 let mut rec = auto_state.recording_sessions.write().await;
@@ -111,10 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    _ = shutdown_ses.recv() => {
-                        auto_state.session_manager.flush_all();
-                        return;
-                    }
+                    _ = shutdown_ses.recv() => { auto_state.session_manager.flush_all(); return; }
                 }
             }
         });
@@ -136,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("spawn worker");
     }
 
-    // CSV safety flush — every 15s
+    // CSV flush — every 15s
     {
         let sm2 = Arc::clone(&state.session_manager);
         let mut shutdown2 = shutdown_tx.subscribe();
@@ -163,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Session manager flush — every 30s
+    // Session flush — every 30s
     {
         let sm = Arc::clone(&state.session_manager);
         let mut shutdown4 = shutdown_tx.subscribe();
@@ -208,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Consumer de AppMsg: broadcast WS + actualiza estado + pipeline CSV
+    // Consumer: AppMsg → broadcast WS + update state + pipeline (spawned)
     {
         let state2 = Arc::clone(&state);
         let (bridge_tx, mut bridge_rx) = tokio_mpsc::unbounded_channel::<AppMsg>();
@@ -219,15 +207,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         tokio::spawn(async move {
             while let Some(msg) = bridge_rx.recv().await {
-                if let Some(json) = msg.to_json() {
-                    let _ = state2.broadcast_tx.send(json);
+                if let Some(ws_json) = msg.to_json() {
+                    let _ = state2.broadcast_tx.send(ws_json);
                 }
-                update_state(&msg, &state2).await;
+                let s = Arc::clone(&state2);
+                update_state(&msg, s).await;
             }
         });
     }
 
-    // Auto-purge CSVs older than 1 hour — every 5 minutes
+    // Auto-purge CSVs > 1h — every 5 min
     {
         let mut shutdown_purge = shutdown_tx.subscribe();
         tokio::spawn(async move {
@@ -235,19 +224,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(60);
+                        let cutoff = Utc::now() - chrono::Duration::minutes(60);
                         if let Ok(entries) = std::fs::read_dir("sessions") {
                             for entry in entries.flatten() {
                                 let path = entry.path();
                                 if path.extension().map_or(false, |e| e == "csv") {
                                     if let Ok(meta) = entry.metadata() {
                                         if let Ok(modified) = meta.modified() {
-                                            let mod_time: chrono::DateTime<chrono::Utc> = modified.into();
+                                            let mod_time: chrono::DateTime<Utc> = modified.into();
                                             if mod_time < cutoff {
                                                 if let Err(e) = std::fs::remove_file(&path) {
                                                     warn!("Auto-purge failed {}: {}", path.display(), e);
-                                                } else {
-                                                    info!("Auto-purged: {}", path.display());
                                                 }
                                             }
                                         }
@@ -262,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // SIGINT/SIGTERM graceful shutdown
+    // Graceful shutdown
     {
         let shutdown_sig = shutdown_tx.clone();
         let sig_state = Arc::clone(&state);
@@ -270,15 +257,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::signal::ctrl_c().await.ok();
             info!("SIGINT received — flushing CSVs...");
             sig_state.session_manager.flush_all();
-            info!("Graceful shutdown complete.");
             let _ = shutdown_sig.send(());
         });
     }
 
     info!("============================================");
     info!(" ZZIGNAL BTC 15-min Backend");
-    info!(" REST API:    http://{}/api/...", "0.0.0.0:8080");
-    info!(" WebSocket:   ws://0.0.0.0:8080/ws");
+    info!(" REST + WS: 0.0.0.0:8080");
     info!("============================================");
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
@@ -287,9 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-static BTC_TICK_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-async fn update_state(msg: &AppMsg, state: &AppState) {
+async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
     match msg {
         AppMsg::Status(s) => {
             let label = match s {
@@ -309,19 +292,25 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
         }
         AppMsg::BookUp(b) => {
             *state.book_up.write().await = Some(b.clone());
-            if let Some(bid) = b.bids.first() {
-                *state.best_bid_up.write().await = bid.price;
-            }
-            pipeline::push_depth_frame(state, 0, &b.bids, &b.asks).await;
-            pipeline::capture_combined(state, "up", &b.bids, &b.asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+            if let Some(bid) = b.bids.first() { *state.best_bid_up.write().await = bid.price; }
+            let s2 = Arc::clone(&state);
+            let bids = b.bids.clone();
+            let asks = b.asks.clone();
+            tokio::spawn(async move {
+                pipeline::push_depth_frame(&s2, 0, &bids, &asks).await;
+                pipeline::capture_combined(&s2, "up", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+            });
         }
         AppMsg::BookDown(b) => {
             *state.book_down.write().await = Some(b.clone());
-            if let Some(bid) = b.bids.first() {
-                *state.best_bid_dn.write().await = bid.price;
-            }
-            pipeline::push_depth_frame(state, 1, &b.bids, &b.asks).await;
-            pipeline::capture_combined(state, "down", &b.bids, &b.asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+            if let Some(bid) = b.bids.first() { *state.best_bid_dn.write().await = bid.price; }
+            let s2 = Arc::clone(&state);
+            let bids = b.bids.clone();
+            let asks = b.asks.clone();
+            tokio::spawn(async move {
+                pipeline::push_depth_frame(&s2, 1, &bids, &asks).await;
+                pipeline::capture_combined(&s2, "down", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+            });
         }
         AppMsg::LastTradeUp { price, size } => {
             let mut prev = state.prev_raw_up.write().await;
@@ -364,12 +353,10 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
                 *state.btc_vol_1m.write().await = window.iter().map(|(_, v)| *v).sum();
             }
             *state.btc_vol_ses.write().await += *volume;
-            let _ = BTC_TICK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // Broadcast btc_price + open on every tick so TUI delta is always fresh
             if *price > 0.0 {
                 let open = state.btc_open.read().await.unwrap_or(0.0);
                 let _ = state.broadcast_tx.send(
-                    serde_json::json!({"type":"btc_price","price":price,"open":open}).to_string()
+                    json!({"type":"btc_price","price":price,"open":open}).to_string()
                 );
             }
         }
@@ -382,12 +369,12 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             drop(current);
             if !is_same {
                 *state.recent_fills.write().await = fills.clone();
-                pipeline::capture_fills_csv(state, &fills).await;
+                let s2 = Arc::clone(&state);
+                let f = fills.clone();
+                tokio::spawn(async move { pipeline::capture_fills_csv(&s2, &f).await; });
             }
         }
-        AppMsg::Candles { interval: _, candles } => {
-            *state.candles.write().await = candles.clone();
-        }
+        AppMsg::Candles { interval: _, candles: c } => { *state.candles.write().await = c.clone(); }
         AppMsg::CandleUpdate(c) => {
             let mut candles = state.candles.write().await;
             match candles.last_mut() {
