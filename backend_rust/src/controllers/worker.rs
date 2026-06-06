@@ -1735,9 +1735,7 @@ impl AppMsg {
             AppMsg::Balance(bal) => {
                 Some(format!(r#"{{"type":"balance","balance":{}}}"#, bal))
             }
-            AppMsg::BtcOpen(price) => {
-                Some(format!(r#"{{"type":"btc_price","open":{}}}"#, price))
-            }
+            AppMsg::BtcOpen(_) => None,
             AppMsg::BtcTick { price, .. } => {
                 Some(format!(r#"{{"type":"btc_price","price":{}}}"#, price))
             }

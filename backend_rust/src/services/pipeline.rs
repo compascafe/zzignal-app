@@ -213,7 +213,8 @@ pub async fn capture_combined(
         let mut hft = state.latest_hft.write().await;
         hft.time = rec.ts_local.clone();
         hft.event = rec.event_type.as_str().to_string();
-        hft.btc_price = rec.binance_price;
+        hft.btc_price = if rec.binance_price > 0.0 { rec.binance_price }
+                        else { state.btc_price.read().await.unwrap_or(0.0) };
         hft.mid = rec.poly_mid;
         hft.spread = rec.poly_spread;
         hft.imbalance = rec.poly_imbalance;

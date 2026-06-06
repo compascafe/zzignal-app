@@ -349,7 +349,7 @@ async fn update_state(msg: &AppMsg, state: &AppState) {
             *prev = current;
         }
         AppMsg::Balance(b) => { *state.balance.write().await = Some(*b); }
-        AppMsg::BtcOpen(p) => { *state.btc_open.write().await = Some(*p); }
+        AppMsg::BtcOpen(_) => {}
         AppMsg::BtcTick { price, volume, event_time } => {
             *state.btc_price.write().await = Some(*price);
             *state.btc_volume.write().await = *volume;
