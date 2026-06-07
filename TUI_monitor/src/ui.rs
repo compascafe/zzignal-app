@@ -40,7 +40,6 @@ pub fn draw(f: &mut Frame, s: &State) {
         Constraint::Min(4),        // dashboard
     ];
     if cmd_h > 0 { constraints.push(Constraint::Length(cmd_h)); }
-    constraints.push(Constraint::Length(10)); // footer: ayuda
 
     let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
     let mut ci = 0;
@@ -99,11 +98,7 @@ pub fn draw(f: &mut Frame, s: &State) {
     // ─── COMMAND BAR (modal) ──────────────────────────────────────────
     if cmd_h > 0 {
         draw_command_bar(f, chunks[ci], s);
-        ci += 1;
     }
-
-    // ─── FOOTER ───────────────────────────────────────────────────────
-    draw_footer(f, chunks[ci], s);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -154,11 +149,11 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     let constraints = vec![
         Constraint::Length(4),     // market info
         Constraint::Length(4),     // UP/DOWN price cards
-        Constraint::Length(5),     // indicators row 1 (S1..S6)
-        Constraint::Length(5),     // indicators row 2 (S7..S12)
+        Constraint::Length(5),     // indicators row 1 (S1..S3)
+        Constraint::Length(5),     // indicators row 2 (S7..S9)
+        Constraint::Length(4),     // μ-structure (S13..S18)
         Constraint::Length(3),     // manual trading status
-        Constraint::Length(13),    // orderbook depth
-        Constraint::Min(3),        // orders + positions + trade log
+        Constraint::Min(3),        // orderbook depth + trade log
     ];
 
     let m = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
@@ -168,14 +163,9 @@ fn draw_dashboard(f: &mut Frame, area: Rect, s: &State) {
     draw_price_cards(f, m[idx], s); idx += 1;
     draw_indicators(f, m[idx], s); idx += 1;
     draw_indicators_row2(f, m[idx], s); idx += 1;
+    draw_microstructure(f, m[idx], s); idx += 1;
     draw_manual_status(f, m[idx], s); idx += 1;
     draw_depth_panel(f, m[idx], s); idx += 1;
-
-    let bottom = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1,2), Constraint::Ratio(1,2)])
-        .split(m[idx]);
-    draw_positions_card(f, bottom[0], s);
-    draw_trade_log_inline(f, bottom[1], s);
 }
 
 // ─── MARKET INFO BAR ──────────────────────────────────────────────
@@ -684,6 +674,105 @@ fn draw_indicators_row2(f: &mut Frame, area: Rect, s: &State) {
 }
 
 // ─── MANUAL TRADING STATUS BAR ────────────────────────────────────
+
+fn bar_str(val: f64, max: f64, width: usize) -> String {
+    let ratio = (val.abs() / max).min(1.0);
+    let filled = (ratio * width as f64) as usize;
+    let empty = width.saturating_sub(filled);
+    let fill = if val >= 0.0 { "█" } else { "▓" };
+    format!("{}{}", fill.repeat(filled), "░".repeat(empty))
+}
+
+fn draw_microstructure(f: &mut Frame, area: Rect, s: &State) {
+    let cols = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1,6); 6]).split(area);
+    let b = Modifier::BOLD;
+    let hft = &s.hft;
+
+    // ── S13: OFI (Order Flow Imbalance) ──
+    let ofi_up = hft.ofi_up;
+    let ofi_dn = hft.ofi_dn;
+    let ofi_net = ofi_up - ofi_dn;
+    let ofi_c = if ofi_net > 10.0 { BB_GREEN } else if ofi_net < -10.0 { BB_RED } else { BB_AMBER };
+    let ofi_bar = bar_str(ofi_net, 50.0, 12);
+    f.render_widget(Paragraph::new(vec![
+        Line::from(vec![Span::styled("● ", Style::default().fg(ofi_c).add_modifier(b)),
+            Span::styled("OFI", Style::default().fg(BB_CYAN).add_modifier(b))]),
+        Line::from(Span::styled(ofi_bar, Style::default().fg(ofi_c))),
+        Line::from(Span::styled(format!("net {ofi_net:+.0} UP{ofi_up:+.0} DN{ofi_dn:+.0}"), Style::default().fg(BB_DIM))),
+    ]).block(Block::default().borders(Borders::ALL).title("S13 OFI").border_style(Style::default().fg(ofi_c))
+        .style(Style::default().bg(BB_CARD))), cols[0]);
+
+    // ── S14: μ-Price (fair value deviation) ──
+    let mp_up = hft.micro_price_up;
+    let mp_dn = hft.micro_price_dn;
+    let mid = hft.mid;
+    let mp_dev = if mid > 0.0 { (mp_up - mid) / mid * 100.0 } else { 0.0 };
+    let mp_c = if mp_dev > 0.1 { BB_GREEN } else if mp_dev < -0.1 { BB_RED } else { BB_AMBER };
+    f.render_widget(Paragraph::new(vec![
+        Line::from(vec![Span::styled("● ", Style::default().fg(mp_c).add_modifier(b)),
+            Span::styled("μ-PRICE", Style::default().fg(BB_MAGENTA).add_modifier(b))]),
+        Line::from(Span::styled(format!("UP {mp_up:.4} DN {mp_dn:.4}"), Style::default().fg(if mp_dev > 0.0 { BB_GREEN } else { BB_RED }))),
+        Line::from(Span::styled(format!("dev {mp_dev:+.2}% mid {mid:.4}"), Style::default().fg(BB_DIM))),
+    ]).block(Block::default().borders(Borders::ALL).title("S14 μP").border_style(Style::default().fg(mp_c))
+        .style(Style::default().bg(BB_CARD))), cols[1]);
+
+    // ── S15: SPREAD HEALTH ──
+    let spread = hft.spread.abs() * 100.0;
+    let sp_c = if spread < 1.0 { BB_GREEN } else if spread < 3.0 { BB_AMBER } else { BB_RED };
+    let sp_bar = bar_str(100.0 - spread.min(10.0) * 10.0, 100.0, 12);
+    f.render_widget(Paragraph::new(vec![
+        Line::from(vec![Span::styled("● ", Style::default().fg(sp_c).add_modifier(b)),
+            Span::styled("SPREAD", Style::default().fg(BB_CYAN).add_modifier(b))]),
+        Line::from(Span::styled(sp_bar, Style::default().fg(sp_c))),
+        Line::from(Span::styled(format!("{spread:.1}% gap"), Style::default().fg(BB_DIM))),
+    ]).block(Block::default().borders(Borders::ALL).title("S15 SPR").border_style(Style::default().fg(sp_c))
+        .style(Style::default().bg(BB_CARD))), cols[2]);
+
+    // ── S16: LEAD-LAG (BTC leading Poly) ──
+    let btc_vel = s.btc_velocity;
+    let clob_mid = hft.mid;
+    let lead = if btc_vel.abs() > 0.5 && clob_mid > 0.0 { btc_vel } else { 0.0 };
+    let lead_c = if lead > 1.0 { BB_GREEN } else if lead < -1.0 { BB_RED }
+        else if lead.abs() > 0.1 { BB_AMBER } else { BB_DIM };
+    let lead_pct = if s.btc > 0.0 { (lead / s.btc * 100.0) } else { 0.0 };
+    f.render_widget(Paragraph::new(vec![
+        Line::from(vec![Span::styled("● ", Style::default().fg(lead_c).add_modifier(b)),
+            Span::styled("LEAD-LAG", Style::default().fg(BB_MAGENTA).add_modifier(b))]),
+        Line::from(Span::styled(format!("BTC ${btc_vel:+.1}/s"), Style::default().fg(lead_c).add_modifier(b))),
+        Line::from(Span::styled(if lead.abs() > 0.5 { "Binance→Poly" } else { "sincronizado" }, Style::default().fg(BB_DIM))),
+    ]).block(Block::default().borders(Borders::ALL).title("S16 LEAD").border_style(Style::default().fg(lead_c))
+        .style(Style::default().bg(BB_CARD))), cols[3]);
+
+    // ── S17: LIQ PRESSURE ──
+    let bid_vol = hft.bid_vol;
+    let ask_vol = hft.ask_vol;
+    let liq_ratio = if ask_vol > 0.0 { bid_vol / ask_vol } else { 1.0 };
+    let liq_c = if liq_ratio > 1.5 { BB_GREEN } else if liq_ratio < 0.67 { BB_RED } else { BB_AMBER };
+    let lr_bar = bar_str((liq_ratio - 0.5).max(0.0), 2.0, 12);
+    f.render_widget(Paragraph::new(vec![
+        Line::from(vec![Span::styled("● ", Style::default().fg(liq_c).add_modifier(b)),
+            Span::styled("LIQ", Style::default().fg(BB_CYAN).add_modifier(b))]),
+        Line::from(Span::styled(lr_bar, Style::default().fg(liq_c))),
+        Line::from(Span::styled(format!("bid/ask {liq_ratio:.2}x"), Style::default().fg(BB_DIM))),
+    ]).block(Block::default().borders(Borders::ALL).title("S17 LIQ").border_style(Style::default().fg(liq_c))
+        .style(Style::default().bg(BB_CARD))), cols[4]);
+
+    // ── S18: TICK HEALTH ──
+    let gap = hft.tick_gap_ms;
+    let dump = hft.dump_score;
+    let spoof = hft.spoof;
+    let ok = gap < 500 && dump == 0 && spoof == 0;
+    let th_c = if ok { BB_GREEN } else if dump >= 2 { BB_RED } else { BB_AMBER };
+    let flags = if dump >= 2 { "⚠ DUMP" } else if spoof > 0 { "⚠ SPOOF" } else if gap > 1000 { "⚠ GAP" } else { "✓ OK" };
+    f.render_widget(Paragraph::new(vec![
+        Line::from(vec![Span::styled("● ", Style::default().fg(th_c).add_modifier(b)),
+            Span::styled("TICK", Style::default().fg(BB_MAGENTA).add_modifier(b))]),
+        Line::from(Span::styled(flags, Style::default().fg(th_c).add_modifier(b))),
+        Line::from(Span::styled(format!("gap {}ms d={} s={}", gap, dump, spoof), Style::default().fg(BB_DIM))),
+    ]).block(Block::default().borders(Borders::ALL).title("S18 TICK").border_style(Style::default().fg(th_c))
+        .style(Style::default().bg(BB_CARD))), cols[5]);
+}
 
 fn draw_manual_status(f: &mut Frame, area: Rect, s: &State) {
     let bb = Modifier::BOLD;
