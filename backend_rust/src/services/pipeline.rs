@@ -295,9 +295,7 @@ pub async fn capture_combined(
         if hft.ofi_dn.is_nan() || hft.ofi_dn.is_infinite() { hft.ofi_dn = 0.0; }
     }
 
-    if let Ok(json) = serde_json::to_string(&*state.latest_hft.read().await) {
-        let _ = state.broadcast_tx.send(format!("{{\"type\":\"hft_state\",\"data\":{json}}}"));
-    }
+    // No broadcast — TUI polls REST, WS broadcast adds latency under load
 
     // ─── Cross-book imbalance depth profile ────────────────────────────
     {
