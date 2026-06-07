@@ -374,7 +374,15 @@ pub async fn capture_combined(
 
     state.session_manager.push(&rec);
 
-    state.mem_hft.write().await.push(rec.clone());
+    {
+        let mut hft = state.mem_hft.write().await;
+        hft.push(rec.clone());
+        let l = hft.len();
+        if l > 1000 {
+            let tail: Vec<_> = hft.drain(l - 500..).collect();
+            *hft = tail;
+        }
+    }
 
     // DB removed — no-op
 
