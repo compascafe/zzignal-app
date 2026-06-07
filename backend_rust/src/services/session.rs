@@ -197,10 +197,7 @@ impl SessionManager {
 
         let mut writer = BufWriter::with_capacity(52_428_800, file); // 50 MiB
 
-        // Write column metadata
-        write_column_metadata(&mut writer);
-
-        // Write column header
+        // Write column header only (no metadata — fast session start)
         let _ = writeln!(writer, "{}", CsvRecord::csv_header());
 
         let mut writers = self.writers.lock().unwrap();
@@ -303,12 +300,14 @@ impl SessionManager {
 
     /// Flush and close a specific session's writer.
     pub fn stop_session(&self, session_id: i32) -> Result<(), String> {
-        let mut writers = self.writers.lock().unwrap();
-        if let Some(sw) = writers.remove(&session_id) {
+        let sw = {
+            let mut writers = self.writers.lock().unwrap();
+            writers.remove(&session_id)
+        };
+        if let Some(sw) = sw {
             info!("SessionManager: stopped session #{} ({} ticks, {} trades, {} rows)",
                 session_id, sw.tick_count, sw.trade_count, sw.row_count);
-            // Explicit flush via drop
-            drop(sw);
+            drop(sw); // flush + close outside lock
             Ok(())
         } else {
             warn!("SessionManager: stop_session #{} — no writer found", session_id);
@@ -326,13 +325,13 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Flush all active writers (called periodically).
+    /// Flush all active writers (called periodically). Collects writers, releases lock, then flushes.
     pub fn flush_all(&self) {
-        let mut writers = self.writers.lock().unwrap();
-        for (&sid, sw) in writers.iter_mut() {
-            if let Err(e) = sw.writer.flush() {
-                warn!("SessionManager flush_all #{}: {}", sid, e);
-            }
+        let to_flush: Vec<_> = {
+            self.writers.lock().unwrap().values_mut().map(|sw| &mut sw.writer as *mut BufWriter<File>).collect()
+        };
+        for ptr in to_flush {
+            unsafe { let _ = (*ptr).flush(); }
         }
     }
 
