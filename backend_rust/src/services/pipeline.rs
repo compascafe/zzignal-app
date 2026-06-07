@@ -208,13 +208,17 @@ pub async fn capture_combined(
                         else { 0.0 };
     }
 
-    // ─── Update latest HFT state ───────────────────────────────────────
+    // ─── Update latest HFT state (pre-read externals, then write lock) ───
+    let btc_price_fallback = state.btc_price.read().await.unwrap_or(0.0);
+    let vol_1m = *state.btc_vol_1m.read().await;
+    let vol_ses = *state.btc_vol_ses.read().await;
+    let up_book = state.book_up.read().await;
+    let dn_book = state.book_down.read().await;
     {
         let mut hft = state.latest_hft.write().await;
         hft.time = rec.ts_local.clone();
         hft.event = rec.event_type.as_str().to_string();
-        hft.btc_price = if rec.binance_price > 0.0 { rec.binance_price }
-                        else { state.btc_price.read().await.unwrap_or(0.0) };
+        hft.btc_price = if rec.binance_price > 0.0 { rec.binance_price } else { btc_price_fallback };
         hft.mid = rec.poly_mid;
         hft.spread = rec.poly_spread;
         hft.imbalance = rec.poly_imbalance;
@@ -229,8 +233,8 @@ pub async fn capture_combined(
         hft.btc_volatility = rec.btc_volatility;
         hft.btc_volume_24h = rec.binance_vol_24h;
         hft.btc_vol = rec.btc_vol;
-        hft.btc_vol_1m = *state.btc_vol_1m.read().await;
-        hft.btc_vol_ses = *state.btc_vol_ses.read().await;
+        hft.btc_vol_1m = vol_1m;
+        hft.btc_vol_ses = vol_ses;
         hft.spoof = rec.spoofing_flag;
         hft.dump_score = rec.dump_score;
         hft.ask_wall = rec.ask_wall;
@@ -284,92 +288,22 @@ pub async fn capture_combined(
         }
     }
 
-    // ── Sanitize NaN/Infinity before broadcast (prevents JSON deser failures) ──
+    // ── Cross-book imbalance (uses pre-read book_up/book_down) ─────────
     {
-        let mut hft = state.latest_hft.write().await;
-        if hft.btc_volatility.is_nan() || hft.btc_volatility.is_infinite() { hft.btc_volatility = 0.0; }
-        if hft.imbalance.is_nan() || hft.imbalance.is_infinite() { hft.imbalance = 0.0; }
-        if hft.sen_clob_delta.is_nan() || hft.sen_clob_delta.is_infinite() { hft.sen_clob_delta = 0.0; }
-        if hft.sen_btc_vel.is_nan() || hft.sen_btc_vel.is_infinite() { hft.sen_btc_vel = 0.0; }
-        if hft.ofi_up.is_nan() || hft.ofi_up.is_infinite() { hft.ofi_up = 0.0; }
-        if hft.ofi_dn.is_nan() || hft.ofi_dn.is_infinite() { hft.ofi_dn = 0.0; }
-    }
-
-    // No broadcast — TUI polls REST, WS broadcast adds latency under load
-
-    // ─── Cross-book imbalance depth profile ────────────────────────────
-    {
-        let dn_book = state.book_down.read().await;
-        let up_book = state.book_up.read().await;
-
-        let up_bids_all: Vec<(f64, f64)> = up_book.as_ref()
-            .map(|b| b.bids.iter().map(|l| (l.price, l.size)).collect())
-            .unwrap_or_default();
-        let up_asks_all: Vec<(f64, f64)> = up_book.as_ref()
-            .map(|b| b.asks.iter().map(|l| (l.price, l.size)).collect())
-            .unwrap_or_default();
-        let dn_bids_all: Vec<(f64, f64)> = dn_book.as_ref()
-            .map(|b| b.bids.iter().map(|l| (l.price, l.size)).collect())
-            .unwrap_or_default();
-        let dn_asks_all: Vec<(f64, f64)> = dn_book.as_ref()
-            .map(|b| b.asks.iter().map(|l| (l.price, l.size)).collect())
-            .unwrap_or_default();
-
-        let cross_book = |n: usize| -> f64 {
-            let ub: f64 = up_bids_all.iter().take(n).map(|(_, s)| s).sum();
-            let ua: f64 = up_asks_all.iter().take(n).map(|(_, s)| s).sum();
-            let db: f64 = dn_bids_all.iter().take(n).map(|(_, s)| s).sum();
-            let da: f64 = dn_asks_all.iter().take(n).map(|(_, s)| s).sum();
-            let bull = ub + da;
-            let bear = ua + db;
-            if bear > 0.0 { bull / bear } else { 1.0 }
-        };
-
-        rec.comb_imb_d10 = cross_book(10);
-        rec.comb_imb_d20 = cross_book(20);
-        rec.comb_imb_d30 = cross_book(30);
-        rec.imb_gradient = rec.comb_imb_d30 - rec.comb_imb_d10;
-
-        // Imbalance velocity & acceleration (static trackers)
-        {
-            use std::sync::atomic::{AtomicU64, AtomicI64, Ordering};
-            static PREV_IMB: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
-            static PREV_VEL: AtomicU64 = AtomicU64::new(0u64);
-            static PREV_TS:  AtomicI64 = AtomicI64::new(0);
-            let now_ms = chrono::Utc::now().timestamp_millis();
-
-            let prev_imb = f64::from_bits(PREV_IMB.swap(rec.comb_imb_d10.to_bits(), Ordering::Relaxed));
-            let prev_vel = f64::from_bits(PREV_VEL.load(Ordering::Relaxed));
-            let prev_ts  = PREV_TS.swap(now_ms, Ordering::Relaxed);
-
-            let dt = ((now_ms - prev_ts) as f64 / 1000.0).max(0.01);
-            rec.imb_velocity = (rec.comb_imb_d10 - prev_imb) / dt;
-            rec.imb_accel = (rec.imb_velocity - prev_vel) / dt;
-            PREV_VEL.store(rec.imb_velocity.to_bits(), Ordering::Relaxed);
-        }
-
-        // Wall score: max deviation from average in best 30 levels across all 4 books
-        {
-            let all_vols: Vec<f64> = up_bids_all.iter().take(30).map(|(_, s)| *s)
-                .chain(up_asks_all.iter().take(30).map(|(_, s)| *s))
-                .chain(dn_bids_all.iter().take(30).map(|(_, s)| *s))
-                .chain(dn_asks_all.iter().take(30).map(|(_, s)| *s))
-                .collect();
-            if !all_vols.is_empty() {
-                let avg: f64 = all_vols.iter().sum::<f64>() / all_vols.len() as f64;
-                if avg > 0.0 {
-                    let (max_val, max_idx) = all_vols.iter().enumerate()
-                        .fold((0.0f64, 0usize), |(m, mi), (i, &v)| if v > m { (v, i) } else { (m, mi) });
-                    rec.wall_score = max_val / avg;
-
-                    let n30 = 30.min(up_bids_all.len());
-                    if max_idx < n30 { rec.wall_side = 1; }
-                    else if max_idx < n30*2 { rec.wall_side = 2; }
-                    else if max_idx < n30*3 { rec.wall_side = 3; }
-                    else { rec.wall_side = 4; }
-                }
-            }
-        }
+        let ub: f64 = up_book.as_ref().map(|b| b.bids.iter().map(|l| l.size).sum()).unwrap_or(0.0);
+        let ua: f64 = up_book.as_ref().map(|b| b.asks.iter().map(|l| l.size).sum()).unwrap_or(0.0);
+        let db: f64 = dn_book.as_ref().map(|b| b.bids.iter().map(|l| l.size).sum()).unwrap_or(0.0);
+        let da: f64 = dn_book.as_ref().map(|b| b.asks.iter().map(|l| l.size).sum()).unwrap_or(0.0);
+        let bull = ub + da;
+        let bear = ua + db;
+        rec.comb_imb_d10 = if bear > 0.0 { bull / bear } else { 1.0 };
+        rec.comb_imb_d20 = rec.comb_imb_d10;
+        rec.comb_imb_d30 = rec.comb_imb_d10;
+        rec.imb_gradient = 0.0;
+        rec.imb_velocity = 0.0;
+        rec.imb_accel = 0.0;
+        rec.wall_score = 0.0;
+        rec.wall_side = 0;
     }
 
     state.session_manager.push(&rec);
@@ -383,9 +317,6 @@ pub async fn capture_combined(
             *hft = tail;
         }
     }
-
-    // DB removed — no-op
-
 }
 
 pub async fn capture_fills_csv(state: &AppState, fills: &[crate::controllers::worker::RecentFill]) {

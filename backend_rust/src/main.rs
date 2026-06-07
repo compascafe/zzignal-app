@@ -381,9 +381,12 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
                     }
                 }
                 let open = state.btc_open.read().await.unwrap_or(0.0);
-                let _ = state.broadcast_tx.send(
-                    json!({"type":"btc_price","price":mid,"open":open}).to_string()
-                );
+                let s = Arc::clone(&state);
+                let m = mid;
+                let o = open;
+                tokio::spawn(async move {
+                    let _ = s.broadcast_tx.send(json!({"type":"btc_price","price":m,"open":o}).to_string());
+                });
             }
         }
         AppMsg::OpenOrders(o) => { *state.open_orders.write().await = o.clone(); }
