@@ -293,18 +293,24 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
         AppMsg::BookUp(b) => {
             *state.book_up.write().await = Some(b.clone());
             if let Some(bid) = b.bids.first() { *state.best_bid_up.write().await = bid.price; }
-            // Debounced: skip spawn if pipeline already running for this side
-            static PIPELINE_UP_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            if !PIPELINE_UP_RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                let s2 = Arc::clone(&state);
-                let bids = b.bids.clone();
-                let asks = b.asks.clone();
-                tokio::spawn(async move {
-                    pipeline::push_depth_frame(&s2, 0, &bids, &asks).await;
-                    pipeline::capture_combined(&s2, "up", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
-                    PIPELINE_UP_RUNNING.store(false, std::sync::atomic::Ordering::Release);
-                });
-            }
+            let s2 = Arc::clone(&state);
+            let bids = b.bids.clone();
+            let asks = b.asks.clone();
+            tokio::spawn(async move {
+                pipeline::push_depth_frame(&s2, 0, &bids, &asks).await;
+                pipeline::capture_combined(&s2, "up", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+            });
+        }
+        AppMsg::BookDown(b) => {
+            *state.book_down.write().await = Some(b.clone());
+            if let Some(bid) = b.bids.first() { *state.best_bid_dn.write().await = bid.price; }
+            let s2 = Arc::clone(&state);
+            let bids = b.bids.clone();
+            let asks = b.asks.clone();
+            tokio::spawn(async move {
+                pipeline::push_depth_frame(&s2, 1, &bids, &asks).await;
+                pipeline::capture_combined(&s2, "down", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+            });
         }
         AppMsg::BookDown(b) => {
             *state.book_down.write().await = Some(b.clone());
