@@ -477,20 +477,10 @@ pub fn build_book_update(
     tracking.push_session_volatility(bb_std);
     let _high_vol = tracking.is_high_volatility(bb_std);
 
-    // ─── Conformal Prediction: gate signals with risk validation ──────────
-    let abs_err = (bb_mid - bb_sma).abs();
-    tracking.push_calibration_error(abs_err);
-    let (_cp_range, cp_valid) = tracking.conformal_validate(abs_err, 0.05);
-
     let (mr_signal, mut signal_label) = tracking.mean_reversion_signal(bb_mid, bb_imb);
     tracking.push_tps_sample(trades_ps);
     let (tc_signal, tc_label) = tracking.technical_confluence_signal(bb_mid, bb_imb, trades_ps, price_vel);
-    // Master signal only activates if CP validation passes
-    let (master_sig, master_label) = if cp_valid > 0 {
-        tracking.master_signal(bb_mid, bb_imb, price_vel)
-    } else {
-        (0u8, String::new())
-    };
+    let (master_sig, master_label) = tracking.master_signal(bb_mid, bb_imb, price_vel);
     if tc_signal > 0 {
         signal_label = if signal_label.is_empty() { tc_label } else { format!("{}|{}", signal_label, tc_label) };
     }

@@ -241,8 +241,7 @@ impl Default for CsvRecord {
 /// Single source of truth for CSV serialization (41 columns).
 /// All CSV export paths (per-session file, live REST, DB fallback) use this.
 impl CsvRecord {
-    /// Column names in exact order matching `to_csv_fields()`.
-            pub fn csv_header() -> &'static str {
+    pub fn csv_header() -> &'static str {
         concat!(
         "time,ts_exchange,event,latencia_ms,",
         "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,btc_volatility,btc_vol_ratio,",
@@ -253,65 +252,21 @@ impl CsvRecord {
         "token_momentum,",
         "comb_imb_d10,comb_imb_d20,comb_imb_d30,imb_gradient,imb_velocity,imb_accel,wall_score,wall_side",
         )
-    }    /// Returns 41 CSV fields as strings in the exact order of `csv_header()`.
-    /// Used by all three CSV export paths (per-session file, live REST, DB fallback).
-    pub fn to_csv_fields(&self) -> Vec<String> {
-        let mut f: Vec<String> = Vec::with_capacity(41);
-        // ── FASE 0: IDENTIDAD (4) ──
-        f.push(self.ts_local.clone());
-        f.push(self.ts_exchange.clone());
-        f.push(self.event_type.as_str().to_string());
-        f.push(self.latencia_ms.to_string());
-        // ── FASE 1: MERCADO BTC (8) ──
-        f.push(self.binance_price.to_string());
-        f.push(self.binance_imbalance.to_string());
-        f.push(self.binance_vol_24h.to_string());
-        f.push(self.btc_vol.to_string());
-        f.push(self.price_velocity.to_string());
-        f.push(self.btc_acel.to_string());
-        f.push(self.btc_volatility.to_string());
-        f.push(self.btc_vol_ratio.to_string());
-        // ── FASE 2: ORDER BOOK (7) ──
-        f.push(self.poly_bid.to_string());
-        f.push(self.poly_ask.to_string());
-        f.push(self.poly_mid.to_string());
-        f.push(self.poly_spread.to_string());
-        f.push(self.poly_bid_vol_all.to_string());
-        f.push(self.poly_ask_vol_all.to_string());
-        f.push(self.poly_imbalance.to_string());
-        // ── FASE 3: RIESGO (5) ──
-        f.push(self.spoofing_flag.to_string());
-        f.push(self.tick_gap_ms.to_string());
-        f.push(self.ask_wall.to_string());
-        f.push(self.dump_score.to_string());
-        f.push(self.pnr_seconds_left.to_string());
-        // ── FASE 4: LIQUIDEZ (2) ──
-        f.push(self.price_impact.to_string());
-        f.push(self.depth_concentration.to_string());
-        // ── FASE 5: TRIGGER (6) ──
-        f.push(self.clob_trade_up.to_string());
-        f.push(self.clob_trade_dn.to_string());
-        f.push(self.clob_trade_up_vol.to_string());
-        f.push(self.clob_trade_dn_vol.to_string());
-        f.push(self.clob_trade_count_up.to_string());
-        f.push(self.clob_trade_count_dn.to_string());
-        // ── FASE 6: MOMENTUM (1) ──
-        f.push(self.token_momentum.to_string());
-        // ── FASE 7: DEPTH PROFILE (8) ──
-        f.push(self.comb_imb_d10.to_string());
-        f.push(self.comb_imb_d20.to_string());
-        f.push(self.comb_imb_d30.to_string());
-        f.push(self.imb_gradient.to_string());
-        f.push(self.imb_velocity.to_string());
-        f.push(self.imb_accel.to_string());
-        f.push(self.wall_score.to_string());
-        f.push(self.wall_side.to_string());
-        f
     }
 
-    /// Convenience: join all fields with commas.
+    /// Zero-allocation CSV line: writes directly into a single pre-allocated String.
     pub fn to_csv_line(&self) -> String {
-        self.to_csv_fields().join(",")
+        use std::fmt::Write;
+        let mut s = String::with_capacity(512);
+        let _ = write!(s, "{},{},{},{},", self.ts_local, self.ts_exchange, self.event_type.as_str(), self.latencia_ms);
+        let _ = write!(s, "{},{},{},{},{},{},{},{},", self.binance_price, self.binance_imbalance, self.binance_vol_24h, self.btc_vol, self.price_velocity, self.btc_acel, self.btc_volatility, self.btc_vol_ratio);
+        let _ = write!(s, "{},{},{},{},{},{},{},", self.poly_bid, self.poly_ask, self.poly_mid, self.poly_spread, self.poly_bid_vol_all, self.poly_ask_vol_all, self.poly_imbalance);
+        let _ = write!(s, "{},{},{},{},{},", self.spoofing_flag, self.tick_gap_ms, self.ask_wall, self.dump_score, self.pnr_seconds_left);
+        let _ = write!(s, "{},{},", self.price_impact, self.depth_concentration);
+        let _ = write!(s, "{},{},{},{},{},{},", self.clob_trade_up, self.clob_trade_dn, self.clob_trade_up_vol, self.clob_trade_dn_vol, self.clob_trade_count_up, self.clob_trade_count_dn);
+        let _ = write!(s, "{},", self.token_momentum);
+        let _ = write!(s, "{},{},{},{},{},{},{},{}", self.comb_imb_d10, self.comb_imb_d20, self.comb_imb_d30, self.imb_gradient, self.imb_velocity, self.imb_accel, self.wall_score, self.wall_side);
+        s
     }
 }
 

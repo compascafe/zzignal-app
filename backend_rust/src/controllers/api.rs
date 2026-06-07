@@ -71,22 +71,11 @@ fn system_metrics() -> Value {
     let cpu = sys.cpus().first().map(|c| c.cpu_usage()).unwrap_or(0.0);
     let ram_used = sys.used_memory() / 1024 / 1024;
     let ram_total = sys.total_memory() / 1024 / 1024;
-    // Use simple df command for disk (cross-platform approach)
-    let disk_free = std::process::Command::new("df")
-        .args(["-k", "."])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.lines().nth(1).map(|l| l.to_string()))
-        .and_then(|l| l.split_whitespace().nth(3).map(|s| s.to_string()))
-        .and_then(|s| s.parse::<f64>().ok())
-        .map(|kb| kb / 1_048_576.0)
-        .unwrap_or(0.0);
     json!({
         "cpu_percent":   (cpu as f64 * 10.0).round() / 10.0,
         "ram_mb_used":   ram_used,
         "ram_mb_total":  ram_total,
-        "disk_gb_free":  (disk_free * 10.0).round() / 10.0,
+        "ram_pct":       if ram_total > 0 { (ram_used as f64 / ram_total as f64 * 100.0 * 10.0).round() / 10.0 } else { 0.0 },
     })
 }
 
@@ -242,8 +231,7 @@ async fn export_live_csv(
     let _ = writeln!(csv, "{}", CsvRecord::csv_header());
 
     for r in &rows {
-        let fields = r.to_csv_fields();
-        let _ = writeln!(csv, "{}", fields.join(","));
+        let _ = writeln!(csv, "{}", r.to_csv_line());
     }
 
     let filename = format!("zzignal_live_{}.csv", chrono::Utc::now().format("%Y%m%dT%H%M%S"));

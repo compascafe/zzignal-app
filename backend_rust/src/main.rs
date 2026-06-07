@@ -182,7 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     while drained < 50 && tick_rx.try_recv().is_ok() { drained += 1; }
                     continue;
                 }
-                if let Some(ref bn) = *depth3.read().await {
+                let depth_snap = depth3.read().await.clone();
+                if let Some(ref bn) = depth_snap {
                     { let _g = perf::TRACK_PRICE.start(); tracking_state.track_price(tick.price, tick.event_time); }
                     { let _g = perf::RECORD_TRADE.start(); tracking_state.record_binance_trade(tick.event_time); }
                     { let _g = perf::RECORD_SAMPLE.start(); tracking_state.record_price_sample(tick.event_time, tick.price); }
@@ -311,21 +312,6 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
                 pipeline::push_depth_frame(&s2, 1, &bids, &asks).await;
                 pipeline::capture_combined(&s2, "down", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
             });
-        }
-        AppMsg::BookDown(b) => {
-            *state.book_down.write().await = Some(b.clone());
-            if let Some(bid) = b.bids.first() { *state.best_bid_dn.write().await = bid.price; }
-            static PIPELINE_DN_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            if !PIPELINE_DN_RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
-                let s2 = Arc::clone(&state);
-                let bids = b.bids.clone();
-                let asks = b.asks.clone();
-                tokio::spawn(async move {
-                    pipeline::push_depth_frame(&s2, 1, &bids, &asks).await;
-                    pipeline::capture_combined(&s2, "down", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
-                    PIPELINE_DN_RUNNING.store(false, std::sync::atomic::Ordering::Release);
-                });
-            }
         }
         AppMsg::LastTradeUp { price, size } => {
             let mut prev = state.prev_raw_up.write().await;
