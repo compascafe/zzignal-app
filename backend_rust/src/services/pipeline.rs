@@ -116,37 +116,6 @@ pub async fn capture_combined(
         rec.tick_gap_ms = if last > 0 { now_ms - last } else { 0 };
 
         {
-            let dt_secs = (rec.tick_gap_ms as f64 / 1000.0).max(0.001);
-            let prev_vel = *state.prev_btc_vel.read().await;
-            rec.btc_acel = (rec.price_velocity - prev_vel) / dt_secs;
-            *state.prev_btc_vel.write().await = rec.price_velocity;
-        }
-
-        {
-            let alpha = 0.1;
-            let abs_vel = rec.price_velocity.abs();
-            let mut vol_ema = state.btc_vol_ema.write().await;
-            *vol_ema = alpha * abs_vel + (1.0 - alpha) * *vol_ema;
-            rec.btc_volatility = *vol_ema;
-        }
-
-        {
-            let ob_vol = rec.poly_bid_vol_all + rec.poly_ask_vol_all;
-            rec.btc_vol_ratio = if ob_vol > 0.0 { rec.btc_vol / ob_vol } else { 0.0 };
-        }
-
-        {
-            let trade_vol = rec.clob_trade_up_vol + rec.clob_trade_dn_vol;
-            rec.price_impact = if trade_vol > 0.0 {
-                (rec.clob_trade_up - rec.clob_trade_dn).abs() / trade_vol.max(0.01)
-            } else { 0.0 };
-            let total_depth = rec.poly_bid_vol_all + rec.poly_ask_vol_all;
-            rec.depth_concentration = if total_depth > 0.0 {
-                rec.poly_bid_vol_all.max(rec.poly_ask_vol_all) / total_depth
-            } else { 0.5 };
-        }
-
-        {
             use std::sync::atomic::AtomicU8;
             static ASK_WALL_COUNT: AtomicU8 = AtomicU8::new(0);
             let is_wall = rec.poly_ask_vol_all > 0.0 && rec.poly_ask_vol_all > rec.poly_bid_vol_all * 3.0;
@@ -203,9 +172,7 @@ pub async fn capture_combined(
         let raw_dn = *state.raw_trade_dn.read().await;
         let prev_up = *state.prev_raw_up.read().await;
         let prev_dn = *state.prev_raw_dn.read().await;
-        rec.token_momentum = if raw_up > 0.0 && prev_up > 0.0 { raw_up - prev_up }
-                        else if raw_dn > 0.0 && prev_dn > 0.0 { raw_dn - prev_dn }
-                        else { 0.0 };
+    // token_momentum removed — was unused
     }
 
     // ─── Update latest HFT state (pre-read externals, then write lock) ───
@@ -229,8 +196,8 @@ pub async fn capture_combined(
         hft.clob_trade_up_vol = rec.clob_trade_up_vol;
         hft.clob_trade_dn_vol = rec.clob_trade_dn_vol;
         hft.btc_vel = rec.price_velocity;
-        hft.btc_acel = rec.btc_acel;
-        hft.btc_volatility = rec.btc_volatility;
+        hft.btc_acel = 0.0;
+        hft.btc_volatility = 0.0;
         hft.btc_volume_24h = rec.binance_vol_24h;
         hft.btc_vol = rec.btc_vol;
         hft.btc_vol_1m = vol_1m;
@@ -286,24 +253,6 @@ pub async fn capture_combined(
                 (dn_bid_px * dn_best_ask_sz + dn_ask_px * dn_best_bid_sz) / (dn_best_bid_sz + dn_best_ask_sz)
             } else { dn_bid_px.max(dn_ask_px).max(0.0) };
         }
-    }
-
-    // ── Cross-book imbalance (uses pre-read book_up/book_down) ─────────
-    {
-        let ub: f64 = up_book.as_ref().map(|b| b.bids.iter().map(|l| l.size).sum()).unwrap_or(0.0);
-        let ua: f64 = up_book.as_ref().map(|b| b.asks.iter().map(|l| l.size).sum()).unwrap_or(0.0);
-        let db: f64 = dn_book.as_ref().map(|b| b.bids.iter().map(|l| l.size).sum()).unwrap_or(0.0);
-        let da: f64 = dn_book.as_ref().map(|b| b.asks.iter().map(|l| l.size).sum()).unwrap_or(0.0);
-        let bull = ub + da;
-        let bear = ua + db;
-        rec.comb_imb_d10 = if bear > 0.0 { bull / bear } else { 1.0 };
-        rec.comb_imb_d20 = rec.comb_imb_d10;
-        rec.comb_imb_d30 = rec.comb_imb_d10;
-        rec.imb_gradient = 0.0;
-        rec.imb_velocity = 0.0;
-        rec.imb_accel = 0.0;
-        rec.wall_score = 0.0;
-        rec.wall_side = 0;
     }
 
     state.session_manager.push(&rec);

@@ -18,6 +18,9 @@ use tracing::info;
 use crate::models::state::AppState;
 use crate::controllers::worker::{self, CandleInterval, CmdMsg, OrderSide, Outcome};
 
+use crate::services::perf;
+use crate::services::pipeline;
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -28,6 +31,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/hft/latest",      get(get_hft_latest))
         .route("/api/orders",          get(get_orders))
         .route("/api/sessions",        get(get_sessions))
+        // Perf monitoring
+        .route("/api/perf",            get(get_perf))
         // TUI commands — trading
         .route("/api/orders/limit",    post(post_limit_order))
         .route("/api/orders/market",   post(post_market_order))
@@ -768,6 +773,14 @@ fn parse_outcome(s: &str) -> Result<Outcome, String> {
         "down" => Ok(Outcome::Down),
         other  => Err(format!("outcome inválido: {other}")),
     }
+}
+
+async fn get_perf() -> Json<Value> {
+    let slots = serde_json::from_str::<Value>(&perf::dump_json()).unwrap_or_default();
+    Json(json!({
+        "slots": slots,
+        "sessions": std::fs::read_dir("sessions").ok().map(|d| d.filter_map(|e| e.ok()).count()).unwrap_or(0),
+    }))
 }
 
 fn parse_args(side: &str, outcome: &str) -> Result<(OrderSide, Outcome), String> {

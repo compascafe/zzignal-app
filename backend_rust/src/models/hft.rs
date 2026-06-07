@@ -87,43 +87,33 @@ impl Default for PriceRingBuffer {
     fn default() -> Self { Self::new() }
 }
 
-/// Snapshot completo del orderbook de Polymarket (todos los niveles).
-/// Se captura en cada BOOK_UPDATE y se almacena en un buffer circular en AppState.
+/// Snapshot completo del orderbook de Polymarket
 #[derive(Debug, Clone, Serialize)]
 pub struct PolyDepthFrame {
-    pub ts_unix_ms:  i64,             // timestamp local (unix ms)
-    pub side:        u8,              // 0 = UP, 1 = DOWN
-    pub bids:        Vec<PriceLevel>, // todos los niveles bid
-    pub asks:        Vec<PriceLevel>, // todos los niveles ask
+    pub ts_unix_ms:  i64,
+    pub side:        u8,
+    pub bids:        Vec<PriceLevel>,
+    pub asks:        Vec<PriceLevel>,
 }
 
-/// Snapshot completo del order book de Binance (top 20 niveles)
+/// Snapshot del order book de Binance (top 20 niveles)
 #[derive(Debug, Clone)]
 pub struct BinanceDepth {
     pub last_update_id: u64,
     pub bids:           Vec<PriceLevel>,
     pub asks:           Vec<PriceLevel>,
-    pub event_time:     i64,   // Binance E (ms)
-    pub local_time:     i64,   // nuestra máquina (ms)
-    pub btc_price:      f64,   // último precio del ticker
-    pub btc_volume_24h: f64,   // volumen 24h del ticker
+    pub event_time:     i64,
+    pub local_time:     i64,
+    pub btc_price:      f64,
+    pub btc_volume_24h: f64,
 }
 
 impl Default for BinanceDepth {
     fn default() -> Self {
-        Self {
-            last_update_id: 0,
-            bids: vec![],
-            asks: vec![],
-            event_time: 0,
-            local_time: 0,
-            btc_price: 0.0,
-            btc_volume_24h: 0.0,
-        }
+        Self { last_update_id: 0, bids: vec![], asks: vec![], event_time: 0, local_time: 0, btc_price: 0.0, btc_volume_24h: 0.0 }
     }
 }
 
-/// Tipo de evento en el pipeline unificado
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum EventType {
     BookUpdate,
@@ -133,15 +123,11 @@ pub enum EventType {
 
 impl EventType {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::BookUpdate => "BOOK_UPDATE",
-            Self::Trade => "TRADE",
-            Self::BinanceTick => "BINANCE_TICK",
-        }
+        match self { Self::BookUpdate => "BOOK_UPDATE", Self::Trade => "TRADE", Self::BinanceTick => "BINANCE_TICK" }
     }
 }
 
-/// Registro unificado para CSV (33 columnas esenciales — mercado, riesgo, liquidez).
+/// CSV record — 27 essential columns
 #[derive(Debug, Clone)]
 pub struct CsvRecord {
     pub ts_local:            String,
@@ -152,7 +138,6 @@ pub struct CsvRecord {
     pub binance_imbalance:   f32,
     pub binance_vol_24h:     f64,
     pub btc_vol:             f64,
-    pub btc_volatility:       f64,
     pub poly_bid:            f64,
     pub poly_ask:            f64,
     pub poly_mid:            f64,
@@ -162,10 +147,6 @@ pub struct CsvRecord {
     pub poly_imbalance:      f64,
     pub session_id:          i32,
     pub price_velocity:       f64,
-    pub btc_acel:             f64,
-    pub btc_vol_ratio:        f64,
-    pub price_impact:         f64,
-    pub depth_concentration:  f64,
     pub spoofing_flag:        u8,
     pub pnr_seconds_left:       i32,
     pub clob_trade_up:         f64,
@@ -177,96 +158,43 @@ pub struct CsvRecord {
     pub tick_gap_ms:            i64,
     pub ask_wall:               u8,
     pub dump_score:             u8,
-    pub token_momentum:         f64,
-    // ─── Cross-book imbalance depth profile ────────────────────────────────
-    pub comb_imb_d10:           f64,  // cross-book imbalance at 10 levels
-    pub comb_imb_d20:           f64,  // cross-book imbalance at 20 levels
-    pub comb_imb_d30:           f64,  // cross-book imbalance at 30 levels
-    pub imb_gradient:           f64,  // d30 - d10 (>0=deep bullish, <0=bearish hidden)
-    pub imb_velocity:           f64,  // Δcomb_imb_d10 / Δs
-    pub imb_accel:              f64,  // Δvelocity / Δs
-    pub wall_score:             f64,  // max(level_vol / avg_vol) in best 30 levels
-    pub wall_side:              u8,   // 0=none 1=up_bid 2=up_ask 3=dn_bid 4=dn_ask
 }
 
 impl Default for CsvRecord {
     fn default() -> Self {
         Self {
-            ts_local:            String::new(),
-            ts_exchange:         String::new(),
-            event_type:          EventType::BookUpdate,
-            latencia_ms:         0,
-            binance_price:       0.0,
-            binance_imbalance:   0.0,
-            binance_vol_24h:     0.0,
-            btc_vol:             0.0,
-            btc_volatility:       0.0,
-            poly_bid:            0.0,
-            poly_ask:            0.0,
-            poly_mid:            0.0,
-            poly_spread:         0.0,
-            poly_bid_vol_all:    0.0,
-            poly_ask_vol_all:    0.0,
-            poly_imbalance:      0.0,
-            session_id:          0,
-            price_velocity:       0.0,
-            btc_acel:             0.0,
-            btc_vol_ratio:        0.0,
-            price_impact:         0.0,
-            depth_concentration:  0.5,
-            spoofing_flag:        0,
-            pnr_seconds_left:       0,
-            clob_trade_up:        0.0,
-            clob_trade_dn:        0.0,
-            clob_trade_up_vol:    0.0,
-            clob_trade_dn_vol:    0.0,
-            clob_trade_count_up: 0,
-            clob_trade_count_dn: 0,
-            tick_gap_ms:            0,
-            ask_wall:               0,
-            dump_score:             0,
-            token_momentum:         0.0,
-            comb_imb_d10:           1.0,
-            comb_imb_d20:           1.0,
-            comb_imb_d30:           1.0,
-            imb_gradient:           0.0,
-            imb_velocity:           0.0,
-            imb_accel:              0.0,
-            wall_score:             0.0,
-            wall_side:              0,
+            ts_local: String::new(), ts_exchange: String::new(), event_type: EventType::BookUpdate,
+            latencia_ms: 0, binance_price: 0.0, binance_imbalance: 0.0, binance_vol_24h: 0.0,
+            btc_vol: 0.0, poly_bid: 0.0, poly_ask: 0.0, poly_mid: 0.0,
+            poly_spread: 0.0, poly_bid_vol_all: 0.0, poly_ask_vol_all: 0.0,
+            poly_imbalance: 0.0, session_id: 0, price_velocity: 0.0,
+            spoofing_flag: 0, pnr_seconds_left: 0,
+            clob_trade_up: 0.0, clob_trade_dn: 0.0, clob_trade_up_vol: 0.0, clob_trade_dn_vol: 0.0,
+            clob_trade_count_up: 0, clob_trade_count_dn: 0,
+            tick_gap_ms: 0, ask_wall: 0, dump_score: 0,
         }
     }
 }
 
-/// Single source of truth for CSV serialization (41 columns).
-/// All CSV export paths (per-session file, live REST, DB fallback) use this.
 impl CsvRecord {
     pub fn csv_header() -> &'static str {
         concat!(
         "time,ts_exchange,event,latencia_ms,",
-        "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,btc_acel,btc_volatility,btc_vol_ratio,",
+        "binance_price,binance_imbalance,binance_vol_24h,btc_vol,btc_vel,",
         "bid,ask,mid,spread,bid_vol,ask_vol,imbalance,",
         "spoof,tick_gap_ms,ask_wall,dump_score,secs_left,",
-        "price_impact,depth_concentration,",
-        "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,clob_trade_count_up,clob_trade_count_dn,",
-        "token_momentum,",
-        "comb_imb_d10,comb_imb_d20,comb_imb_d30,imb_gradient,imb_velocity,imb_accel,wall_score,wall_side",
+        "clob_trade_up,clob_trade_dn,clob_trade_up_vol,clob_trade_dn_vol,clob_trade_count_up,clob_trade_count_dn",
         )
     }
 
-    /// Zero-allocation CSV line: writes directly into a single pre-allocated String.
     pub fn to_csv_line(&self) -> String {
         use std::fmt::Write;
-        let mut s = String::with_capacity(512);
+        let mut s = String::with_capacity(400);
         let _ = write!(s, "{},{},{},{},", self.ts_local, self.ts_exchange, self.event_type.as_str(), self.latencia_ms);
-        let _ = write!(s, "{},{},{},{},{},{},{},{},", self.binance_price, self.binance_imbalance, self.binance_vol_24h, self.btc_vol, self.price_velocity, self.btc_acel, self.btc_volatility, self.btc_vol_ratio);
+        let _ = write!(s, "{},{},{},{},{},", self.binance_price, self.binance_imbalance, self.binance_vol_24h, self.btc_vol, self.price_velocity);
         let _ = write!(s, "{},{},{},{},{},{},{},", self.poly_bid, self.poly_ask, self.poly_mid, self.poly_spread, self.poly_bid_vol_all, self.poly_ask_vol_all, self.poly_imbalance);
         let _ = write!(s, "{},{},{},{},{},", self.spoofing_flag, self.tick_gap_ms, self.ask_wall, self.dump_score, self.pnr_seconds_left);
-        let _ = write!(s, "{},{},", self.price_impact, self.depth_concentration);
-        let _ = write!(s, "{},{},{},{},{},{},", self.clob_trade_up, self.clob_trade_dn, self.clob_trade_up_vol, self.clob_trade_dn_vol, self.clob_trade_count_up, self.clob_trade_count_dn);
-        let _ = write!(s, "{},", self.token_momentum);
-        let _ = write!(s, "{},{},{},{},{},{},{},{}", self.comb_imb_d10, self.comb_imb_d20, self.comb_imb_d30, self.imb_gradient, self.imb_velocity, self.imb_accel, self.wall_score, self.wall_side);
+        let _ = write!(s, "{},{},{},{},{},{}", self.clob_trade_up, self.clob_trade_dn, self.clob_trade_up_vol, self.clob_trade_dn_vol, self.clob_trade_count_up, self.clob_trade_count_dn);
         s
     }
 }
-

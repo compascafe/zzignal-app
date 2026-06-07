@@ -74,6 +74,9 @@ pub static CAPTURE_COMBINED:  PerfSlot = PerfSlot::new("capture_combined");
 pub static DB_INSERT_BOOK:    PerfSlot = PerfSlot::new("capture_book_db");
 pub static DB_INSERT_FILL:    PerfSlot = PerfSlot::new("insert_fill");
 pub static STRATEGY_EVAL:     PerfSlot = PerfSlot::new("strategy_evaluate");
+pub static BTC_HANDLER:       PerfSlot = PerfSlot::new("btc_tick_handler");
+pub static CONSUMER_LOOP:     PerfSlot = PerfSlot::new("consumer_iter");
+pub static BROADCAST_SEND:    PerfSlot = PerfSlot::new("broadcast_send");
 
 // ─── Dump all counters as JSON string ────────────────────────────────────────────
 
@@ -83,7 +86,7 @@ pub fn dump_json() -> String {
         &BUILD_TICK, &ENGINE_LOCK, &EVAL_MASTER, &MACRO_CTX_WRITE,
         &UPDATE_RSI, &CHECK_MOMENTUM, &CSV_PUSH, &SM_PUSH,
         &BUILD_BOOK, &CAPTURE_COMBINED, &DB_INSERT_BOOK, &DB_INSERT_FILL,
-        &STRATEGY_EVAL,
+        &STRATEGY_EVAL, &BTC_HANDLER, &CONSUMER_LOOP, &BROADCAST_SEND,
     ];
 
     let parts: Vec<String> = slots.iter().map(|s| {
@@ -105,7 +108,7 @@ pub fn reset_all() {
         &BUILD_TICK, &ENGINE_LOCK, &EVAL_MASTER, &MACRO_CTX_WRITE,
         &UPDATE_RSI, &CHECK_MOMENTUM, &CSV_PUSH, &SM_PUSH,
         &BUILD_BOOK, &CAPTURE_COMBINED, &DB_INSERT_BOOK, &DB_INSERT_FILL,
-        &STRATEGY_EVAL,
+        &STRATEGY_EVAL, &BTC_HANDLER, &CONSUMER_LOOP, &BROADCAST_SEND,
     ];
     for s in slots { s.reset(); }
 }

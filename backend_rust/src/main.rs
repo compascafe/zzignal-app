@@ -208,6 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         tokio::spawn(async move {
             while let Some(msg) = bridge_rx.recv().await {
+                let _guard = perf::CONSUMER_LOOP.start();
                 if let Some(ws_json) = msg.to_json() {
                     let _ = state2.broadcast_tx.send(ws_json);
                 }
@@ -385,6 +386,7 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
                 let m = mid;
                 let o = open;
                 tokio::spawn(async move {
+                    let _guard = perf::BROADCAST_SEND.start();
                     let _ = s.broadcast_tx.send(json!({"type":"btc_price","price":m,"open":o}).to_string());
                 });
             }
