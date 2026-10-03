@@ -12,7 +12,7 @@ Base URL: `http://localhost:8080` (configurable on the TUI side with
 
 ```json
 {
-  "app":    { "version": "0.3.0", "build_time": "1759800000", "git_sha": "b330083" },
+  "app":    { "version": "0.3.0", "build_time": "1759800000", "git_sha": "a1b2c3d" },
   "system": { "cpu_percent": 3.2, "ram_mb_used": 180, "ram_mb_total": 4096, "ram_pct": 4.4 },
   "status": "LIVE"
 }
