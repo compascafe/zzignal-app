@@ -1,14 +1,22 @@
 use chrono::Local;
 use serde::Deserialize;
+use std::sync::LazyLock;
 
-pub const WS_URL: &str = "ws://localhost:8080/ws";
-pub const API_URL: &str = "http://localhost:8080";
+/// Backend WebSocket URL. Override with `ZZIGNAL_WS_URL`; otherwise derived
+/// from `ZZIGNAL_API_URL` (http→ws, https→wss) and defaults to localhost.
+pub static WS_URL: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("ZZIGNAL_WS_URL").unwrap_or_else(|_| {
+        let base = API_URL
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
+        format!("{base}/ws")
+    })
+});
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct OrderPlaced {
-    #[serde(alias = "order_id", alias = "orderID", default)]
-    pub id: String,
-}
+/// Backend REST base URL. Override with `ZZIGNAL_API_URL`.
+pub static API_URL: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("ZZIGNAL_API_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+});
 
 // ─── Orderbook Depth ──────────────────────────────────────────────
 
@@ -73,22 +81,19 @@ pub struct HftState {
     pub clob_trade_up_vol: f64,
     pub clob_trade_dn_vol: f64,
     pub btc_vel: f64,
-    pub btc_acel: f64,
-    #[serde(default)]
-    pub btc_volatility: f64,
     pub btc_volume_24h: f64,
-    pub btc_vol_1m: f64,       // real-time BTC volume in last 60s (aggTrade per-tick sum)
-    pub btc_vol_ses: f64,      // cumulative real BTC volume since session start
-    pub btc_vol: f64,           // latest per-tick BTC volume from aggTrade
+    pub btc_vol_1m: f64, // real-time BTC volume in last 60s (aggTrade per-tick sum)
+    pub btc_vol_ses: f64, // cumulative real BTC volume since session start
+    pub btc_vol: f64,    // latest per-tick BTC volume from aggTrade
     pub spoof: u8,
     pub dump_score: u8,
     pub ask_wall: u8,
     pub tick_gap_ms: i64,
     pub secs_left: i32,
-    pub depth_up_bids: Vec<(f64,f64)>,
-    pub depth_up_asks: Vec<(f64,f64)>,
-    pub depth_dn_bids: Vec<(f64,f64)>,
-    pub depth_dn_asks: Vec<(f64,f64)>,
+    pub depth_up_bids: Vec<(f64, f64)>,
+    pub depth_up_asks: Vec<(f64, f64)>,
+    pub depth_dn_bids: Vec<(f64, f64)>,
+    pub depth_dn_asks: Vec<(f64, f64)>,
     #[serde(default)]
     pub ofi_up: f64,
     #[serde(default)]
@@ -131,18 +136,12 @@ pub struct LogEntry {
 
 impl LogEntry {
     pub fn new(text: String, color: ratatui::style::Color) -> Self {
-        Self { ts: Local::now().format("%H:%M:%S").to_string(), text, color }
+        Self {
+            ts: Local::now().format("%H:%M:%S").to_string(),
+            text,
+            color,
+        }
     }
-}
-
-// ─── Trade Entry (for TAP / Time & Sales) ───────────────────────────
-
-#[derive(Clone)]
-pub struct TradeEntry {
-    pub ts: String,
-    pub side: String,   // "UP" or "DOWN"
-    pub price: f64,
-    pub size: f64,
 }
 
 // ─── Order Tracking ────────────────────────────────────────────────
@@ -159,8 +158,12 @@ pub struct OrderInfo {
 }
 
 impl OrderInfo {
-    pub fn is_filled(&self) -> bool { self.size_matched >= self.size_orig }
-    pub fn is_partial(&self) -> bool { self.size_matched > 0.0 && self.size_matched < self.size_orig }
+    pub fn is_filled(&self) -> bool {
+        self.size_matched >= self.size_orig
+    }
+    pub fn is_partial(&self) -> bool {
+        self.size_matched > 0.0 && self.size_matched < self.size_orig
+    }
 }
 
 // ─── HTTP Helpers ───────────────────────────────────────────────────
@@ -197,23 +200,24 @@ where
 }
 
 pub async fn http_get<T: for<'de> Deserialize<'de>>(path: &str) -> Option<T> {
-    let url = format!("{API_URL}{path}");
+    let url = format!("{}{path}", *API_URL);
     with_timeout(
-        async {
-            client().get(&url).send().await.ok()?.json::<T>().await.ok()
-        },
+        async { client().get(&url).send().await.ok()?.json::<T>().await.ok() },
         path,
-    ).await.flatten()
+    )
+    .await
+    .flatten()
 }
 
 pub async fn http_post(path: &str, body: &str) -> Result<(), String> {
-    let url = format!("{API_URL}{path}");
+    let url = format!("{}{path}", *API_URL);
     let fut = async {
         let resp = client()
             .post(&url)
             .header("Content-Type", "application/json")
             .body(body.to_string())
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("POST {path}: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("POST {path} → HTTP {}", resp.status().as_u16()));
@@ -226,39 +230,13 @@ pub async fn http_post(path: &str, body: &str) -> Result<(), String> {
     }
 }
 
-pub async fn http_post_result<T: for<'de> Deserialize<'de>>(path: &str, body: &str) -> Result<T, String> {
-    let url = format!("{API_URL}{path}");
-    let fut = async {
-        let resp = client()
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .body(body.to_string())
-            .send().await
-            .map_err(|e| format!("POST {path}: {e}"))?;
-        let status = resp.status();
-        let body_text = resp.text().await.unwrap_or_default();
-        if status.is_success() {
-            serde_json::from_str::<T>(&body_text).map_err(|e| format!("JSON parse: {e}"))
-        } else {
-            let msg = serde_json::from_str::<serde_json::Value>(&body_text)
-                .ok()
-                .and_then(|v| v.get("message").or_else(|| v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
-                .unwrap_or(body_text);
-            Err(format!("HTTP {}: {}", status.as_u16(), msg))
-        }
-    };
-    match with_timeout(fut, path).await {
-        Some(result) => result,
-        None => Err(format!("POST {path}: timeout")),
-    }
-}
-
 pub async fn http_delete(path: &str) -> Result<(), String> {
-    let url = format!("{API_URL}{path}");
+    let url = format!("{}{path}", *API_URL);
     let fut = async {
         let resp = client()
             .delete(&url)
-            .send().await
+            .send()
+            .await
             .map_err(|e| format!("DELETE {path}: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("DELETE {path} → HTTP {}", resp.status().as_u16()));

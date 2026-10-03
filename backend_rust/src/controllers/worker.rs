@@ -1,8 +1,9 @@
-/// Background worker — corre dentro del runtime de Tokio en un hilo separado.
+/// Background worker — runs on a dedicated OS thread with its own tokio runtime.
 ///
-/// Mercado BTC 15-min tiene DOS tokens: UP y DOWN.
-/// Se suscribe al WebSocket de ambos simultáneamente.
-/// El precio de BTC en tiempo real llega por Chainlink via RTDS.
+/// The BTC 15-minute market has two outcome tokens (UP and DOWN); the worker
+/// subscribes to both order books over the CLOB WebSocket, executes orders
+/// issued through the command channel, and reports state through `AppMsg`.
+/// Live BTC price data comes from the `btc_stream`/`binance` services.
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -13,8 +14,8 @@ use alloy::sol;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Timelike, Utc};
 use futures_util::{SinkExt, StreamExt};
-use polymarket_client_sdk_v2::auth::{Credentials, Normal, Uuid};
 use polymarket_client_sdk_v2::auth::state::Authenticated;
+use polymarket_client_sdk_v2::auth::{Credentials, Normal, Uuid};
 use polymarket_client_sdk_v2::clob::types::request::{
     BalanceAllowanceRequest, CancelMarketOrderRequest, LastTradePriceRequest,
     OrderBookSummaryRequest, OrdersRequest, TradesRequest,
@@ -25,7 +26,7 @@ use polymarket_client_sdk_v2::clob::{Client, Config};
 use polymarket_client_sdk_v2::gamma;
 use polymarket_client_sdk_v2::gamma::types::request::{EventBySlugRequest, MarketsRequest};
 use polymarket_client_sdk_v2::types::{Decimal, U256};
-use polymarket_client_sdk_v2::{POLYGON, contract_config};
+use polymarket_client_sdk_v2::{contract_config, POLYGON};
 use reqwest::Client as HttpClient;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc as tokio_mpsc};
@@ -40,7 +41,8 @@ use crate::models::credentials::ClobCredentials;
 const POLYGON_RPC: &str = "https://polygon-bor-rpc.publicnode.com";
 
 /// CollateralOnramp — convierte USDC.e → pUSD (CLOB V2)
-const COLLATERAL_ONRAMP: AlloyAddress = alloy::primitives::address!("0x93070a847efEf7F70739046A929D47a521F5B8ee");
+const COLLATERAL_ONRAMP: AlloyAddress =
+    alloy::primitives::address!("0x93070a847efEf7F70739046A929D47a521F5B8ee");
 
 /// Flag atómico para evitar que el worker y el endpoint manual ejecuten approve al mismo tiempo.
 static APPROVE_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -76,24 +78,24 @@ sol! {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MarketInfo {
-    pub title:          String,
-    pub token_id_up:    String,          // índice 0: Up / Yes
-    pub token_id_down:  Option<String>,  // índice 1: Down / No
-    pub outcome_up:     String,          // "Up" / "Yes"
-    pub outcome_down:   String,          // "Down" / "No"
-    pub end_date:       DateTime<Utc>,
-    pub active:         bool,
+    pub title: String,
+    pub token_id_up: String,           // índice 0: Up / Yes
+    pub token_id_down: Option<String>, // índice 1: Down / No
+    pub outcome_up: String,            // "Up" / "Yes"
+    pub outcome_down: String,          // "Down" / "No"
+    pub end_date: DateTime<Utc>,
+    pub active: bool,
     /// Precio BTC al inicio del intervalo — proviene del campo groupItemThreshold
     /// del mercado en la Gamma API (el mismo valor que muestra Polymarket).
-    pub price_to_beat:  Option<f64>,
+    pub price_to_beat: Option<f64>,
     /// Duración del mercado en minutos (5 o 15) — define el modo del executor.
-    pub duration_min:   i32,
+    pub duration_min: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PriceLevel {
     pub price: f64,
-    pub size:  f64,
+    pub size: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,42 +113,30 @@ pub enum ConnStatus {
     ConnectingWs,
     Live,
     Reconnecting(u32),
-    Error(String),
 }
 
 /// Orden abierta en el CLOB
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenOrder {
-    pub id:           String,
-    pub outcome:      String,   // "Up" / "Down"
-    pub side:         OrderSide,
-    pub price:        f64,
-    pub size_orig:    f64,      // tamaño original
-    pub size_matched: f64,      // ejecutado
+    pub id: String,
+    pub outcome: String, // "Up" / "Down"
+    pub side: OrderSide,
+    pub price: f64,
+    pub size_orig: f64,    // tamaño original
+    pub size_matched: f64, // ejecutado
 }
 
 /// Trade/fill reciente
 #[derive(Debug, Clone, Serialize)]
 pub struct RecentFill {
     pub outcome: String,
-    pub side:    OrderSide,
-    pub price:   f64,
-    pub size:    f64,
+    pub side: OrderSide,
+    pub price: f64,
+    pub size: f64,
     /// Hora exacta del match, e.g. "14:32:07"
-    pub time:    String,
+    pub time: String,
     /// Sesión 15-min de Polymarket, e.g. "14:30"
     pub session: String,
-}
-
-/// Vela OHLCV de BTC/USDT (Binance 1m)
-#[derive(Debug, Clone, Serialize)]
-pub struct Candle {
-    pub open_time: i64,  // Unix ms
-    pub open:      f64,
-    pub high:      f64,
-    pub low:       f64,
-    pub close:     f64,
-    pub volume:    f64,
 }
 
 #[derive(Debug)]
@@ -154,153 +144,75 @@ pub enum AppMsg {
     Status(ConnStatus),
     BookUp(BookSnapshot),
     BookDown(BookSnapshot),
-    LastTradeUp { price: f64, size: f64 },
-    LastTradeDown { price: f64, size: f64 },
+    LastTradeUp {
+        price: f64,
+        size: f64,
+    },
+    LastTradeDown {
+        price: f64,
+        size: f64,
+    },
     Balance(f64),
     BtcOpen(f64),
-    BtcTick { price: f64, volume: f64, event_time: i64 },
+    BtcTick {
+        price: f64,
+        volume: f64,
+        event_time: i64,
+    },
     OrderResult(String),
     OpenOrders(Vec<OpenOrder>),
     RecentFills(Vec<RecentFill>),
-    Candles { interval: String, candles: Vec<Candle> },  // batch inicial / cambio de intervalo
-    CandleUpdate(Candle),                                 // actualización de la última vela (WS)
 }
 
 // ─── Comandos UI → worker ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub enum OrderSide { Buy, Sell }
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub enum Outcome { Up, Down }
+pub enum Outcome {
+    Up,
+    Down,
+}
 
 #[derive(Debug)]
 pub enum CmdMsg {
-    PlaceLimitOrder  { side: OrderSide, outcome: Outcome, price: f64, size: f64 },
-    PlaceMarketOrder { side: OrderSide, outcome: Outcome, amount_usdc: f64 },
-    /// Scalp: compra a `price`, espera fill, luego vende a `target_price`.
-    ScalpBuy { outcome: Outcome, price: f64, size: f64, target_price: f64 },
-    CancelOrder      { order_id: String },
+    PlaceLimitOrder {
+        side: OrderSide,
+        outcome: Outcome,
+        price: f64,
+        size: f64,
+    },
+    PlaceMarketOrder {
+        side: OrderSide,
+        outcome: Outcome,
+        amount_usdc: f64,
+    },
+    CancelOrder {
+        order_id: String,
+    },
     CancelMarket,
 }
 
 const CLOB_WS: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 const CLOB_URL: &str = "https://clob.polymarket.com";
 
-// /// Intervalo de velas (tiempo + ticks)
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CandleInterval {
-    FiveHundredMs,
-    OneSecond,
-    OneMinute,
-    FiveMinutes,
-    FifteenMinutes,
-    OneHour,
-    TenTicks,
-    HundredTicks,
-    ThousandTicks,
-}
-
-impl CandleInterval {
-    pub fn binance_str(self) -> &'static str {
-        match self {
-            Self::FiveHundredMs   => "500ms",
-            Self::OneSecond       => "1s",
-            Self::OneMinute       => "1m",
-            Self::FiveMinutes     => "5m",
-            Self::FifteenMinutes  => "15m",
-            Self::OneHour         => "1h",
-            Self::TenTicks        => "10t",
-            Self::HundredTicks    => "100t",
-            Self::ThousandTicks   => "1000t",
-        }
-    }
-    pub fn label(self) -> &'static str {
-        self.binance_str()
-    }
-    pub fn refresh_secs(self) -> u64 {
-        match self {
-            Self::FiveHundredMs   => 3,
-            Self::OneSecond       => 3,
-            Self::OneMinute       => 15,
-            Self::FiveMinutes     => 30,
-            Self::FifteenMinutes  => 60,
-            Self::OneHour         => 120,
-            Self::TenTicks        => 5,
-            Self::HundredTicks    => 10,
-            Self::ThousandTicks   => 15,
-        }
-    }
-    pub fn limit(self) -> u32 {
-        match self {
-            Self::FiveHundredMs   => 500,
-            Self::OneSecond       => 300,
-            Self::OneMinute       => 200,
-            Self::FiveMinutes     => 200,
-            Self::FifteenMinutes  => 200,
-            Self::OneHour         => 100,
-            Self::TenTicks        => 300,
-            Self::HundredTicks    => 200,
-            Self::ThousandTicks   => 100,
-        }
-    }
-    pub fn millis(self) -> i64 {
-        match self {
-            Self::FiveHundredMs   => 500,
-            Self::OneSecond       => 1_000,
-            Self::OneMinute       => 60_000,
-            Self::FiveMinutes     => 300_000,
-            Self::FifteenMinutes  => 900_000,
-            Self::OneHour         => 3_600_000,
-            Self::TenTicks        => 0, // tick-based, no time
-            Self::HundredTicks    => 0,
-            Self::ThousandTicks   => 0,
-        }
-    }
-    pub fn is_tick_based(self) -> bool {
-        matches!(self, Self::TenTicks | Self::HundredTicks | Self::ThousandTicks)
-    }
-    pub fn ticks_per_candle(self) -> u32 {
-        match self {
-            Self::TenTicks      => 10,
-            Self::HundredTicks  => 100,
-            Self::ThousandTicks => 1000,
-            _ => 0,
-        }
-    }
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "500ms"  => Some(Self::FiveHundredMs),
-            "1s"     => Some(Self::OneSecond),
-            "1m"     => Some(Self::OneMinute),
-            "5m"     => Some(Self::FiveMinutes),
-            "15m"    => Some(Self::FifteenMinutes),
-            "1h"     => Some(Self::OneHour),
-            "10t"    => Some(Self::TenTicks),
-            "100t"   => Some(Self::HundredTicks),
-            "1000t"  => Some(Self::ThousandTicks),
-            _        => None,
-        }
-    }
-}
-
-// ─── Proveedor de precio BTC ──────────────────────────────────────────────────
-
 // ─── Punto de entrada ─────────────────────────────────────────────────────────
 
 pub async fn run(
-    tx:           mpsc::Sender<AppMsg>,
-    creds:        Arc<ClobCredentials>,
-    mut cmd_rx:   tokio_mpsc::UnboundedReceiver<CmdMsg>,
-    interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
+    tx: mpsc::Sender<AppMsg>,
+    creds: Arc<ClobCredentials>,
+    mut cmd_rx: tokio_mpsc::UnboundedReceiver<CmdMsg>,
     broadcast_tx: broadcast::Sender<String>,
 ) {
     let _ = tx.send(AppMsg::Status(ConnStatus::Initializing));
 
     let mut attempts: u32 = 0;
     loop {
-        match run_cycle(&tx, &creds, &mut cmd_rx, Arc::clone(&interval_arc), broadcast_tx.clone()).await {
+        match run_cycle(&tx, &creds, &mut cmd_rx, broadcast_tx.clone()).await {
             Ok(_) => {
                 attempts = 0;
                 info!("Ciclo completado, reiniciando inmediatamente...");
@@ -318,10 +230,9 @@ pub async fn run(
 // ─── Ciclo principal ──────────────────────────────────────────────────────────
 
 async fn run_cycle(
-    tx:           &mpsc::Sender<AppMsg>,
-    creds:        &ClobCredentials,
-    cmd_rx:       &mut tokio_mpsc::UnboundedReceiver<CmdMsg>,
-    interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
+    tx: &mpsc::Sender<AppMsg>,
+    creds: &ClobCredentials,
+    cmd_rx: &mut tokio_mpsc::UnboundedReceiver<CmdMsg>,
     broadcast_tx: broadcast::Sender<String>,
 ) -> Result<()> {
     let _ = tx.send(AppMsg::Status(ConnStatus::Authenticating));
@@ -333,10 +244,17 @@ async fn run_cycle(
     // 2. Autenticar CLOB.
     //    Cuenta creada con email (Magic Link) → SignatureType::Proxy
     //    Deposit wallet (Poly1271) — CLOB V2 requiere deposit wallet para órdenes.
-    //    El pUSD debe estar en el proxy/deposit 0x059..., no en la EOA.
-    let funder_address: AlloyAddress = alloy::primitives::address!("0x0000000000000000000000000000000000000000");
+    //    El pUSD debe estar en el proxy/deposit (POLYMARKET_FUNDER_ADDRESS), no en la EOA.
+    let funder_address: AlloyAddress = creds
+        .funder_address
+        .parse()
+        .context("POLYMARKET_FUNDER_ADDRESS inválida")?;
     let api_key: Uuid = creds.api_key.parse().context("CLOB_API_KEY no es UUID")?;
-    let l2_creds = Credentials::new(api_key, creds.api_secret.clone(), creds.api_passphrase.clone());
+    let l2_creds = Credentials::new(
+        api_key,
+        creds.api_secret.clone(),
+        creds.api_passphrase.clone(),
+    );
 
     let base_builder = Client::new(CLOB_URL, Config::default())
         .context("Error creando cliente CLOB")?
@@ -346,10 +264,14 @@ async fn run_cycle(
     let clob_client = base_builder
         .funder(funder_address)
         .signature_type(SignatureType::Poly1271)
-        .authenticate().await
+        .authenticate()
+        .await
         .context("Fallo de autenticación (Poly1271)")?;
 
-    info!("EOA: {} | Funder: {funder_address:#x}", creds.wallet_address);
+    info!(
+        "EOA: {} | Funder: {funder_address:#x}",
+        creds.wallet_address
+    );
 
     // 3. Balance USDC via CLOB (ahora con el funder correcto devuelve el saldo real)
     let balance_req = BalanceAllowanceRequest::default();
@@ -368,7 +290,9 @@ async fn run_cycle(
             match approve_usdc_for_ctf(&creds_bg).await {
                 Ok(()) => {
                     info!("Approvals confirmados. Refrescando balance CLOB...");
-                    let _ = clob_bg.update_balance_allowance(BalanceAllowanceRequest::default()).await;
+                    let _ = clob_bg
+                        .update_balance_allowance(BalanceAllowanceRequest::default())
+                        .await;
                     fetch_and_send_balance(&clob_bg, &tx_bg).await;
                 }
                 Err(e) => warn!("Approve USDC falló: {e}"),
@@ -394,10 +318,12 @@ async fn run_cycle(
                 Ok(bal) => {
                     if bal > alloy::primitives::U256::ZERO {
                         info!("USDC.e detectado: {bal} — ejecutando wrap automático");
-                        match wrap_usdc_to_pusd(&creds_bg2, "0x0000000000000000000000000000000000000000").await {
+                        match wrap_usdc_to_pusd(&creds_bg2, &creds_bg2.funder_address).await {
                             Ok(()) => {
                                 info!("Wrap automático completado. Refrescando balance...");
-                                let _ = clob_bg2.update_balance_allowance(BalanceAllowanceRequest::default()).await;
+                                let _ = clob_bg2
+                                    .update_balance_allowance(BalanceAllowanceRequest::default())
+                                    .await;
                                 fetch_and_send_balance(&clob_bg2, &tx_bg2).await;
                             }
                             Err(e) => warn!("Auto-wrap falló: {e}"),
@@ -413,11 +339,8 @@ async fn run_cycle(
     let _ = tx.send(AppMsg::Status(ConnStatus::FetchingMarkets));
     let info = discover_btc_market(&gamma_client).await?;
 
-    let token_up:   U256 = info.token_id_up.parse().context("token_up parse")?;
-    let token_down: Option<U256> = info
-        .token_id_down
-        .as_deref()
-        .and_then(|s| s.parse().ok());
+    let token_up: U256 = info.token_id_up.parse().context("token_up parse")?;
+    let token_down: Option<U256> = info.token_id_down.as_deref().and_then(|s| s.parse().ok());
 
     let _ = tx.send(AppMsg::Status(ConnStatus::MarketFound(info.clone())));
 
@@ -434,40 +357,63 @@ async fn run_cycle(
     // 4b. Snapshots REST iniciales (ambos tokens) — timeout 10s para evitar cuelgues
     const REST_TIMEOUT: Duration = Duration::from_secs(10);
 
-    match tokio::time::timeout(REST_TIMEOUT, clob_client
-        .order_book(&OrderBookSummaryRequest::builder().token_id(token_up).build()))
-        .await
+    match tokio::time::timeout(
+        REST_TIMEOUT,
+        clob_client.order_book(
+            &OrderBookSummaryRequest::builder()
+                .token_id(token_up)
+                .build(),
+        ),
+    )
+    .await
     {
-        Ok(Ok(snap)) => { let _ = tx.send(AppMsg::BookUp(convert_book(&snap))); }
-        Ok(Err(e))   => warn!("order_book UP falló: {}", e),
-        Err(_)       => warn!("order_book UP timeout"),
+        Ok(Ok(snap)) => {
+            let _ = tx.send(AppMsg::BookUp(convert_book(&snap)));
+        }
+        Ok(Err(e)) => warn!("order_book UP falló: {}", e),
+        Err(_) => warn!("order_book UP timeout"),
     }
 
     if let Some(td) = token_down {
-        match tokio::time::timeout(REST_TIMEOUT, clob_client
-            .order_book(&OrderBookSummaryRequest::builder().token_id(td).build()))
-            .await
+        match tokio::time::timeout(
+            REST_TIMEOUT,
+            clob_client.order_book(&OrderBookSummaryRequest::builder().token_id(td).build()),
+        )
+        .await
         {
-            Ok(Ok(snap)) => { let _ = tx.send(AppMsg::BookDown(convert_book(&snap))); }
-            Ok(Err(e))   => warn!("order_book DOWN falló: {}", e),
-            Err(_)       => warn!("order_book DOWN timeout"),
+            Ok(Ok(snap)) => {
+                let _ = tx.send(AppMsg::BookDown(convert_book(&snap)));
+            }
+            Ok(Err(e)) => warn!("order_book DOWN falló: {}", e),
+            Err(_) => warn!("order_book DOWN timeout"),
         }
     }
 
     // 4c. Last trade price REST inicial
     for (tid, is_up) in [(token_up, true), (token_down.unwrap_or(token_up), false)] {
-        if !is_up && token_down.is_none() { break; }
+        if !is_up && token_down.is_none() {
+            break;
+        }
         let req = LastTradePriceRequest::builder().token_id(tid).build();
         match tokio::time::timeout(REST_TIMEOUT, clob_client.last_trade_price(&req)).await {
             Ok(Ok(r)) => {
                 let p: f64 = r.price.to_string().parse().unwrap_or(0.0);
                 if p > 0.0 {
-                    if is_up { let _ = tx.send(AppMsg::LastTradeUp { price: p, size: 0.0 });   }
-                    else      { let _ = tx.send(AppMsg::LastTradeDown { price: p, size: 0.0 }); }
+                    if is_up {
+                        let _ = tx.send(AppMsg::LastTradeUp {
+                            price: p,
+                            size: 0.0,
+                        });
+                    } else {
+                        let _ = tx.send(AppMsg::LastTradeDown {
+                            price: p,
+                            size: 0.0,
+                        });
+                    }
                 }
             }
             Ok(Err(e)) => warn!("last_trade_price falló (up={}): {}", is_up, e),
-            Err(_)     => warn!("last_trade_price timeout (up={})", is_up),
+            Err(_) => warn!("last_trade_price timeout (up={})", is_up),
         }
     }
 
@@ -480,28 +426,29 @@ async fn run_cycle(
         tokio::spawn(async move { crate::services::btc_stream::run(tx2).await });
     }
 
-    // 6b. Velas BTC/USDT — fetch inicial + refresco adaptativo según intervalo
-    {
-        let tx3 = tx.clone();
-        let iv  = Arc::clone(&interval_arc);
-        let bt3 = broadcast_tx.clone();
-        tokio::spawn(async move { run_candle_stream(tx3, iv, bt3).await });
-    }
-
     // 7. WebSocket + comandos
     let _ = tx.send(AppMsg::Status(ConnStatus::ConnectingWs));
-    run_live(token_up, token_down, tx.clone(), clob_client, signer, cmd_rx, broadcast_tx).await
+    run_live(
+        token_up,
+        token_down,
+        tx.clone(),
+        clob_client,
+        signer,
+        cmd_rx,
+        broadcast_tx,
+    )
+    .await
 }
 
 // ─── Loop WS + comandos ───────────────────────────────────────────────────────
 
 async fn run_live(
-    token_up:   U256,
+    token_up: U256,
     token_down: Option<U256>,
-    tx:         mpsc::Sender<AppMsg>,
-    client:     Client<Authenticated<Normal>>,
-    signer:     PrivateKeySigner,
-    cmd_rx:     &mut tokio_mpsc::UnboundedReceiver<CmdMsg>,
+    tx: mpsc::Sender<AppMsg>,
+    client: Client<Authenticated<Normal>>,
+    signer: PrivateKeySigner,
+    cmd_rx: &mut tokio_mpsc::UnboundedReceiver<CmdMsg>,
     broadcast_tx: broadcast::Sender<String>,
 ) -> Result<()> {
     let (ws_stream, _) = connect_async(CLOB_WS)
@@ -511,15 +458,19 @@ async fn run_live(
 
     // Suscribir ambos tokens
     let mut asset_ids = vec![token_up.to_string()];
-    if let Some(td) = token_down { asset_ids.push(td.to_string()); }
+    if let Some(td) = token_down {
+        asset_ids.push(td.to_string());
+    }
     let sub = serde_json::json!({ "assets_ids": asset_ids, "type": "market" });
-    write.send(sub.to_string().into()).await
+    write
+        .send(sub.to_string().into())
+        .await
         .map_err(|e| anyhow!("WS subscribe: {}", e))?;
 
     let _ = tx.send(AppMsg::Status(ConnStatus::Live));
     info!("WebSocket LIVE — UP:{} DOWN:{:?}", token_up, token_down);
 
-    let up_str   = token_up.to_string();
+    let up_str = token_up.to_string();
     let down_str = token_down.map(|t| t.to_string());
 
     let broadcast_tx_ws = broadcast_tx.clone();
@@ -570,14 +521,6 @@ async fn run_live(
                             handle_market_order(&c2, &s2, &tx2, &bt2, tid, side, amount_usdc).await;
                         });
                     }
-                    Some(CmdMsg::ScalpBuy { outcome, price, size, target_price }) => {
-                        let tid = pick_token(outcome, token_up, token_down);
-                        let c2 = client.clone(); let tx2 = tx.clone(); let s2 = signer.clone();
-                        let bt2 = broadcast_tx.clone();
-                        tokio::spawn(async move {
-                            handle_scalp_buy(&c2, &s2, &tx2, &bt2, tid, price, size, target_price).await;
-                        });
-                    }
                     Some(CmdMsg::CancelOrder { order_id }) => {
                         let c2 = client.clone(); let tx2 = tx.clone();
                         let bt2 = broadcast_tx.clone();
@@ -609,284 +552,115 @@ async fn run_live(
     Ok(())
 }
 
-// ─── Generador de velas sintéticas desde ticks de precio ─────────────────────
-//
-// Construye OHLCV en tiempo real a partir de los ticks BTC que llegan del WS.
-// No depende de Binance REST/klines — funciona con cualquier proveedor.
-// Volumen real solo de Binance aggTrade (campo "q"); resto = 0.0.
-
-struct TickCandleGenerator {
-    interval_ms: i64,
-    ticks_per_candle: u32,  // 0 = time-based
-    tick_count: u32,
-    current:     Option<Candle>,
-    history:     Vec<Candle>,
-    max_history: usize,
-}
-
-impl TickCandleGenerator {
-    fn new(interval_ms: i64, max_history: usize) -> Self {
-        Self { interval_ms, ticks_per_candle: 0, tick_count: 0, current: None, history: Vec::with_capacity(max_history), max_history }
-    }
-
-    fn set_interval(&mut self, iv: CandleInterval) {
-        self.interval_ms = iv.millis();
-        self.ticks_per_candle = iv.ticks_per_candle();
-        self.current = None;
-        self.tick_count = 0;
-    }
-
-    /// Recibe un tick de precio. Devuelve la vela actualizada (para CandleUpdate).
-    fn on_tick(&mut self, price: f64, volume: f64, now_ms: i64) -> Option<Candle> {
-        let open_time = if self.ticks_per_candle > 0 {
-            // Tick-based: open_time = timestamp of candle start
-            // We keep open_time from the current candle or use now_ms for new
-            now_ms
-        } else {
-            (now_ms / self.interval_ms) * self.interval_ms
-        };
-
-        self.tick_count += 1;
-        let should_close = if self.ticks_per_candle > 0 {
-            self.tick_count > self.ticks_per_candle
-        } else {
-            match &self.current {
-                Some(c) => c.open_time != open_time,
-                None => false,
-            }
-        };
-
-        if should_close {
-            // Cerrar vela anterior
-            if let Some(c) = &self.current {
-                let finished = c.clone();
-                self.push_history(finished);
-            }
-            self.current = None;
-            self.tick_count = 1; // reset after close
-        }
-
-        match &mut self.current {
-            None => {
-                let c = Candle {
-                    open_time,
-                    open:   price,
-                    high:   price,
-                    low:    price,
-                    close:  price,
-                    volume,
-                };
-                self.current = Some(c.clone());
-                Some(c)
-            }
-            Some(c) => {
-                c.high = c.high.max(price);
-                c.low  = c.low.min(price);
-                c.close = price;
-                c.volume += volume;
-                Some(c.clone())
-            }
-        }
-    }
-
-    fn push_history(&mut self, c: Candle) {
-        self.history.push(c);
-        if self.history.len() > self.max_history {
-            self.history.remove(0);
-        }
-    }
-
-    fn snapshot(&self) -> Vec<Candle> {
-        let mut s = self.history.clone();
-        if let Some(c) = &self.current {
-            s.push(c.clone());
-        }
-        s
-    }
-}
-// ─── Velas BTC/USDT — Binance REST klines (1m, últimas 200) ──────────────────
-
-/// Stream de velas en tiempo real: REST histórico + WebSocket kline de Binance.
-/// Actualiza la última vela en tiempo real (AppMsg::CandleUpdate) sin re-enviar todo el array.
-async fn run_candle_stream(
-    tx:           mpsc::Sender<AppMsg>,
-    interval_arc: Arc<std::sync::Mutex<CandleInterval>>,
-    broadcast_tx: broadcast::Sender<String>,
-) {
-    let mut current_iv = interval_arc.lock().map(|g| *g).unwrap_or(CandleInterval::OneSecond);
-
-    loop {
-        let iv = interval_arc.lock().map(|g| *g).unwrap_or(current_iv);
-        if iv != current_iv {
-            current_iv = iv;
-            // Limpiar buffer de velas al cambiar intervalo
-            let _ = tx.send(AppMsg::Candles {
-                interval: current_iv.binance_str().to_string(),
-                candles:  vec![],
-            });
-        }
-
-        // 1. Histórico via REST
-        if let Some(candles) = fetch_binance_klines(current_iv.binance_str(), current_iv.limit()).await {
-            let interval = current_iv.binance_str().to_string();
-            let _ = tx.send(AppMsg::Candles { interval: interval.clone(), candles: candles.clone() });
-            if let Some(json) = (AppMsg::Candles { interval, candles }).to_json() {
-                let _ = broadcast_tx.send(json);
-            }
-        }
-
-        // 2. Tiempo real via WebSocket kline
-        let ws_url = format!(
-            "wss://stream.binance.com:9443/ws/btcusdt@kline_{}",
-            current_iv.binance_str()
-        );
-        match connect_async(&ws_url).await {
-            Ok((ws_stream, _)) => {
-                info!("Kline WS: {ws_url}");
-                let (_, mut read) = ws_stream.split();
-                loop {
-                    // Detectar cambio de intervalo
-                    if interval_arc.lock().map(|g| *g).unwrap_or(current_iv) != current_iv {
-                        break;
-                    }
-                    match tokio::time::timeout(Duration::from_secs(30), read.next()).await {
-                        Ok(Some(Ok(msg))) if msg.is_text() => {
-                            if let Ok(text) = msg.into_text() {
-                                if let Some(c) = parse_kline_ws(&text) {
-                                    let _ = tx.send(AppMsg::CandleUpdate(c.clone()));
-                                    if let Some(json) = AppMsg::CandleUpdate(c).to_json() {
-                                        let _ = broadcast_tx.send(json);
-                                    }
-                                }
-                            }
-                        }
-                        Ok(Some(Err(e))) => { warn!("Kline WS err: {e}"); break; }
-                        Ok(None) | Err(_) => { warn!("Kline WS desconectado"); break; }
-                        Ok(Some(Ok(_))) => {}
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Kline WS connect falló: {e} — reintento en 3s");
-                tokio::time::sleep(Duration::from_secs(3)).await;
-            }
-        }
-    }
-}
-
-fn parse_kline_ws(text: &str) -> Option<Candle> {
-    let json: serde_json::Value = serde_json::from_str(text).ok()?;
-    let k = json.get("k")?;
-    Some(Candle {
-        open_time: k.get("t")?.as_i64()?,
-        open:   k.get("o")?.as_str()?.parse().ok()?,
-        high:   k.get("h")?.as_str()?.parse().ok()?,
-        low:    k.get("l")?.as_str()?.parse().ok()?,
-        close:  k.get("c")?.as_str()?.parse().ok()?,
-        volume: k.get("v")?.as_str()?.parse().ok()?,
-    })
-}
-
-async fn fetch_binance_klines(interval: &str, limit: u32) -> Option<Vec<Candle>> {
-    let url = format!(
-        "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={interval}&limit={limit}"
-    );
-    let resp = HttpClient::new().get(&url).timeout(Duration::from_secs(10)).send().await.ok()?;
-    let raw: serde_json::Value = resp.json().await.ok()?;
-    let arr = raw.as_array()?;
-    Some(arr.iter().filter_map(|k| {
-        let a = k.as_array()?;
-        Some(Candle {
-            open_time: a.get(0)?.as_i64()?,
-            open:   a.get(1)?.as_str()?.parse().ok()?,
-            high:   a.get(2)?.as_str()?.parse().ok()?,
-            low:    a.get(3)?.as_str()?.parse().ok()?,
-            close:  a.get(4)?.as_str()?.parse().ok()?,
-            volume: a.get(5)?.as_str()?.parse().ok()?,
-        })
-    }).collect())
-}
-
 // ─── Operaciones de trading ───────────────────────────────────────────────────
 
 fn pick_token(outcome: Outcome, up: U256, down: Option<U256>) -> U256 {
     match outcome {
-        Outcome::Up   => up,
+        Outcome::Up => up,
         Outcome::Down => down.unwrap_or(up),
     }
 }
 
+/// Places a limit order. Spawned per command — see `run_live`'s command loop.
+#[allow(clippy::too_many_arguments)]
 async fn handle_limit_order(
-    client:       &Client<Authenticated<Normal>>,
-    signer:       &PrivateKeySigner,
-    tx:           &mpsc::Sender<AppMsg>,
+    client: &Client<Authenticated<Normal>>,
+    signer: &PrivateKeySigner,
+    tx: &mpsc::Sender<AppMsg>,
     broadcast_tx: &broadcast::Sender<String>,
-    token_id:     U256,
-    side:         OrderSide,
-    price:        f64,
-    size:         f64,
+    token_id: U256,
+    side: OrderSide,
+    price: f64,
+    size: f64,
 ) {
     let price_dec: Decimal = match format!("{:.2}", price).parse() {
         Ok(d) => d,
-        Err(_) => { 
+        Err(_) => {
             let msg = "Precio inválido".to_string();
             let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
-            return; 
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+                let _ = broadcast_tx.send(json);
+            }
+            return;
         }
     };
     let size_dec: Decimal = match format!("{:.2}", size).parse() {
         Ok(d) => d,
-        Err(_) => { 
+        Err(_) => {
             let msg = "Tamaño inválido".to_string();
             let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
-            return; 
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+                let _ = broadcast_tx.send(json);
+            }
+            return;
         }
     };
-    let clob_side = if matches!(side, OrderSide::Buy) { ClobSide::Buy } else { ClobSide::Sell };
+    let clob_side = if matches!(side, OrderSide::Buy) {
+        ClobSide::Buy
+    } else {
+        ClobSide::Sell
+    };
 
     let result: Result<_> = async {
-        let order = client.limit_order()
+        let order = client
+            .limit_order()
             .token_id(token_id)
             .order_type(OrderType::GTC)
             .price(price_dec)
             .size(size_dec)
             .side(clob_side)
-            .build().await?;
+            .build()
+            .await?;
         let signed = client.sign(signer, order).await?;
         client.post_order(signed).await.map_err(|e| anyhow!(e))
-    }.await;
+    }
+    .await;
 
-    let side_str = if matches!(side, OrderSide::Buy) { "BUY" } else { "SELL" };
+    let side_str = if matches!(side, OrderSide::Buy) {
+        "BUY"
+    } else {
+        "SELL"
+    };
     let msg = match result {
-        Ok(r) if r.success => format!("✓ Limit {}: #{}", side_str, &r.order_id[..r.order_id.len().min(16)]),
-        Ok(r)              => format!("✗ Rechazada: {}", r.error_msg.unwrap_or_default()),
-        Err(e)             => format!("✗ Error: {}", e),
+        Ok(r) if r.success => format!(
+            "✓ Limit {}: #{}",
+            side_str,
+            &r.order_id[..r.order_id.len().min(16)]
+        ),
+        Ok(r) => format!("✗ Rechazada: {}", r.error_msg.unwrap_or_default()),
+        Err(e) => format!("✗ Error: {}", e),
     };
     let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-    if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+    if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+        let _ = broadcast_tx.send(json);
+    }
 }
 
 async fn handle_market_order(
-    client:       &Client<Authenticated<Normal>>,
-    signer:       &PrivateKeySigner,
-    tx:           &mpsc::Sender<AppMsg>,
+    client: &Client<Authenticated<Normal>>,
+    signer: &PrivateKeySigner,
+    tx: &mpsc::Sender<AppMsg>,
     broadcast_tx: &broadcast::Sender<String>,
-    token_id:     U256,
-    side:         OrderSide,
-    amount_usdc:  f64,
+    token_id: U256,
+    side: OrderSide,
+    amount_usdc: f64,
 ) {
     let amount_dec: Decimal = match format!("{:.2}", amount_usdc).parse() {
         Ok(d) => d,
-        Err(_) => { 
+        Err(_) => {
             let msg = "Monto inválido".to_string();
             let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
-            return; 
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+                let _ = broadcast_tx.send(json);
+            }
+            return;
         }
     };
-    let clob_side = if matches!(side, OrderSide::Buy) { ClobSide::Buy } else { ClobSide::Sell };
+    let clob_side = if matches!(side, OrderSide::Buy) {
+        ClobSide::Buy
+    } else {
+        ClobSide::Sell
+    };
 
     let result: Result<_> = async {
         let amount = if matches!(side, OrderSide::Buy) {
@@ -895,33 +669,48 @@ async fn handle_market_order(
             // CLOB V2: SELL market orders must use shares (contract count)
             Amount::shares(amount_dec).map_err(|e| anyhow!(e))?
         };
-        let order = client.market_order()
+        let order = client
+            .market_order()
             .token_id(token_id)
             .amount(amount)
             .side(clob_side)
-            .build().await?;
+            .build()
+            .await?;
         let signed = client.sign(signer, order).await?;
         client.post_order(signed).await.map_err(|e| anyhow!(e))
-    }.await;
+    }
+    .await;
 
-    let side_str = if matches!(side, OrderSide::Buy) { "BUY" } else { "SELL" };
+    let side_str = if matches!(side, OrderSide::Buy) {
+        "BUY"
+    } else {
+        "SELL"
+    };
     let msg = match result {
-        Ok(r) if r.success => format!("✓ Market {}: #{}", side_str, &r.order_id[..r.order_id.len().min(16)]),
-        Ok(r)              => format!("✗ Rechazada: {}", r.error_msg.unwrap_or_default()),
-        Err(e)             => format!("✗ Error: {}", e),
+        Ok(r) if r.success => format!(
+            "✓ Market {}: #{}",
+            side_str,
+            &r.order_id[..r.order_id.len().min(16)]
+        ),
+        Ok(r) => format!("✗ Rechazada: {}", r.error_msg.unwrap_or_default()),
+        Err(e) => format!("✗ Error: {}", e),
     };
     let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-    if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+    if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+        let _ = broadcast_tx.send(json);
+    }
 }
 
 async fn handle_cancel_market(
-    client:       &Client<Authenticated<Normal>>,
-    tx:           &mpsc::Sender<AppMsg>,
+    client: &Client<Authenticated<Normal>>,
+    tx: &mpsc::Sender<AppMsg>,
     broadcast_tx: &broadcast::Sender<String>,
-    token_up:     U256,
-    token_down:   Option<U256>,
+    token_up: U256,
+    token_down: Option<U256>,
 ) {
-    let req_up = CancelMarketOrderRequest::builder().asset_id(token_up).build();
+    let req_up = CancelMarketOrderRequest::builder()
+        .asset_id(token_up)
+        .build();
     let up_result = client.cancel_market_orders(&req_up).await;
 
     let down_result = if let Some(td) = token_down {
@@ -932,20 +721,26 @@ async fn handle_cancel_market(
     };
 
     let msg = match (up_result, down_result) {
-        (Ok(u), Some(Ok(d))) => format!("✓ Canceladas: {} UP + {} DOWN", u.canceled.len(), d.canceled.len()),
-        (Ok(u), None)        => format!("✓ Canceladas: {} órdenes UP", u.canceled.len()),
-        (Err(e), _)          => format!("✗ Cancel error: {}", e),
-        (_, Some(Err(e)))    => format!("✗ Cancel DOWN error: {}", e),
+        (Ok(u), Some(Ok(d))) => format!(
+            "✓ Canceladas: {} UP + {} DOWN",
+            u.canceled.len(),
+            d.canceled.len()
+        ),
+        (Ok(u), None) => format!("✓ Canceladas: {} órdenes UP", u.canceled.len()),
+        (Err(e), _) => format!("✗ Cancel error: {}", e),
+        (_, Some(Err(e))) => format!("✗ Cancel DOWN error: {}", e),
     };
     let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-    if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+    if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+        let _ = broadcast_tx.send(json);
+    }
 }
 
 async fn handle_cancel_order(
-    client:       &Client<Authenticated<Normal>>,
-    tx:           &mpsc::Sender<AppMsg>,
+    client: &Client<Authenticated<Normal>>,
+    tx: &mpsc::Sender<AppMsg>,
     broadcast_tx: &broadcast::Sender<String>,
-    order_id:     &str,
+    order_id: &str,
 ) {
     match client.cancel_order(order_id).await {
         Ok(r) => {
@@ -957,12 +752,16 @@ async fn handle_cancel_order(
                 format!("✗ No cancelada: {reason}")
             };
             let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+                let _ = broadcast_tx.send(json);
+            }
         }
         Err(e) => {
             let msg = format!("✗ Cancel error: {e}");
             let _ = tx.send(AppMsg::OrderResult(msg.clone()));
-            if let Some(json) = AppMsg::OrderResult(msg).to_json() { let _ = broadcast_tx.send(json); }
+            if let Some(json) = AppMsg::OrderResult(msg).to_json() {
+                let _ = broadcast_tx.send(json);
+            }
         }
     }
 }
@@ -971,6 +770,7 @@ async fn handle_cancel_order(
 /// Siguiendo el ejemplo oficial `approvals.rs` del SDK:
 ///   - Regular Exchange (V2) + Neg Risk Exchange (V2) + Neg Risk Adapter
 ///   - Cada uno recibe ERC-20 approve (USDC) + ERC-1155 setApprovalForAll (CTF)
+///
 /// Esto es necesario una sola vez por wallet.
 pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
     let signer = creds.build_signer()?;
@@ -1031,11 +831,7 @@ pub async fn approve_usdc_for_ctf(creds: &ClobCredentials) -> Result<()> {
         }
 
         // 2. ERC-1155 setApprovalForAll (secuencial)
-        match ctf_token
-            .setApprovalForAll(*target, true)
-            .send()
-            .await
-        {
+        match ctf_token.setApprovalForAll(*target, true).send().await {
             Ok(pending) => match pending.watch().await {
                 Ok(tx_hash) => {
                     info!("  CTF approved → {name}: {tx_hash}");
@@ -1068,11 +864,16 @@ pub async fn wrap_usdc_to_pusd(creds: &ClobCredentials, proxy_wallet: &str) -> R
     let onramp = ICollateralOnramp::new(COLLATERAL_ONRAMP, provider.clone());
 
     // Obtener EOA address
-    let eoa: AlloyAddress = creds.wallet_address.parse()
+    let eoa: AlloyAddress = creds
+        .wallet_address
+        .parse()
         .context("EOA address inválida")?;
 
     // Leer balance real de USDC.e
-    let balance = usdc.balanceOf(eoa).call().await
+    let balance = usdc
+        .balanceOf(eoa)
+        .call()
+        .await
         .context("No se pudo leer balance de USDC.e")?;
     info!("USDC.e balance: {balance}");
 
@@ -1081,7 +882,10 @@ pub async fn wrap_usdc_to_pusd(creds: &ClobCredentials, proxy_wallet: &str) -> R
     }
 
     // 1. Approve CollateralOnramp para gastar USDC.e
-    info!("Approve USDC.e → CollateralOnramp (wallet: {})", creds.wallet_address);
+    info!(
+        "Approve USDC.e → CollateralOnramp (wallet: {})",
+        creds.wallet_address
+    );
     let tx = usdc
         .approve(COLLATERAL_ONRAMP, balance)
         .send()
@@ -1127,31 +931,40 @@ async fn quick_usdc_balance(creds: &ClobCredentials) -> Result<alloy::primitives
     Ok(bal)
 }
 
-async fn fetch_and_send_balance(
-    client: &Client<Authenticated<Normal>>,
-    tx:     &mpsc::Sender<AppMsg>,
-) {
-    if let Err(e) = client.update_balance_allowance(BalanceAllowanceRequest::default()).await {
+async fn fetch_and_send_balance(client: &Client<Authenticated<Normal>>, tx: &mpsc::Sender<AppMsg>) {
+    if let Err(e) = client
+        .update_balance_allowance(BalanceAllowanceRequest::default())
+        .await
+    {
         error!("update_balance_allowance: {:#}", e);
     }
-    match client.balance_allowance(BalanceAllowanceRequest::default()).await {
+    match client
+        .balance_allowance(BalanceAllowanceRequest::default())
+        .await
+    {
         Ok(b) => {
             let raw: f64 = b.balance.to_string().parse().unwrap_or(0.0);
             // El CLOB devuelve USDC en unidades raw con 6 decimales (ej: 35168666 = $35.17)
-            let bal = if raw > 1_000.0 { raw / 1_000_000.0 } else { raw };
-            info!("Balance CLOB raw={} → ${:.2} | allowances={:?}", raw, bal, b.allowances);
+            let bal = if raw > 1_000.0 {
+                raw / 1_000_000.0
+            } else {
+                raw
+            };
+            info!(
+                "Balance CLOB raw={} → ${:.2} | allowances={:?}",
+                raw, bal, b.allowances
+            );
             let _ = tx.send(AppMsg::Balance(bal));
         }
         Err(e) => error!("balance_allowance: {:#}", e),
     }
 }
 
-
 /// Consulta las órdenes abiertas y fills recientes del CLOB y los envía a la UI.
 async fn fetch_and_send_orders(
-    client:     &Client<Authenticated<Normal>>,
-    tx:         &mpsc::Sender<AppMsg>,
-    token_up:   U256,
+    client: &Client<Authenticated<Normal>>,
+    tx: &mpsc::Sender<AppMsg>,
+    token_up: U256,
     token_down: Option<U256>,
 ) {
     const TIMEOUT: Duration = Duration::from_secs(10);
@@ -1160,165 +973,81 @@ async fn fetch_and_send_orders(
     let orders_req = OrdersRequest::builder().build();
     match tokio::time::timeout(TIMEOUT, client.orders(&orders_req, None)).await {
         Ok(Ok(list)) => {
-            let up_str   = token_up.to_string();
+            let up_str = token_up.to_string();
             let down_str = token_down.map(|t| t.to_string());
 
-            let open: Vec<OpenOrder> = list.data.iter().map(|o| {
-                let is_up = o.asset_id.to_string() == up_str;
-                let outcome = if is_up {
-                    "Up".to_string()
-                } else if down_str.as_deref().map_or(false, |d| o.asset_id.to_string() == d) {
-                    "Down".to_string()
-                } else {
-                    o.outcome.clone()
-                };
-                let side = if matches!(o.side, ClobSideType::Buy) { OrderSide::Buy } else { OrderSide::Sell };
-                OpenOrder {
-                    id:           o.id.clone(),
-                    outcome,
-                    side,
-                    price:        o.price.to_string().parse().unwrap_or(0.0),
-                    size_orig:    o.original_size.to_string().parse().unwrap_or(0.0),
-                    size_matched: o.size_matched.to_string().parse().unwrap_or(0.0),
-                }
-            }).collect();
+            let open: Vec<OpenOrder> = list
+                .data
+                .iter()
+                .map(|o| {
+                    let is_up = o.asset_id.to_string() == up_str;
+                    let outcome = if is_up {
+                        "Up".to_string()
+                    } else if down_str
+                        .as_deref()
+                        .is_some_and(|d| o.asset_id.to_string() == d)
+                    {
+                        "Down".to_string()
+                    } else {
+                        o.outcome.clone()
+                    };
+                    let side = if matches!(o.side, ClobSideType::Buy) {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    };
+                    OpenOrder {
+                        id: o.id.clone(),
+                        outcome,
+                        side,
+                        price: o.price.to_string().parse().unwrap_or(0.0),
+                        size_orig: o.original_size.to_string().parse().unwrap_or(0.0),
+                        size_matched: o.size_matched.to_string().parse().unwrap_or(0.0),
+                    }
+                })
+                .collect();
 
             info!("Órdenes abiertas: {}", open.len());
             let _ = tx.send(AppMsg::OpenOrders(open));
         }
         Ok(Err(e)) => warn!("orders: {}", e),
-        Err(_)     => warn!("orders timeout"),
+        Err(_) => warn!("orders timeout"),
     }
 
     // Fills recientes (últimos 20, ambos tokens)
     let trades_req = TradesRequest::builder().build();
     match tokio::time::timeout(TIMEOUT, client.trades(&trades_req, None)).await {
         Ok(Ok(list)) => {
-            let fills: Vec<RecentFill> = list.data.iter().take(20).map(|t| {
-                let side = if matches!(t.side, ClobSideType::Buy) { OrderSide::Buy } else { OrderSide::Sell };
-                let mt = t.match_time;
-                let session_ts = (mt.timestamp() / 900) * 900;
-                let session_dt = chrono::DateTime::from_timestamp(session_ts, 0)
-                    .unwrap_or(mt);
-                RecentFill {
-                    outcome: t.outcome.clone(),
-                    side,
-                    price:   t.price.to_string().parse().unwrap_or(0.0),
-                    size:    t.size.to_string().parse().unwrap_or(0.0),
-                    time:    mt.format("%H:%M:%S").to_string(),
-                    session: session_dt.format("%H:%M").to_string(),
-                }
-            }).collect();
+            let fills: Vec<RecentFill> = list
+                .data
+                .iter()
+                .take(20)
+                .map(|t| {
+                    let side = if matches!(t.side, ClobSideType::Buy) {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    };
+                    let mt = t.match_time;
+                    let session_ts = (mt.timestamp() / 900) * 900;
+                    let session_dt = chrono::DateTime::from_timestamp(session_ts, 0).unwrap_or(mt);
+                    RecentFill {
+                        outcome: t.outcome.clone(),
+                        side,
+                        price: t.price.to_string().parse().unwrap_or(0.0),
+                        size: t.size.to_string().parse().unwrap_or(0.0),
+                        time: mt.format("%H:%M:%S").to_string(),
+                        session: session_dt.format("%H:%M").to_string(),
+                    }
+                })
+                .collect();
 
             info!("Fills recientes: {}", fills.len());
             let _ = tx.send(AppMsg::RecentFills(fills));
         }
         Ok(Err(e)) => warn!("trades: {}", e),
-        Err(_)     => warn!("trades timeout"),
+        Err(_) => warn!("trades timeout"),
     }
-}
-
-/// Scalp automático: coloca BUY limit, espera fill, luego coloca SELL limit al precio objetivo.
-/// Corre en un tokio::spawn independiente para no bloquear el loop principal.
-#[allow(unused_assignments)]
-async fn handle_scalp_buy(
-    client:       &Client<Authenticated<Normal>>,
-    signer:       &PrivateKeySigner,
-    tx:           &mpsc::Sender<AppMsg>,
-    broadcast_tx: &broadcast::Sender<String>,
-    token_id:     U256,
-    price:        f64,
-    size:         f64,
-    target_price: f64,
-) {
-    let send_msg = |msg: &str, bt: &broadcast::Sender<String>| {
-        let _ = tx.send(AppMsg::OrderResult(msg.to_string()));
-        if let Some(json) = AppMsg::OrderResult(msg.to_string()).to_json() {
-            let _ = bt.send(json);
-        }
-    };
-
-    let price_dec: Decimal = match format!("{:.2}", price).parse() {
-        Ok(d) => d,
-        Err(_) => { send_msg("⚡ Precio invalido", broadcast_tx); return; }
-    };
-    let size_dec: Decimal = match format!("{:.2}", size).parse() {
-        Ok(d) => d,
-        Err(_) => { send_msg("⚡ Tamaño invalido", broadcast_tx); return; }
-    };
-
-    let buy_result: Result<_> = async {
-        let order = client.limit_order()
-            .token_id(token_id)
-            .order_type(OrderType::GTC)
-            .price(price_dec)
-            .size(size_dec)
-            .side(ClobSide::Buy)
-            .build().await?;
-        let signed = client.sign(signer, order).await?;
-        client.post_order(signed).await.map_err(|e| anyhow!(e))
-    }.await;
-
-    let order_id = match buy_result {
-        Ok(r) if r.success => {
-            let msg = format!(
-                "⚡ SCALP BUY @ {:.4} enviado — esperando fill para vender @ {:.4}...",
-                price, target_price
-            );
-            send_msg(&msg, broadcast_tx);
-            r.order_id
-        }
-        Ok(r) => {
-            send_msg(&format!("✗ SCALP rechazado: {}", r.error_msg.unwrap_or_default()), broadcast_tx);
-            return;
-        }
-        Err(e) => {
-            send_msg(&format!("✗ SCALP error: {e}"), broadcast_tx);
-            return;
-        }
-    };
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
-    let filled_size;
-
-    loop {
-        if tokio::time::Instant::now() >= deadline {
-            send_msg("⚠ SCALP timeout — fill no recibido en 5min", broadcast_tx);
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        let req = OrdersRequest::builder().build();
-        let result = tokio::time::timeout(Duration::from_secs(5), client.orders(&req, None)).await;
-        match result {
-            Ok(Ok(list)) => {
-                let found = list.data.iter().find(|o| o.id == order_id);
-                match found {
-                    None => {
-                        filled_size = size;
-                        break;
-                    }
-                    Some(o) => {
-                        let matched: f64 = o.size_matched.to_string().parse().unwrap_or(0.0);
-                        let orig:    f64 = o.original_size.to_string().parse().unwrap_or(size);
-                        if matched >= orig * 0.995 {
-                            filled_size = matched;
-                            break;
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let sell_size = if filled_size > 0.0 { filled_size } else { size };
-    let msg = format!(
-        "✓ BUY filled! Colocando SELL @ {:.4} x {:.2} shares...",
-        target_price, sell_size
-    );
-    send_msg(&msg, broadcast_tx);
-    handle_limit_order(client, signer, tx, broadcast_tx, token_id, OrderSide::Sell, target_price, sell_size).await;
 }
 
 /// Obtiene el precio BTC/USD de Pyth Network al inicio del intervalo de 15min.
@@ -1326,19 +1055,13 @@ async fn handle_scalp_buy(
 /// Feed ID BTC/USD en Polygon: e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43
 async fn fetch_btc_open_price(market_end: &chrono::DateTime<Utc>) -> Option<f64> {
     let market_start = *market_end - chrono::Duration::minutes(15);
-    let ts           = market_start.timestamp();  // Unix segundos
+    let ts = market_start.timestamp(); // Unix segundos
 
-    const BTC_USD_FEED: &str =
-        "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
+    const BTC_USD_FEED: &str = "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
 
-    let url = format!(
-        "https://hermes.pyth.network/v2/updates/price/{ts}?ids[]={BTC_USD_FEED}"
-    );
+    let url = format!("https://hermes.pyth.network/v2/updates/price/{ts}?ids[]={BTC_USD_FEED}");
 
-    let resp = HttpClient::new()
-        .get(&url)
-        .send().await
-        .ok()?;
+    let resp = HttpClient::new().get(&url).send().await.ok()?;
 
     // Respuesta: { "parsed": [{ "price": { "price": "7227150000", "expo": -8, ... } }] }
     let json: serde_json::Value = resp.json().await.ok()?;
@@ -1346,10 +1069,14 @@ async fn fetch_btc_open_price(market_end: &chrono::DateTime<Utc>) -> Option<f64>
     let price_obj = json.get("parsed")?.get(0)?.get("price")?;
 
     let price_raw: f64 = price_obj.get("price")?.as_str()?.parse().ok()?;
-    let expo:      i32 = price_obj.get("expo")?.as_i64()? as i32;
+    let expo: i32 = price_obj.get("expo")?.as_i64()? as i32;
 
     let price = price_raw * 10_f64.powi(expo);
-    if price > 0.0 { Some(price) } else { None }
+    if price > 0.0 {
+        Some(price)
+    } else {
+        None
+    }
 }
 
 // ─── Descubrimiento de mercado ────────────────────────────────────────────────
@@ -1357,25 +1084,26 @@ async fn fetch_btc_open_price(market_end: &chrono::DateTime<Utc>) -> Option<f64>
 async fn discover_btc_market(gamma: &gamma::Client) -> Result<MarketInfo> {
     // Nivel 1: override manual
     if let Ok(raw) = std::env::var("BTC_TOKEN_ID") {
-        let id_str  = raw.trim();
-        let token_up: U256 = id_str.parse()
+        let id_str = raw.trim();
+        let token_up: U256 = id_str
+            .parse()
             .with_context(|| format!("BTC_TOKEN_ID inválido: '{id_str}'"))?;
         info!("Usando BTC_TOKEN_ID manual: {}", token_up);
         return Ok(MarketInfo {
-            title:         "BTC 15-min (token manual)".into(),
-            token_id_up:   token_up.to_string(),
+            title: "BTC 15-min (token manual)".into(),
+            token_id_up: token_up.to_string(),
             token_id_down: None,
-            outcome_up:    "Up".into(),
-            outcome_down:  "Down".into(),
-            end_date:      next_15min_boundary(),
-            active:        true,
+            outcome_up: "Up".into(),
+            outcome_down: "Down".into(),
+            end_date: next_15min_boundary(),
+            active: true,
             price_to_beat: None,
-            duration_min:  15,
+            duration_min: 15,
         });
     }
 
     // Nivel 2: slug determinista (prueba 15m y 5m)
-    let now_ts  = Utc::now().timestamp();
+    let now_ts = Utc::now().timestamp();
     // 15-min mercados
     {
         let current = (now_ts / 900) * 900;
@@ -1383,8 +1111,11 @@ async fn discover_btc_market(gamma: &gamma::Client) -> Result<MarketInfo> {
             let slug = format!("btc-updown-15m-{start_ts}");
             info!("Probando slug: {slug}");
             match fetch_from_event(gamma, &slug, 15).await {
-                Ok(info) => { info!("Encontrado via slug: {slug}"); return Ok(info); }
-                Err(e)   => warn!("Slug {slug}: {:#}", e),
+                Ok(info) => {
+                    info!("Encontrado via slug: {slug}");
+                    return Ok(info);
+                }
+                Err(e) => warn!("Slug {slug}: {:#}", e),
             }
         }
     }
@@ -1395,8 +1126,11 @@ async fn discover_btc_market(gamma: &gamma::Client) -> Result<MarketInfo> {
             let slug = format!("btc-updown-5m-{start_ts}");
             info!("Probando slug: {slug}");
             match fetch_from_event(gamma, &slug, 5).await {
-                Ok(info) => { info!("Encontrado via slug: {slug}"); return Ok(info); }
-                Err(e)   => warn!("Slug {slug}: {:#}", e),
+                Ok(info) => {
+                    info!("Encontrado via slug: {slug}");
+                    return Ok(info);
+                }
+                Err(e) => warn!("Slug {slug}: {:#}", e),
             }
         }
     }
@@ -1406,7 +1140,11 @@ async fn discover_btc_market(gamma: &gamma::Client) -> Result<MarketInfo> {
     fetch_from_markets(gamma).await
 }
 
-async fn fetch_from_event(gamma: &gamma::Client, slug: &str, duration_min: i32) -> Result<MarketInfo> {
+async fn fetch_from_event(
+    gamma: &gamma::Client,
+    slug: &str,
+    duration_min: i32,
+) -> Result<MarketInfo> {
     let event = gamma
         .event_by_slug(&EventBySlugRequest::builder().slug(slug).build())
         .await
@@ -1417,26 +1155,36 @@ async fn fetch_from_event(gamma: &gamma::Client, slug: &str, duration_min: i32) 
     }
 
     let end_date = event.end_date.ok_or_else(|| anyhow!("Sin end_date"))?;
-    let title    = event.title.clone().unwrap_or_else(|| slug.to_string());
+    let title = event.title.clone().unwrap_or_else(|| slug.to_string());
 
-    let markets = event.markets.as_ref()
+    let markets = event
+        .markets
+        .as_ref()
         .ok_or_else(|| anyhow!("Sin mercados"))?;
 
     for market in markets {
         if let Some(ids) = &market.clob_token_ids {
-            if ids.is_empty() { continue; }
+            if ids.is_empty() {
+                continue;
+            }
 
-            let token_id_up   = ids[0].to_string();
+            let token_id_up = ids[0].to_string();
             let token_id_down = ids.get(1).map(|t| t.to_string());
 
             let outcomes = market.outcomes.as_ref();
-            let outcome_up   = outcomes.and_then(|o| o.first()).cloned()
+            let outcome_up = outcomes
+                .and_then(|o| o.first())
+                .cloned()
                 .unwrap_or_else(|| "Up".to_string());
-            let outcome_down = outcomes.and_then(|o| o.get(1)).cloned()
+            let outcome_down = outcomes
+                .and_then(|o| o.get(1))
+                .cloned()
                 .unwrap_or_else(|| "Down".to_string());
 
             // groupItemThreshold = precio BTC al inicio del intervalo (Price to Beat)
-            let price_to_beat = market.group_item_threshold.as_deref()
+            let price_to_beat = market
+                .group_item_threshold
+                .as_deref()
                 .and_then(|s| s.parse::<f64>().ok())
                 .filter(|&p| p > 0.0);
             if let Some(p) = price_to_beat {
@@ -1467,78 +1215,112 @@ async fn fetch_from_markets(gamma: &gamma::Client) -> Result<MarketInfo> {
         .limit(200)
         .build();
 
-    let markets = gamma.markets(&request).await
+    let markets = gamma
+        .markets(&request)
+        .await
         .context("Error obteniendo mercados")?;
 
     info!("Fallback: {} mercados", markets.len());
 
     let now = Utc::now();
-    let market = markets.iter()
+    let market = markets
+        .iter()
         .filter(|m| m.active.unwrap_or(true) && !m.closed.unwrap_or(false))
         .filter(|m| {
             let q = m.question.as_deref().unwrap_or("").to_lowercase();
             q.contains("bitcoin") || q.contains("btc")
         })
-        .filter(|m| m.end_date.map_or(false, |dt| dt.minute() % 15 == 0 && dt > now))
-        .min_by_key(|m| m.end_date.map(|dt| (dt - now).num_seconds()).unwrap_or(i64::MAX))
-        .ok_or_else(|| anyhow!(
-            "No se encontró mercado BTC 15-min activo.\nAñade BTC_TOKEN_ID=<id> a tu .env"
-        ))?;
+        .filter(|m| {
+            m.end_date
+                .is_some_and(|dt| dt.minute() % 15 == 0 && dt > now)
+        })
+        .min_by_key(|m| {
+            m.end_date
+                .map(|dt| (dt - now).num_seconds())
+                .unwrap_or(i64::MAX)
+        })
+        .ok_or_else(|| {
+            anyhow!("No se encontró mercado BTC 15-min activo.\nAñade BTC_TOKEN_ID=<id> a tu .env")
+        })?;
 
-    let ids = market.clob_token_ids.as_ref()
+    let ids = market
+        .clob_token_ids
+        .as_ref()
         .filter(|v| !v.is_empty())
         .ok_or_else(|| anyhow!("Mercado sin clob_token_ids"))?;
 
-    let token_id_up   = ids[0].to_string();
+    let token_id_up = ids[0].to_string();
     let token_id_down = ids.get(1).map(|t| t.to_string());
 
-    let outcomes     = market.outcomes.as_ref();
-    let outcome_up   = outcomes.and_then(|o| o.first()).cloned().unwrap_or_else(|| "Up".into());
-    let outcome_down = outcomes.and_then(|o| o.get(1)).cloned().unwrap_or_else(|| "Down".into());
+    let outcomes = market.outcomes.as_ref();
+    let outcome_up = outcomes
+        .and_then(|o| o.first())
+        .cloned()
+        .unwrap_or_else(|| "Up".into());
+    let outcome_down = outcomes
+        .and_then(|o| o.get(1))
+        .cloned()
+        .unwrap_or_else(|| "Down".into());
 
-    let price_to_beat = market.group_item_threshold.as_deref()
+    let price_to_beat = market
+        .group_item_threshold
+        .as_deref()
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|&p| p > 0.0);
 
     Ok(MarketInfo {
-        title:         market.question.clone().unwrap_or_else(|| "Sin título".into()),
+        title: market
+            .question
+            .clone()
+            .unwrap_or_else(|| "Sin título".into()),
         token_id_up,
         token_id_down,
         outcome_up,
         outcome_down,
-        end_date:      market.end_date.ok_or_else(|| anyhow!("Sin end_date"))?,
-        active:        market.active.unwrap_or(true),
+        end_date: market.end_date.ok_or_else(|| anyhow!("Sin end_date"))?,
+        active: market.active.unwrap_or(true),
         price_to_beat,
-        duration_min:  15, // fallback: 15-min por defecto
+        duration_min: 15, // fallback: 15-min por defecto
     })
 }
 
 // ─── WebSocket: parsing ───────────────────────────────────────────────────────
 
-fn handle_ws_text(text: &str, tx: &mpsc::Sender<AppMsg>, up_str: &str, down_str: Option<&str>, broadcast_tx: &broadcast::Sender<String>) {
+fn handle_ws_text(
+    text: &str,
+    tx: &mpsc::Sender<AppMsg>,
+    up_str: &str,
+    down_str: Option<&str>,
+    broadcast_tx: &broadcast::Sender<String>,
+) {
     if let Ok(msgs) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
-        for msg in msgs { dispatch_ws_msg(&msg, tx, up_str, down_str, broadcast_tx); }
+        for msg in msgs {
+            dispatch_ws_msg(&msg, tx, up_str, down_str, broadcast_tx);
+        }
     } else if let Ok(msg) = serde_json::from_str::<serde_json::Value>(text) {
         dispatch_ws_msg(&msg, tx, up_str, down_str, broadcast_tx);
     }
 }
 
 fn dispatch_ws_msg(
-    msg:      &serde_json::Value,
-    tx:       &mpsc::Sender<AppMsg>,
-    up_str:   &str,
+    msg: &serde_json::Value,
+    tx: &mpsc::Sender<AppMsg>,
+    up_str: &str,
     down_str: Option<&str>,
     broadcast_tx: &broadcast::Sender<String>,
 ) {
     let asset_id = msg.get("asset_id").and_then(|v| v.as_str()).unwrap_or("");
-    let is_up    = asset_id == up_str;
-    let is_down  = down_str.map_or(false, |d| asset_id == d);
+    let is_up = asset_id == up_str;
+    let is_down = down_str == Some(asset_id);
 
     match msg.get("event_type").and_then(|v| v.as_str()) {
         Some("book") => {
             if let Some(snap) = parse_ws_book(msg) {
-                if is_up        { let _ = tx.send(AppMsg::BookUp(snap.clone())); }
-                else if is_down { let _ = tx.send(AppMsg::BookDown(snap.clone())); }
+                if is_up {
+                    let _ = tx.send(AppMsg::BookUp(snap.clone()));
+                } else if is_down {
+                    let _ = tx.send(AppMsg::BookDown(snap.clone()));
+                }
 
                 if is_up {
                     if let Some(json) = AppMsg::BookUp(snap).to_json() {
@@ -1552,12 +1334,22 @@ fn dispatch_ws_msg(
             }
         }
         Some("last_trade_price") => {
-            if let Some(p) = msg.get("price").and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<f64>().ok()).filter(|&p| p > 0.0)
+            if let Some(p) = msg
+                .get("price")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|&p| p > 0.0)
             {
-                let sz = msg.get("size").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                if is_up        { let _ = tx.send(AppMsg::LastTradeUp { price: p, size: sz }); }
-                else if is_down { let _ = tx.send(AppMsg::LastTradeDown { price: p, size: sz }); }
+                let sz = msg
+                    .get("size")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                if is_up {
+                    let _ = tx.send(AppMsg::LastTradeUp { price: p, size: sz });
+                } else if is_down {
+                    let _ = tx.send(AppMsg::LastTradeDown { price: p, size: sz });
+                }
 
                 if is_up {
                     let msg = AppMsg::LastTradeUp { price: p, size: sz };
@@ -1581,17 +1373,21 @@ fn parse_ws_book(msg: &serde_json::Value) -> Option<BookSnapshot> {
         msg.get(key)
             .and_then(|v| v.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|l| {
-                    let price = l.get("price")?.as_str()?.parse().ok()?;
-                    let size  = l.get("size")?.as_str()?.parse().ok()?;
-                    Some(PriceLevel { price, size })
-                }).collect()
+                arr.iter()
+                    .filter_map(|l| {
+                        let price = l.get("price")?.as_str()?.parse().ok()?;
+                        let size = l.get("size")?.as_str()?.parse().ok()?;
+                        Some(PriceLevel { price, size })
+                    })
+                    .collect()
             })
             .unwrap_or_default()
     };
     let bids = levels("bids");
     let asks = levels("asks");
-    if bids.is_empty() && asks.is_empty() { return None; }
+    if bids.is_empty() && asks.is_empty() {
+        return None;
+    }
     Some(BookSnapshot { bids, asks })
 }
 
@@ -1608,48 +1404,50 @@ impl AppMsg {
                     ConnStatus::MarketFound(info) => &info.title,
                     ConnStatus::ConnectingWs => "ConnectingWs",
                     ConnStatus::Live => "LIVE",
-                    ConnStatus::Reconnecting(n) => return Some(format!(r#"{{"type":"status","status":"Reconnecting","message":"Attempt {}"}}"#, n)),
-                    ConnStatus::Error(e) => return Some(format!(r#"{{"type":"status","status":"Error","message":"{}"}}"#, e)),
+                    ConnStatus::Reconnecting(n) => {
+                        return Some(format!(
+                            r#"{{"type":"status","status":"Reconnecting","message":"Attempt {}"}}"#,
+                            n
+                        ))
+                    }
                 };
                 Some(format!(r#"{{"type":"status","status":"{}"}}"#, msg))
             }
-            AppMsg::BookUp(book) => {
-                Some(format!(
-                    r#"{{"type":"book","side":"up","book":{}}}"#,
-                    book_to_json(book)
-                ))
-            }
-            AppMsg::BookDown(book) => {
-                Some(format!(
-                    r#"{{"type":"book","side":"down","book":{}}}"#,
-                    book_to_json(book)
-                ))
-            }
-            AppMsg::LastTradeUp { price, .. } => {
-                Some(format!(r#"{{"type":"trade","side":"up","price":{}}}"#, price))
-            }
-            AppMsg::LastTradeDown { price, .. } => {
-                Some(format!(r#"{{"type":"trade","side":"down","price":{}}}"#, price))
-            }
-            AppMsg::Balance(bal) => {
-                Some(format!(r#"{{"type":"balance","balance":{}}}"#, bal))
-            }
-            AppMsg::BtcOpen(price) => {
-                Some(format!(r#"{{"type":"btc_price","open":{}}}"#, price))
-            }
+            AppMsg::BookUp(book) => Some(format!(
+                r#"{{"type":"book","side":"up","book":{}}}"#,
+                book_to_json(book)
+            )),
+            AppMsg::BookDown(book) => Some(format!(
+                r#"{{"type":"book","side":"down","book":{}}}"#,
+                book_to_json(book)
+            )),
+            AppMsg::LastTradeUp { price, .. } => Some(format!(
+                r#"{{"type":"trade","side":"up","price":{}}}"#,
+                price
+            )),
+            AppMsg::LastTradeDown { price, .. } => Some(format!(
+                r#"{{"type":"trade","side":"down","price":{}}}"#,
+                price
+            )),
+            AppMsg::Balance(bal) => Some(format!(r#"{{"type":"balance","balance":{}}}"#, bal)),
+            AppMsg::BtcOpen(price) => Some(format!(r#"{{"type":"btc_price","open":{}}}"#, price)),
             AppMsg::BtcTick { price, .. } => {
                 Some(format!(r#"{{"type":"btc_price","price":{}}}"#, price))
             }
-            AppMsg::OrderResult(msg) => {
-                Some(format!(r#"{{"type":"order_result","success":true,"message":"{}"}}"#, msg.replace('"', "\\\"")))
-            }
+            AppMsg::OrderResult(msg) => Some(format!(
+                r#"{{"type":"order_result","success":true,"message":"{}"}}"#,
+                msg.replace('"', "\\\"")
+            )),
             AppMsg::OpenOrders(orders) => {
                 let orders_json: Vec<String> = orders.iter().map(|o| {
                     format!(r#"{{"id":"{}","outcome":"{}","side":"{}","price":{},"size_orig":{},"size_matched":{}}}"#,
                         o.id, o.outcome, match o.side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" },
                         o.price, o.size_orig, o.size_matched)
                 }).collect();
-                Some(format!(r#"{{"type":"open_orders","orders":[{}]}}"#, orders_json.join(",")))
+                Some(format!(
+                    r#"{{"type":"open_orders","orders":[{}]}}"#,
+                    orders_json.join(",")
+                ))
             }
             AppMsg::RecentFills(fills) => {
                 let fills_json: Vec<String> = fills.iter().map(|f| {
@@ -1657,20 +1455,9 @@ impl AppMsg {
                         f.outcome, match f.side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" },
                         f.price, f.size, f.time, f.session)
                 }).collect();
-                Some(format!(r#"{{"type":"recent_fills","fills":[{}]}}"#, fills_json.join(",")))
-            }
-            AppMsg::Candles { interval, candles } => {
-                let candles_json: Vec<String> = candles.iter().map(|c| {
-                    format!(r#"{{"open_time":{},"open":{},"high":{},"low":{},"close":{},"volume":{}}}"#,
-                        c.open_time, c.open, c.high, c.low, c.close, c.volume)
-                }).collect();
-                Some(format!(r#"{{"type":"candles","interval":"{}","candles":[{}]}}"#,
-                    interval, candles_json.join(",")))
-            }
-            AppMsg::CandleUpdate(candle) => {
                 Some(format!(
-                    r#"{{"type":"candle_update","candle":{{"open_time":{},"open":{},"high":{},"low":{},"close":{},"volume":{}}}}}"#,
-                    candle.open_time, candle.open, candle.high, candle.low, candle.close, candle.volume
+                    r#"{{"type":"recent_fills","fills":[{}]}}"#,
+                    fills_json.join(",")
                 ))
             }
         }
@@ -1678,19 +1465,27 @@ impl AppMsg {
 }
 
 fn book_to_json(book: &BookSnapshot) -> String {
-    let bids: Vec<String> = book.bids.iter().map(|l| {
-        format!(r#"{{"price":{},"size":{}}}"#, l.price, l.size)
-    }).collect();
-    let asks: Vec<String> = book.asks.iter().map(|l| {
-        format!(r#"{{"price":{},"size":{}}}"#, l.price, l.size)
-    }).collect();
-    format!(r#"{{"bids":[{}],"asks":[{}]}}"#, bids.join(","), asks.join(","))
+    let bids: Vec<String> = book
+        .bids
+        .iter()
+        .map(|l| format!(r#"{{"price":{},"size":{}}}"#, l.price, l.size))
+        .collect();
+    let asks: Vec<String> = book
+        .asks
+        .iter()
+        .map(|l| format!(r#"{{"price":{},"size":{}}}"#, l.price, l.size))
+        .collect();
+    format!(
+        r#"{{"bids":[{}],"asks":[{}]}}"#,
+        bids.join(","),
+        asks.join(",")
+    )
 }
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
 
 fn next_15min_boundary() -> DateTime<Utc> {
-    let now_ts  = Utc::now().timestamp();
+    let now_ts = Utc::now().timestamp();
     let next_ts = ((now_ts / 900) + 1) * 900;
     DateTime::from_timestamp(next_ts, 0).unwrap_or_else(Utc::now)
 }
@@ -1699,10 +1494,16 @@ fn convert_book(
     resp: &polymarket_client_sdk_v2::clob::types::response::OrderBookSummaryResponse,
 ) -> BookSnapshot {
     let to_levels = |levels: &[polymarket_client_sdk_v2::clob::types::response::OrderSummary]| {
-        levels.iter().map(|l| PriceLevel {
-            price: l.price.to_string().parse().unwrap_or(0.0),
-            size:  l.size.to_string().parse().unwrap_or(0.0),
-        }).collect()
+        levels
+            .iter()
+            .map(|l| PriceLevel {
+                price: l.price.to_string().parse().unwrap_or(0.0),
+                size: l.size.to_string().parse().unwrap_or(0.0),
+            })
+            .collect()
     };
-    BookSnapshot { bids: to_levels(&resp.bids), asks: to_levels(&resp.asks) }
+    BookSnapshot {
+        bids: to_levels(&resp.bids),
+        asks: to_levels(&resp.asks),
+    }
 }

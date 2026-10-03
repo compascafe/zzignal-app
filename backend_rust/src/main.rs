@@ -6,60 +6,71 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use std::time::Duration;
 
-mod models;
 mod controllers;
+mod models;
 mod services;
-mod utils;
 
-use std::sync::{mpsc, Arc, Mutex};
-use chrono::{Timelike, Utc};
-use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
-use serde_json::json;
-use tracing::{error, info, warn, Level};
-use tracing_subscriber::FmtSubscriber;
-use crate::controllers::worker::{AppMsg, CandleInterval, CmdMsg, ConnStatus};
+use crate::controllers::worker::{AppMsg, CmdMsg, ConnStatus};
 use crate::models::credentials::ClobCredentials;
-use crate::models::state::AppState;
-use crate::models::hft::{BinanceDepth, EventType};
 use crate::models::hft::PriceRingBuffer;
-use crate::services::metrics::{self, TrackingState};
+use crate::models::hft::{BinanceDepth, EventType};
+use crate::models::state::AppState;
 use crate::services::binance::BinanceTickEvent;
+use crate::services::metrics::{self, TrackingState};
 use crate::services::perf;
 use crate::services::pipeline;
+use chrono::{Timelike, Utc};
+use serde_json::json;
+use std::sync::{mpsc, Arc};
+use tokio::sync::{broadcast, mpsc as tokio_mpsc, RwLock};
+use tracing::{error, info, warn, Level};
+use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = dotenvy::dotenv() {
         eprintln!("[warn] .env no cargado: {e}");
     }
-    let subscriber = FmtSubscriber::builder().with_max_level(Level::INFO).with_target(false).compact().finish();
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_target(false)
+        .compact()
+        .finish();
     tracing::subscriber::set_global_default(subscriber)?;
-    info!("zzignal v{} built @{}", env!("GIT_VERSION"), env!("BUILD_TIME"));
+    info!(
+        "zzignal v{} built @{}",
+        env!("GIT_VERSION"),
+        env!("BUILD_TIME")
+    );
 
     let creds = match ClobCredentials::from_env() {
-        Ok(c) => { info!("Wallet: {}", c.display_address()); Arc::new(c) }
-        Err(e) => { error!("Credenciales no disponibles: {:#}", e); return Ok(()); }
+        Ok(c) => {
+            info!("Wallet: {}", c.display_address());
+            Arc::new(c)
+        }
+        Err(e) => {
+            error!("Credenciales no disponibles: {:#}", e);
+            return Ok(());
+        }
     };
 
-    let (tx, rx)              = mpsc::channel::<AppMsg>();
-    let (cmd_tx, cmd_rx)      = tokio_mpsc::unbounded_channel::<CmdMsg>();
-    let (bcast_tx, _)         = broadcast::channel::<String>(2048);
-    let interval_arc          = Arc::new(Mutex::new(CandleInterval::OneMinute));
+    let (tx, rx) = mpsc::channel::<AppMsg>();
+    let (cmd_tx, cmd_rx) = tokio_mpsc::unbounded_channel::<CmdMsg>();
+    let (bcast_tx, _) = broadcast::channel::<String>(2048);
 
-    let binance_depth   = Arc::new(RwLock::new(None::<BinanceDepth>));
-    let binance_ring    = Arc::new(PriceRingBuffer::new());
-    let tracking_state  = Arc::new(TrackingState::new());
+    let binance_depth = Arc::new(RwLock::new(None::<BinanceDepth>));
+    let binance_ring = Arc::new(PriceRingBuffer::new());
+    let tracking_state = Arc::new(TrackingState::new());
     let (tick_tx, mut tick_rx) = tokio_mpsc::unbounded_channel::<BinanceTickEvent>();
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
     let state = AppState::new(
-        cmd_tx, bcast_tx.clone(),
-        Arc::clone(&interval_arc),
+        cmd_tx,
+        bcast_tx.clone(),
         Arc::clone(&binance_depth),
         Arc::clone(&binance_ring),
         Arc::clone(&tracking_state),
         tick_tx,
-        (*creds).clone(),
     );
 
     // Auto-session manager
@@ -87,10 +98,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             info!("[SESSION] Auto-start #{} {}", sid, name);
                             auto_state.recording_sessions.write().await.push(sid);
                             auto_state.session_manager.start_session(sid, &name).ok();
-                            auto_state.tracking_state.reset_session_baselines();
                             auto_state.tick_drain.store(true, std::sync::atomic::Ordering::Release);
                         }
-                        if has_active && secs_left <= 2 && secs_left >= 0 {
+                        if has_active && (0..=2).contains(&secs_left) {
                             let to_stop: Vec<i32> = {
                                 let mut rec = auto_state.recording_sessions.write().await;
                                 rec.drain(..).collect()
@@ -112,14 +122,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let tx2 = tx.clone();
         let creds2 = Arc::clone(&creds);
-        let interval_arc2 = Arc::clone(&interval_arc);
         let bcast_tx2 = bcast_tx.clone();
         std::thread::Builder::new()
             .name("polymarket-worker".into())
             .spawn(move || {
                 tokio::runtime::Builder::new_multi_thread()
-                    .enable_all().build().expect("tokio runtime worker")
-                    .block_on(crate::controllers::worker::run(tx2, creds2, cmd_rx, interval_arc2, bcast_tx2));
+                    .enable_all()
+                    .build()
+                    .expect("tokio runtime worker")
+                    .block_on(crate::controllers::worker::run(
+                        tx2, creds2, cmd_rx, bcast_tx2,
+                    ));
             })
             .expect("spawn worker");
     }
@@ -142,35 +155,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Binance depth stream (HFT)
     {
         let depth2 = Arc::clone(&binance_depth);
-        let ring2  = Arc::clone(&binance_ring);
-        let tick2  = state.tick_tx.clone();
-        let track2 = Arc::clone(&tracking_state);
+        let ring2 = Arc::clone(&binance_ring);
+        let tick2 = state.tick_tx.clone();
         let shutdown2 = shutdown_tx.subscribe();
         tokio::spawn(async move {
-            crate::services::binance::run_binance_depth_stream(depth2, ring2, tick2, track2, shutdown2).await;
-        });
-    }
-
-    // Session flush — every 30s
-    {
-        let sm = Arc::clone(&state.session_manager);
-        let mut shutdown4 = shutdown_tx.subscribe();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => { sm.flush_all(); }
-                    _ = shutdown4.recv() => { sm.flush_all(); return; }
-                }
-            }
+            crate::services::binance::run_binance_depth_stream(depth2, ring2, tick2, shutdown2)
+                .await;
         });
     }
 
     // HFT tick consumer
     {
         let depth3 = Arc::clone(&binance_depth);
-        let ring3  = Arc::clone(&binance_ring);
-        let sm3    = Arc::clone(&state.session_manager);
+        let ring3 = Arc::clone(&binance_ring);
+        let sm3 = Arc::clone(&state.session_manager);
         let track3 = Arc::clone(&tracking_state);
         let drain3 = Arc::clone(&state.tick_drain);
         let tick_state = Arc::clone(&state);
@@ -179,19 +177,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _guard = perf::TICK_CONSUMER.start();
                 if drain3.swap(false, std::sync::atomic::Ordering::Acquire) {
                     let mut drained = 0;
-                    while drained < 50 && tick_rx.try_recv().is_ok() { drained += 1; }
+                    while drained < 50 && tick_rx.try_recv().is_ok() {
+                        drained += 1;
+                    }
                     continue;
                 }
                 let depth_snap = depth3.read().await.clone();
                 if let Some(ref bn) = depth_snap {
-                    { let _g = perf::TRACK_PRICE.start(); tracking_state.track_price(tick.price, tick.event_time); }
-                    { let _g = perf::RECORD_TRADE.start(); tracking_state.record_binance_trade(tick.event_time); }
-                    { let _g = perf::RECORD_SAMPLE.start(); tracking_state.record_price_sample(tick.event_time, tick.price); }
-                    let mut rec = { let _g = perf::BUILD_TICK.start();
-                        metrics::build_binance_tick(bn, &ring3, &track3, tick.event_time, tick.price, tick.volume)
+                    {
+                        let _g = perf::RECORD_SAMPLE.start();
+                        tracking_state.record_price_sample(tick.event_time, tick.price);
+                    }
+                    let mut rec = {
+                        let _g = perf::BUILD_TICK.start();
+                        metrics::build_binance_tick(
+                            bn,
+                            &ring3,
+                            &track3,
+                            tick.event_time,
+                            tick.price,
+                        )
                     };
-                    rec.session_id = tick_state.recording_sessions.read().await.last().copied().unwrap_or(0);
-                    { let _g = perf::SM_PUSH.start(); sm3.push(&rec); }
+                    rec.session_id = tick_state
+                        .recording_sessions
+                        .read()
+                        .await
+                        .last()
+                        .copied()
+                        .unwrap_or(0);
+                    {
+                        let _g = perf::SM_PUSH.start();
+                        sm3.push(&rec);
+                    }
                 }
             }
         });
@@ -203,7 +220,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (bridge_tx, mut bridge_rx) = tokio_mpsc::unbounded_channel::<AppMsg>();
         std::thread::spawn(move || {
             while let Ok(msg) = rx.recv() {
-                if bridge_tx.send(msg).is_err() { break; }
+                if bridge_tx.send(msg).is_err() {
+                    break;
+                }
             }
         });
         tokio::spawn(async move {
@@ -230,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Ok(entries) = std::fs::read_dir("sessions") {
                             for entry in entries.flatten() {
                                 let path = entry.path();
-                                if path.extension().map_or(false, |e| e == "csv") {
+                                if path.extension().is_some_and(|e| e == "csv") {
                                     if let Ok(meta) = entry.metadata() {
                                         if let Ok(modified) = meta.modified() {
                                             let mod_time: chrono::DateTime<Utc> = modified.into();
@@ -285,7 +304,6 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
                 ConnStatus::Live => "LIVE".into(),
                 ConnStatus::MarketFound(m) => format!("MarketFound: {}", m.title),
                 ConnStatus::Reconnecting(n) => format!("Reconnecting ({})", n),
-                ConnStatus::Error(e) => format!("Error: {}", e),
             };
             *state.status.write().await = label;
             if let ConnStatus::MarketFound(info) = s {
@@ -294,75 +312,79 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
         }
         AppMsg::BookUp(b) => {
             *state.book_up.write().await = Some(b.clone());
-            if let Some(bid) = b.bids.first() { *state.best_bid_up.write().await = bid.price; }
             let s2 = Arc::clone(&state);
             let bids = b.bids.clone();
             let asks = b.asks.clone();
             tokio::spawn(async move {
-                pipeline::push_depth_frame(&s2, 0, &bids, &asks).await;
-                pipeline::capture_combined(&s2, "up", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+                pipeline::capture_combined(&s2, &bids, &asks, EventType::BookUpdate).await;
             });
         }
         AppMsg::BookDown(b) => {
             *state.book_down.write().await = Some(b.clone());
-            if let Some(bid) = b.bids.first() { *state.best_bid_dn.write().await = bid.price; }
             let s2 = Arc::clone(&state);
             let bids = b.bids.clone();
             let asks = b.asks.clone();
             tokio::spawn(async move {
-                pipeline::push_depth_frame(&s2, 1, &bids, &asks).await;
-                pipeline::capture_combined(&s2, "down", &bids, &asks, EventType::BookUpdate, "", 0.0, 0.0).await;
+                pipeline::capture_combined(&s2, &bids, &asks, EventType::BookUpdate).await;
             });
         }
         AppMsg::LastTradeUp { price, size } => {
-            let mut prev = state.prev_raw_up.write().await;
-            let current = *price;
-            *state.raw_trade_up.write().await = current;
             let min_vol = *state.trade_min_vol.read().await;
             if *size >= min_vol {
                 let mut window = state.trade_window_up.write().await;
                 window.push_back((*price, *size));
                 let max_n = *state.trade_window_n.read().await;
-                while window.len() > max_n { window.pop_front(); }
+                while window.len() > max_n {
+                    window.pop_front();
+                }
             }
-            *prev = current;
         }
         AppMsg::LastTradeDown { price, size } => {
-            let mut prev = state.prev_raw_dn.write().await;
-            let current = *price;
-            *state.raw_trade_dn.write().await = current;
             let min_vol = *state.trade_min_vol.read().await;
             if *size >= min_vol {
                 let mut window = state.trade_window_dn.write().await;
                 window.push_back((*price, *size));
                 let max_n = *state.trade_window_n.read().await;
-                while window.len() > max_n { window.pop_front(); }
+                while window.len() > max_n {
+                    window.pop_front();
+                }
             }
-            *prev = current;
         }
-        AppMsg::Balance(b) => { *state.balance.write().await = Some(*b); }
+        AppMsg::Balance(b) => {
+            *state.balance.write().await = Some(*b);
+        }
         AppMsg::BtcOpen(p) => {
             // Initial set from Gamma API (matches Polymarket's groupItemThreshold)
             if state.btc_open.read().await.is_none() {
                 *state.btc_open.write().await = Some(*p);
             }
         }
-        AppMsg::BtcTick { price, volume, event_time } => {
+        AppMsg::BtcTick {
+            price,
+            volume,
+            event_time,
+        } => {
             // Compute mid-price from Binance depth (closer to Chainlink than aggTrade)
             let mid = if let Some(ref bn) = *state.binance_depth.read().await {
                 let bid = bn.bids.first().map(|l| l.price).unwrap_or(0.0);
                 let ask = bn.asks.first().map(|l| l.price).unwrap_or(0.0);
-                if bid > 0.0 && ask > 0.0 { (bid + ask) / 2.0 } else { *price }
-            } else { *price };
+                if bid > 0.0 && ask > 0.0 {
+                    (bid + ask) / 2.0
+                } else {
+                    *price
+                }
+            } else {
+                *price
+            };
             *state.btc_price.write().await = Some(mid);
             *state.btc_volume.write().await = *volume;
-            state.tracking_state.push_volume(*event_time, *volume);
-            state.tracking_state.track_price(mid, *event_time);
             {
                 let mut window = state.btc_vol_window.write().await;
                 window.push_back((*event_time, *volume));
                 let cutoff = *event_time - 60_000;
-                while window.front().map_or(false, |(ts, _)| *ts < cutoff) { window.pop_front(); }
+                while window.front().is_some_and(|(ts, _)| *ts < cutoff) {
+                    window.pop_front();
+                }
                 *state.btc_vol_1m.write().await = window.iter().map(|(_, v)| *v).sum();
             }
             *state.btc_vol_ses.write().await += *volume;
@@ -387,32 +409,36 @@ async fn update_state(msg: &AppMsg, state: Arc<AppState>) {
                 let o = open;
                 tokio::spawn(async move {
                     let _guard = perf::BROADCAST_SEND.start();
-                    let _ = s.broadcast_tx.send(json!({"type":"btc_price","price":m,"open":o}).to_string());
+                    let _ = s
+                        .broadcast_tx
+                        .send(json!({"type":"btc_price","price":m,"open":o}).to_string());
                 });
             }
         }
-        AppMsg::OpenOrders(o) => { *state.open_orders.write().await = o.clone(); }
+        AppMsg::OpenOrders(o) => {
+            *state.open_orders.write().await = o.clone();
+        }
         AppMsg::RecentFills(fills) => {
             let current = state.recent_fills.read().await;
             let is_same = current.len() == fills.len()
-                && current.first().map_or(false, |f| fills.first().map_or(false, |g| f.time == g.time))
-                && current.last().map_or(false, |f| fills.last().map_or(false, |g| f.time == g.time));
+                && current
+                    .first()
+                    .is_some_and(|f| fills.first().is_some_and(|g| f.time == g.time))
+                && current
+                    .last()
+                    .is_some_and(|f| fills.last().is_some_and(|g| f.time == g.time));
             drop(current);
             if !is_same {
                 *state.recent_fills.write().await = fills.clone();
                 let s2 = Arc::clone(&state);
                 let f = fills.clone();
-                tokio::spawn(async move { pipeline::capture_fills_csv(&s2, &f).await; });
+                tokio::spawn(async move {
+                    pipeline::capture_fills_csv(&s2, &f).await;
+                });
             }
         }
-        AppMsg::Candles { interval: _, candles: c } => { *state.candles.write().await = c.clone(); }
-        AppMsg::CandleUpdate(c) => {
-            let mut candles = state.candles.write().await;
-            match candles.last_mut() {
-                Some(last) if last.open_time == c.open_time => *last = c.clone(),
-                _ => candles.push(c.clone()),
-            }
+        AppMsg::OrderResult(r) => {
+            info!("Order result: {}", r);
         }
-        AppMsg::OrderResult(r) => { info!("Order result: {}", r); }
     }
 }

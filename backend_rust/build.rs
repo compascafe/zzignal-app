@@ -27,5 +27,5 @@ fn main() {
         .unwrap_or(0);
 
     println!("cargo:rustc-env=GIT_VERSION={}", version);
-    println!("cargo:rustc-env=BUILD_TIME={}", build_time.to_string());
+    println!("cargo:rustc-env=BUILD_TIME={}", build_time);
 }

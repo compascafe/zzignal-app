@@ -1,13 +1,15 @@
 /// Gestión segura de credenciales.
 ///
 /// Variables requeridas en .env:
-///   POLYMARKET_PRIVATE_KEY  — clave privada Ethereum (hex, con o sin 0x)
-///   CLOB_API_KEY            — API key L2 del CLOB
-///   CLOB_API_SECRET         — API secret L2 del CLOB
-///   CLOB_API_PASSPHRASE     — passphrase L2 del CLOB
+///   POLYMARKET_PRIVATE_KEY     — clave privada Ethereum (hex, con o sin 0x)
+///   CLOB_API_KEY               — API key L2 del CLOB
+///   CLOB_API_SECRET            — API secret L2 del CLOB
+///   CLOB_API_PASSPHRASE        — passphrase L2 del CLOB
+///   POLYMARKET_FUNDER_ADDRESS  — proxy/deposit wallet (donde vive el pUSD)
 ///
 /// La dirección de la wallet se DERIVA de la clave privada usando alloy;
 /// nunca se almacena en texto plano ni se imprime en los logs.
+/// La dirección funder es PÚBLICA (on-chain) y se configura por .env.
 use std::str::FromStr as _;
 
 use alloy::signers::local::PrivateKeySigner;
@@ -26,11 +28,15 @@ pub struct ClobCredentials {
     /// Credenciales L2 para llamadas autenticadas (POST /order, /cancel, etc.)
     /// No se usan en el dashboard de lectura; reservadas para order placement.
     #[allow(dead_code)]
-    pub api_key:        String,
+    pub api_key: String,
     #[allow(dead_code)]
-    pub api_secret:     String,
+    pub api_secret: String,
     #[allow(dead_code)]
     pub api_passphrase: String,
+
+    /// Proxy/deposit wallet que actúa como funder de las órdenes (Poly1271).
+    /// Es la cuenta que custodia el pUSD en Polymarket. Dirección pública.
+    pub funder_address: String,
 
     /// Dirección Ethereum (checksummed) derivada de la clave privada
     pub wallet_address: String,
@@ -47,14 +53,19 @@ impl ClobCredentials {
                 "Falta la variable de entorno `{PRIVATE_KEY_VAR}` (o `PRIVATE_KEY`)"
             ))?;
 
-        let api_key = std::env::var("CLOB_API_KEY")
-            .context("Falta `CLOB_API_KEY` en .env")?;
+        let api_key = std::env::var("CLOB_API_KEY").context("Falta `CLOB_API_KEY` en .env")?;
 
-        let api_secret = std::env::var("CLOB_API_SECRET")
-            .context("Falta `CLOB_API_SECRET` en .env")?;
+        let api_secret =
+            std::env::var("CLOB_API_SECRET").context("Falta `CLOB_API_SECRET` en .env")?;
 
-        let api_passphrase = std::env::var("CLOB_API_PASSPHRASE")
-            .context("Falta `CLOB_API_PASSPHRASE` en .env")?;
+        let api_passphrase =
+            std::env::var("CLOB_API_PASSPHRASE").context("Falta `CLOB_API_PASSPHRASE` en .env")?;
+
+        let funder_address = std::env::var("POLYMARKET_FUNDER_ADDRESS")
+            .context("Falta `POLYMARKET_FUNDER_ADDRESS` en .env (proxy/deposit wallet que custodia el pUSD)")?
+            .parse::<alloy::primitives::Address>()
+            .context("`POLYMARKET_FUNDER_ADDRESS` no es una dirección Ethereum válida")?
+            .to_string();
 
         let wallet_address = derive_address(&private_key)
             .context("No se pudo derivar la dirección desde POLYMARKET_PRIVATE_KEY")?;
@@ -64,6 +75,7 @@ impl ClobCredentials {
             api_key,
             api_secret,
             api_passphrase,
+            funder_address,
             wallet_address,
         })
     }

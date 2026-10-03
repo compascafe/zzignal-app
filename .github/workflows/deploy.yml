@@ -1,4 +1,11 @@
-name: Deploy App
+name: Deploy
+
+# Ships the Rust backend + TUI binaries to a server over SSH.
+# This workflow is OPTIONAL and specific to the upstream deployment:
+#   - It only runs on the upstream repository (forks are skipped).
+#   - It expects the server to run a systemd unit named `zzignal-app`.
+# Required GitHub secrets: SERVER_IP_TK, SERVER_SSH_KEY_TK, ENV_FILE
+# (ENV_FILE = base64-encoded contents of the production `.env`).
 
 on:
   push:
@@ -10,85 +17,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy-frontend:
+  deploy:
+    if: github.repository == 'compascafe/zzignal-app'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for changes
-        id: changes
-        run: |
-          git diff --name-only HEAD~1 HEAD > changed_files.txt
-          if grep -q "frontend_react/" changed_files.txt; then
-            echo "FRONTEND_CHANGED=true" >> $GITHUB_OUTPUT
-          else
-            echo "FRONTEND_CHANGED=false" >> $GITHUB_OUTPUT
-          fi
-          if grep -q "backend_rust/" changed_files.txt; then
-            echo "BACKEND_CHANGED=true" >> $GITHUB_OUTPUT
-          else
-            echo "BACKEND_CHANGED=false" >> $GITHUB_OUTPUT
-          fi
-          cat $GITHUB_OUTPUT
-
-      - name: Cache npm dependencies
-        if: steps.changes.outputs.FRONTEND_CHANGED == 'true'
-        uses: actions/cache@v4
-        with:
-          path: frontend_react/node_modules
-          key: ${{ runner.os }}-npm-${{ hashFiles('frontend_react/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
-
-      - name: Install dependencies & Build
-        if: steps.changes.outputs.FRONTEND_CHANGED == 'true'
-        run: |
-          cd frontend_react
-          npm install
-          npm run build
-
-      - name: Setup Directories
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SERVER_IP_TK }}
-          username: ubuntu
-          key: ${{ secrets.SERVER_SSH_KEY_TK }}
-          script: |
-            sudo mkdir -p /var/www/zzignal-app
-            sudo mkdir -p /home/ubuntu/zzignal-app
-            sudo chown -R ubuntu:ubuntu /home/ubuntu/zzignal-app
-            sudo chown -R ubuntu:ubuntu /var/www/zzignal-app
-
-      - name: Deploy Frontend to Server
-        if: steps.changes.outputs.FRONTEND_CHANGED == 'true'
-        uses: easingthemes/ssh-deploy@main
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY_TK }}
-          ARGS: "-rlgoDzvc -i --delete"
-          REMOTE_HOST: ${{ secrets.SERVER_IP_TK }}
-          REMOTE_USER: "ubuntu"
-          SOURCE: "frontend_react/dist/"
-          TARGET: "/var/www/zzignal-app"
-
-  deploy-backend:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for backend changes
-        id: changes
-        run: |
-          # Always deploy backend — avoid HEAD~1 race condition with multi-commit pushes
-          echo "BACKEND_CHANGED=true" >> $GITHUB_OUTPUT
 
       - name: Cache Cargo registry
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
@@ -96,54 +32,41 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
-      - name: Cache target directory
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+      - name: Cache target directories
         uses: actions/cache@v4
         with:
           path: |
             backend_rust/target/release/.fingerprint
             backend_rust/target/release/deps
             backend_rust/target/release/build
+            TUI_monitor/target/release/.fingerprint
+            TUI_monitor/target/release/deps
+            TUI_monitor/target/release/build
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-target-
 
-      - name: Install Rust
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+      - name: Install Rust 1.91
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.91
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Install PostgreSQL client
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
-        run: sudo apt-get update && sudo apt-get install -y libpq-dev
-
-      - name: Build Rust Backend (clean)
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+      - name: Build backend (release)
         env:
           CARGO_INCREMENTAL: 0
-        run: |
-          cd backend_rust
-          cargo clean --release
-          cargo build --release -j $(nproc)
+        run: cd backend_rust && cargo build --release -j "$(nproc)"
 
-      - name: Build Monitor TUI
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
-        run: |
-          cd TUI_monitor
-          cargo build --release
+      - name: Build monitor (release)
+        run: cd TUI_monitor && cargo build --release -j "$(nproc)"
 
       - name: Package
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
         run: |
           mkdir -p deploy
           cp backend_rust/target/release/polymarket-backend deploy/
           cp TUI_monitor/target/release/zzignal-monitor deploy/
-          cp scripts/zzignal_aliases.sh deploy/
           tar -czf deploy.tar.gz -C deploy .
 
-      - name: Deploy to Server
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+      - name: Upload to server
         uses: easingthemes/ssh-deploy@main
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY_TK }}
@@ -153,8 +76,7 @@ jobs:
           SOURCE: "deploy.tar.gz"
           TARGET: "/home/ubuntu/zzignal-app/"
 
-      - name: Extract & Write .env
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+      - name: Extract & write .env
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_IP_TK }}
@@ -169,12 +91,10 @@ jobs:
             chmod +x polymarket-backend
             chmod +x zzignal-monitor
             test -f polymarket-backend || (echo "FATAL: binary not found after extract" && exit 1)
-            file polymarket-backend
             echo "Backend size: $(stat -c%s polymarket-backend) bytes"
             echo "Monitor size: $(stat -c%s zzignal-monitor) bytes"
 
-      - name: Restart Service
-        if: steps.changes.outputs.BACKEND_CHANGED == 'true'
+      - name: Restart service & health check
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_IP_TK }}
@@ -187,7 +107,7 @@ jobs:
             for i in $(seq 1 10); do
               sleep 2
               if curl -sf http://localhost:8080/api/health > /dev/null 2>&1; then
-                echo "OK: Service is healthy after ${i}s"
+                echo "OK: Service is healthy after ${i} attempt(s)"
                 exit 0
               fi
               echo "  attempt $i/10: not ready yet..."
