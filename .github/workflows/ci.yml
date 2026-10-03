@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.91
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.91"
+          components: rustfmt, clippy
+
+      - name: System dependencies (TLS for the monitor)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            backend_rust -> target
+            TUI_monitor -> target
+
+      - name: Format
+        run: |
+          cargo fmt --manifest-path backend_rust/Cargo.toml --check
+          cargo fmt --manifest-path TUI_monitor/Cargo.toml --check
+
+      - name: Clippy
+        run: |
+          cargo clippy --manifest-path backend_rust/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path TUI_monitor/Cargo.toml --all-targets -- -D warnings
+
+      - name: Tests
+        run: |
+          cargo test --manifest-path backend_rust/Cargo.toml
+          cargo test --manifest-path TUI_monitor/Cargo.toml
