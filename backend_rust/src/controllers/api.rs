@@ -48,8 +48,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn get_health(State(s): State<Arc<AppState>>) -> Json<Value> {
     let app_version = env!("CARGO_PKG_VERSION");
-    let build_time = option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("dev");
-    let git_sha = option_env!("VERGEN_GIT_SHA").unwrap_or("dev");
+    let build_time = env!("BUILD_TIME");
+    let git_sha = env!("GIT_VERSION");
 
     Json(json!({
         "app": {

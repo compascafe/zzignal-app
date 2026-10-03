@@ -12,11 +12,14 @@ Base URL: `http://localhost:8080` (configurable on the TUI side with
 
 ```json
 {
-  "app":    { "version": "0.3.0", "build_time": "dev", "git_sha": "dev" },
+  "app":    { "version": "0.3.0", "build_time": "1759800000", "git_sha": "b330083" },
   "system": { "cpu_percent": 3.2, "ram_mb_used": 180, "ram_mb_total": 4096, "ram_pct": 4.4 },
   "status": "LIVE"
 }
 ```
+
+`build_time` is the build epoch (seconds) and `git_sha` the short commit hash,
+both embedded at compile time by `build.rs`.
 
 ### `GET /api/btc`
 

@@ -8,7 +8,7 @@ use tokio_tungstenite::connect_async;
 use tracing::{info, warn};
 
 use crate::controllers::worker::PriceLevel;
-use crate::models::hft::{BinanceDepth, BinanceState, PriceRingBuffer};
+use crate::models::hft::{BinanceDepth, PriceRingBuffer};
 
 const BINANCE_COMBINED_WS: &str =
     "wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/btcusdt@ticker";
@@ -174,10 +174,8 @@ pub async fn run_binance_depth_stream(
                                     } else {
                                         0.0
                                     };
-                                    ring.push(BinanceState {
-                                        timestamp: now_ms as u64, // local time for accurate lookback
-                                        mid_price: mid_p,
-                                    });
+                                    // Local time for accurate look-back
+                                    ring.push(now_ms as u64, mid_p);
 
                                     last_depth = Some(current);
                                 }

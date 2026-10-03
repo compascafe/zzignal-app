@@ -28,6 +28,18 @@ Not in scope (by design):
   port 8080 publicly is a misconfiguration, not a vulnerability.
 - Losses caused by trading decisions or market conditions.
 
+## Known advisories
+
+`cargo audit` runs in CI against both lockfiles and currently passes. The
+remaining RustSec entries are informational warnings on transitive
+dependencies (unmaintained crates and advisories without a released fix),
+tracked upstream:
+
+- `derivative`, `paste`, `proc-macro-error2` — unmaintained proc-macro
+  crates pulled in by the Polymarket SDK / `alloy` stack.
+- `lru` — panic-safety advisory in `LruCache::pop()` (used internally by
+  `ratatui`; unfixed upstream at the time of writing).
+
 ## Operational guidance
 
 - Keep `.env` out of version control (it is gitignored) and out of backups

@@ -21,9 +21,6 @@ jobs:
           toolchain: "1.91"
           components: rustfmt, clippy
 
-      - name: System dependencies (TLS for the monitor)
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -44,3 +41,13 @@ jobs:
         run: |
           cargo test --manifest-path backend_rust/Cargo.toml
           cargo test --manifest-path TUI_monitor/Cargo.toml
+
+      - name: Security audit (RustSec)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit lockfiles
+        run: |
+          cargo audit --file backend_rust/Cargo.lock
+          cargo audit --file TUI_monitor/Cargo.lock

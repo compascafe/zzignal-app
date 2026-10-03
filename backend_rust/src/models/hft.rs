@@ -1,55 +1,77 @@
 use crate::controllers::worker::PriceLevel;
 use serde::Serialize;
-use std::cell::UnsafeCell;
 use std::hint;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const RING_CAP: usize = 4096;
 const RING_MASK: usize = RING_CAP - 1;
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
+/// Compact BTC snapshot stored in the ring buffer.
+///
+/// Each field is an independent atomic, so a concurrent reader can never
+/// observe a torn `f64`. Single writer (Binance depth stream), many readers;
+/// no locks and no `unsafe`.
 pub struct BinanceState {
-    pub timestamp: u64,
-    pub mid_price: f64,
+    timestamp: AtomicU64,
+    mid_price: AtomicU64, // f64 bits
 }
 
-impl Default for BinanceState {
-    fn default() -> Self {
+impl BinanceState {
+    fn new() -> Self {
         Self {
-            timestamp: 0,
-            mid_price: 0.0,
+            timestamp: AtomicU64::new(0),
+            mid_price: AtomicU64::new(0.0f64.to_bits()),
+        }
+    }
+
+    fn store(&self, timestamp: u64, mid_price: f64) {
+        // Relaxed is sufficient: the `write_seq` Release/Acquire pair below
+        // establishes ordering for slot visibility.
+        self.timestamp.store(timestamp, Ordering::Relaxed);
+        self.mid_price.store(mid_price.to_bits(), Ordering::Relaxed);
+    }
+
+    fn load(&self) -> PriceSample {
+        PriceSample {
+            timestamp: self.timestamp.load(Ordering::Relaxed),
+            mid_price: f64::from_bits(self.mid_price.load(Ordering::Relaxed)),
         }
     }
 }
 
+/// Copyable snapshot returned by ring-buffer lookups.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PriceSample {
+    pub timestamp: u64,
+    pub mid_price: f64,
+}
+
+/// Fixed-capacity ring of BTC snapshots. Writers overwrite the oldest slot;
+/// readers binary-search the live window by timestamp.
 pub struct PriceRingBuffer {
-    slots: Box<[UnsafeCell<BinanceState>]>,
+    slots: Box<[BinanceState]>,
     write_seq: AtomicU64,
 }
 
-unsafe impl Send for PriceRingBuffer {}
-unsafe impl Sync for PriceRingBuffer {}
-
 impl PriceRingBuffer {
     pub fn new() -> Self {
-        let mut vec = Vec::with_capacity(RING_CAP);
-        for _ in 0..RING_CAP {
-            vec.push(UnsafeCell::new(BinanceState::default()));
-        }
+        let vec: Vec<BinanceState> = (0..RING_CAP).map(|_| BinanceState::new()).collect();
         Self {
             slots: vec.into_boxed_slice(),
             write_seq: AtomicU64::new(0),
         }
     }
-    pub fn push(&self, state: BinanceState) {
+
+    /// Push a sample. Intended for a single writer (the Binance depth stream).
+    pub fn push(&self, timestamp: u64, mid_price: f64) {
         let seq = self.write_seq.fetch_add(1, Ordering::Release);
         let idx = (seq as usize) & RING_MASK;
-        unsafe {
-            self.slots[idx].get().write(state);
-        }
+        self.slots[idx].store(timestamp, mid_price);
     }
-    pub fn get_closest_to(&self, target_ts: u64) -> Option<BinanceState> {
+
+    /// Return the sample whose timestamp is closest to `target_ts`, or `None`
+    /// while the buffer is still empty.
+    pub fn get_closest_to(&self, target_ts: u64) -> Option<PriceSample> {
         let mut seq = self.write_seq.load(Ordering::Acquire);
         if seq == 0 {
             for _ in 0..16 {
@@ -67,33 +89,29 @@ impl PriceRingBuffer {
         let base = seq.wrapping_sub(count);
         let mut lo: u64 = 0;
         let mut hi: u64 = count.saturating_sub(1);
-        let ts_lo = unsafe { (*self.slots[((base + lo) as usize) & RING_MASK].get()).timestamp };
-        let ts_hi = unsafe { (*self.slots[((base + hi) as usize) & RING_MASK].get()).timestamp };
+        let slot = |i: u64| &self.slots[(i as usize) & RING_MASK];
+        let ts_lo = slot(base + lo).timestamp.load(Ordering::Relaxed);
+        let ts_hi = slot(base + hi).timestamp.load(Ordering::Relaxed);
         if target_ts <= ts_lo {
-            return Some(unsafe { *self.slots[((base + lo) as usize) & RING_MASK].get() });
+            return Some(slot(base + lo).load());
         }
         if target_ts >= ts_hi {
-            return Some(unsafe { *self.slots[((base + hi) as usize) & RING_MASK].get() });
+            return Some(slot(base + hi).load());
         }
         while lo + 1 < hi {
             let mid = lo + (hi - lo) / 2;
-            let phys = ((base + mid) as usize) & RING_MASK;
-            let ts_mid = unsafe { (*self.slots[phys].get()).timestamp };
+            let ts_mid = slot(base + mid).timestamp.load(Ordering::Relaxed);
             if ts_mid <= target_ts {
                 lo = mid;
             } else {
                 hi = mid;
             }
         }
-        let state_lo = unsafe { *self.slots[((base + lo) as usize) & RING_MASK].get() };
-        let state_hi = unsafe { *self.slots[((base + hi) as usize) & RING_MASK].get() };
-        let dist_lo = target_ts.abs_diff(state_lo.timestamp);
-        let dist_hi = target_ts.abs_diff(state_hi.timestamp);
-        Some(if dist_lo <= dist_hi {
-            state_lo
-        } else {
-            state_hi
-        })
+        let s_lo = slot(base + lo).load();
+        let s_hi = slot(base + hi).load();
+        let dist_lo = target_ts.abs_diff(s_lo.timestamp);
+        let dist_hi = target_ts.abs_diff(s_hi.timestamp);
+        Some(if dist_lo <= dist_hi { s_lo } else { s_hi })
     }
 }
 
@@ -285,10 +303,7 @@ mod tests {
     fn ring_buffer_finds_closest_sample() {
         let ring = PriceRingBuffer::new();
         for i in 0..10u64 {
-            ring.push(BinanceState {
-                timestamp: 1_000 + i * 10,
-                mid_price: 50_000.0 + i as f64,
-            });
+            ring.push(1_000 + i * 10, 50_000.0 + i as f64);
         }
         assert_eq!(ring.get_closest_to(1_030).unwrap().timestamp, 1_030);
         let near = ring.get_closest_to(1_034).unwrap();

@@ -56,11 +56,12 @@ depth20@100ms WS frame
   → ticker frame → BtcTick if |Δprice| > $0.15  ──► tick_tx channel
 ```
 
-`PriceRingBuffer` is a fixed 4,096-slot ring of `BinanceState` written with a
+`PriceRingBuffer` is a fixed 4,096-slot ring of `BinanceState` (two atomic
+fields per slot: timestamp and mid-price bits) written behind a
 release-ordered sequence counter. Readers (`get_closest_to`) do a binary
 search over the live window and return the sample closest to a target
 Exchange timestamp — used for cross-exchange latency and 1-second price
-velocity. No mutexes are taken on this path.
+velocity. No mutexes and no `unsafe` on this path.
 
 ### Polymarket CLOB (hot path)
 

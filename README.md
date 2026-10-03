@@ -57,8 +57,9 @@ latency instrumentation.
 ## Engineering highlights
 
 - **Lock-free price ring buffer** — `PriceRingBuffer` (4,096 slots) stores
-  Binance depth snapshots with atomic sequence writes; lookups are a binary
-  search by exchange timestamp with **zero locks in the hot path**.
+  Binance mid-price snapshots in two independent atomics per slot (no torn
+  reads, **no `unsafe`**); lookups are a binary search by exchange timestamp
+  with **zero locks in the hot path**.
 - **`mimalloc` global allocator** for stable low-latency allocation.
 - **Latency instrumentation built in** — every hot-path stage is timed with
   atomic accumulators and exposed at `GET /api/perf` (avg/aggregate µs).
@@ -101,7 +102,7 @@ latency instrumentation.
 ├── TUI_monitor/             # Terminal dashboard (ratatui)
 │   └── src/{main,ui,api,commands}.rs
 ├── scripts/deploy.sh        # Manual build + systemd restart
-├── .github/workflows/       # Optional SSH deploy workflow
+├── .github/workflows/       # CI (fmt/clippy/test/audit) + optional SSH deploy
 ├── .env.example             # Credential template
 └── LICENSE
 ```
@@ -153,7 +154,6 @@ ZZIGNAL_API_URL=http://10.0.0.5:8080 ZZIGNAL_WS_URL=ws://10.0.0.5:8080/ws \
 |---|---|
 | `/` | Command mode |
 | `s` | Manually start a 15-minute recording session |
-| `Tab` | Cycle views |
 | `↑` / `↓` | Command history |
 | `Esc` / `q` | Quit |
 
@@ -194,7 +194,8 @@ Full request/response reference and the WebSocket protocol live in
 ## Recorded data
 
 While a session is recording, the backend appends one row per book update,
-trade and Binance tick to `sessions/session_<id>_<name>_hft.csv` (27 columns):
+trade and Binance tick to `session_<id>_<name>_hft.csv` inside a `sessions/`
+directory created under the backend's working directory (27 columns):
 
 ```
 time, ts_exchange, event, latencia_ms,
@@ -252,8 +253,8 @@ be deleted if you deploy differently. Required secrets: `SERVER_IP_TK`,
 ## Development
 
 ```bash
-cd backend_rust && cargo fmt && cargo clippy --all-targets && cargo test
-cd TUI_monitor  && cargo fmt && cargo clippy --all-targets && cargo test
+cd backend_rust && cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
+cd TUI_monitor  && cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 Commit style: short imperative subject lines (see the git log). PRs welcome —
