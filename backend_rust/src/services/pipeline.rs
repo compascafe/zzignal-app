@@ -40,7 +40,15 @@ pub async fn capture_combined(
                 &state.tracking_state,
                 poly_ts,
             ),
-            _ => unreachable!(),
+            // Defensive fallback: never panic on an unexpected event type.
+            EventType::BinanceTick => metrics::build_book_update(
+                binance,
+                &state.binance_ring,
+                poly_bids,
+                poly_asks,
+                &state.tracking_state,
+                poly_ts,
+            ),
         }
     } else {
         let pb_bid = poly_bids.first().map(|l| l.price).unwrap_or(0.0);
