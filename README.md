@@ -101,8 +101,7 @@ latency instrumentation.
 │   └── Cargo.toml
 ├── TUI_monitor/             # Terminal dashboard (ratatui)
 │   └── src/{main,ui,api,commands}.rs
-├── scripts/deploy.sh        # Manual build + systemd restart
-├── .github/workflows/       # CI (fmt/clippy/test/audit) + optional SSH deploy
+├── .github/workflows/       # CI (fmt/clippy/test/audit)
 ├── .env.example             # Credential template
 └── LICENSE
 ```
@@ -218,10 +217,9 @@ curl -s localhost:8080/api/perf | jq
 Returns cumulative calls / total µs / average µs per hot-path stage
 (`tick_consumer`, `build_binance_tick`, `consumer_iter`, `broadcast_send`, …).
 
-## Deployment
+## Running as a service
 
-Any process supervisor works; a `systemd` unit on the server is the classic
-setup:
+Any process supervisor works. Example `systemd` unit for the backend:
 
 ```ini
 [Unit]
@@ -229,10 +227,10 @@ Description=ZZignal backend
 After=network-online.target
 
 [Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/zzignal-app
-EnvironmentFile=/home/ubuntu/zzignal-app/.env
-ExecStart=/home/ubuntu/zzignal-app/polymarket-backend
+User=zzignal
+WorkingDirectory=/opt/zzignal
+EnvironmentFile=/opt/zzignal/.env
+ExecStart=/opt/zzignal/polymarket-backend
 Restart=always
 RestartSec=5
 
@@ -240,11 +238,8 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-`scripts/deploy.sh` builds both binaries and restarts the service. The
-included GitHub Actions workflow (`.github/workflows/deploy.yml`) does the
-same over SSH; it is guarded to run only on the upstream repository and can
-be deleted if you deploy differently. Required secrets: `SERVER_IP_TK`,
-`SERVER_SSH_KEY_TK`, `ENV_FILE` (base64 of the production `.env`).
+The TUI is interactive: run `zzignal-monitor` in a terminal (or inside
+`tmux`/`screen`); it only needs network access to the backend.
 
 > 🔒 The API has **no authentication** and permissive CORS by design: it is a
 > localhost tool. Do not expose port 8080 to the public internet — anyone who
